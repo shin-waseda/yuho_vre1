@@ -1,6 +1,23 @@
-Debug/
-Release/
+# ビルド出力ディレクトリ配下をすべて無視
+Debug/**
+Release/**
+
+# ただし bin や elf などの実行ファイルは保持
+!**/
+!*.bin
+!*.elf
+
+# 中間生成・ログファイル
 *.o
+*.d
 *.su
 *.cyclo
-*.d
+*.map
+*.list
+st-link_gdbserver_log.txt
+
+# OS・エディタのローカル設定ファイル
+.settings/
+.DS_Store
+Thumbs.db
+*.bak
