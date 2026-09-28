@@ -1,7 +1,9 @@
 #ifndef GYRO_H
 #define GYRO_H
 
-#include "main.h"
+#include "global.h"
+#include "params.h"
+
 
 #define ICM_WHO_AM_I     0x75
 #define ICM_PWR_MGMT0    0x4E

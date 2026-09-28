@@ -32,14 +32,7 @@ extern "C" {
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
-#include "gyro.h"
-#include "motor.h"
-#include "adc.h"
-#include "sdio.h"
-#include "spi.h"
-#include "tim.h"
-#include "usart.h"
-#include "gpio.h"
+#include "global.h"
 
 /* USER CODE END Includes */
 

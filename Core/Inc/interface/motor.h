@@ -1,7 +1,8 @@
 #ifndef INC_MOTOR_H_
 #define INC_MOTOR_H_
 
-#include "main.h"
+#include "global.h"
+#include "params.h"
 
 #define PWM_MAX 4199
 

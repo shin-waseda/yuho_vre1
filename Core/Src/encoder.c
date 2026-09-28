@@ -1,4 +1,4 @@
-#include "encoder.h"
+#include "interface/encoder.h"
 
 extern TIM_HandleTypeDef htim4; // ENC_L
 extern TIM_HandleTypeDef htim8; // ENC_R
