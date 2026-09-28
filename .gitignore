@@ -16,8 +16,9 @@ Release/**
 *.list
 st-link_gdbserver_log.txt
 
-# OS・エディタのローカル設定ファイル
+# エディタ・IDE・OSの環境依存ファイル（無視対象）
 .settings/
+.vscode/
 .DS_Store
 Thumbs.db
 *.bak
