@@ -29,6 +29,8 @@
 /* USER CODE BEGIN Includes */
 #include "interface/gyro.h"
 #include "interface/motor.h"
+#include "app/control_loop.h"
+#include "app/mode_ui.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -117,6 +119,13 @@ int main(void)
 HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);  // ENC_L
 HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);  // ENC_R
 
+  App_ControlLoop_Init();
+  App_SetTargetVelocity(0.0f); // ゲイン未調整のため停止状態で書き込む
+
+  // モード選択(右エンコーダの回転+ボタン確定)は、1kHz制御ループが
+  // Encoder_GetDeltaR()を消費し始める前(=HAL_TIM_Base_Start_ITより前)に
+  // 済ませる。でないとエンコーダの差分を奪い合ってしまう。
+  RobotMode mode = ModeUI_Select();
 
   HAL_TIM_Base_Start_IT(&htim6);
 
@@ -124,42 +133,11 @@ HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);  // ENC_R
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
+  ModeUI_Run(mode); // TESTモードは戻らない。他モードは現状未実装。
+
   while (1)
   {
-//    HAL_GPIO_WritePin(LED_1_GPIO_Port, LED_1_Pin, GPIO_PIN_SET);
-//    HAL_GPIO_WritePin(LED_2_GPIO_Port, LED_2_Pin, GPIO_PIN_SET);
-//    HAL_GPIO_WritePin(LED_3_GPIO_Port, LED_3_Pin, GPIO_PIN_SET);
-//    HAL_GPIO_WritePin(LED_4_GPIO_Port, LED_4_Pin, GPIO_PIN_SET);
-//	  HAL_GPIO_WritePin(LED_5_GPIO_Port, LED_5_Pin, GPIO_PIN_SET);
-//	  HAL_GPIO_WritePin(LED_6_GPIO_Port, LED_6_Pin, GPIO_PIN_SET);
-//	  HAL_Delay(500);
-//    HAL_GPIO_WritePin(LED_1_GPIO_Port, LED_1_Pin, GPIO_PIN_RESET);
-//    HAL_GPIO_WritePin(LED_2_GPIO_Port, LED_2_Pin, GPIO_PIN_RESET);
-//    HAL_GPIO_WritePin(LED_3_GPIO_Port, LED_3_Pin, GPIO_PIN_RESET);
-//    HAL_GPIO_WritePin(LED_4_GPIO_Port, LED_4_Pin, GPIO_PIN_RESET);
-//	  HAL_GPIO_WritePin(LED_5_GPIO_Port, LED_5_Pin, GPIO_PIN_RESET);
-//	  HAL_GPIO_WritePin(LED_6_GPIO_Port, LED_6_Pin, GPIO_PIN_RESET);
-//	  HAL_Delay(500);
-
-    Motor_Forward(200, 200);
-
-    GyroData g = ICM_ReadGyro();
-    printf("X: %6d  Y: %6d  Z: %6d\r\n", g.x, g.y, g.z);
-//
-    uint16_t enc_l = __HAL_TIM_GET_COUNTER(&htim4);
-    uint16_t enc_r = __HAL_TIM_GET_COUNTER(&htim8);
-    printf("ENC_L: %5u  ENC_R: %5u\r\n", enc_l, enc_r);
-
-
-
-    printf("R:%4d FR:%4d FL:%4d L:%4d\r\n",
-          ad_r, ad_fr, ad_fl, ad_l);
-//    printf("ON: r %d, fr %d, fl  %d,  l %d, \r\n OFF: r %d, fr %d, fl  %d,  l %d,\r\n", r_on, fr_on, fl_on, l_on, r_off, fr_off, fl_off, l_off);
-
-
-
-
-    HAL_Delay(100);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
