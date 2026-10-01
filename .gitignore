@@ -1,6 +1,24 @@
-Debug/
-Release/
+# ビルド出力ディレクトリ配下をすべて無視
+Debug/**
+Release/**
+
+# ただし bin や elf などの実行ファイルは保持
+!**/
+!*.bin
+!*.elf
+
+# 中間生成・ログファイル
 *.o
+*.d
 *.su
 *.cyclo
-*.d
+*.map
+*.list
+st-link_gdbserver_log.txt
+
+# エディタ・IDE・OSの環境依存ファイル（無視対象）
+.settings/
+.vscode/
+.DS_Store
+Thumbs.db
+*.bak
