@@ -1,3 +1,4 @@
+#include "main.h"
 #include "interface/motor.h"
 
 extern TIM_HandleTypeDef htim2;

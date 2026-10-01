@@ -49,8 +49,7 @@ extern "C" {
 /* Exported macro ------------------------------------------------------------*/
 /* USER CODE BEGIN EM */
 
-extern uint16_t ad_r,ad_fr,ad_fl,ad_l,vabt;
-
+// ad_r/ad_fr/ad_fl/ad_l/vabt は global.h (via このファイルの Includes) で宣言済み
 
 /* USER CODE END EM */
 

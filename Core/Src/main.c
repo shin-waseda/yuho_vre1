@@ -27,7 +27,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "interface/gyro.h"
+#include "interface/motor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,7 +49,8 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-
+// ad_r/ad_fr/ad_fl/ad_l/vabt の定義は interface/sensor.c に移動
+// (宣言は global.h)。r_on/fr_on/...等の中間値は sensor.c 内に閉じた。
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -59,8 +61,6 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-uint16_t ad_r,ad_fr,ad_fl,ad_l,vabt;
-uint16_t r_on, fr_on, fl_on, l_on, r_off, fr_off, fl_off, l_off;
 /* USER CODE END 0 */
 
 /**
@@ -143,8 +143,8 @@ HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);  // ENC_R
 
     Motor_Forward(200, 200);
 
-//    GyroData g = ICM_ReadGyro();
-//    printf("X: %6d  Y: %6d  Z: %6d\r\n", g.x, g.y, g.z);
+    GyroData g = ICM_ReadGyro();
+    printf("X: %6d  Y: %6d  Z: %6d\r\n", g.x, g.y, g.z);
 //
     uint16_t enc_l = __HAL_TIM_GET_COUNTER(&htim4);
     uint16_t enc_r = __HAL_TIM_GET_COUNTER(&htim8);
