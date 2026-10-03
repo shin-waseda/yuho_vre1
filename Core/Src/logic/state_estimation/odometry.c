@@ -20,7 +20,6 @@ WheelVelocity Odometry_Update(Odometry_t *odo, int16_t delta_l, int16_t delta_r,
 
     RobotVelocity robot = Kinematics_WheelToRobot(wheel);
 
-    // 微小時間(dt)の範囲ではthetaを一定とみなして積分する
     odo->pose.x_mm      += robot.linear_mm_s * cosf(odo->pose.theta_rad) * dt;
     odo->pose.y_mm      += robot.linear_mm_s * sinf(odo->pose.theta_rad) * dt;
     odo->pose.theta_rad += robot.angular_rad_s * dt;

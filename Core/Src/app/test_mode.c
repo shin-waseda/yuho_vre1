@@ -4,11 +4,17 @@
 #include "tim.h"
 #include "interface/gyro.h"
 #include "app/control_loop.h"
+#include "app/failsafe.h"
 
+// TESTは診断用なので、フェイルセーフが発動しても止めずに状態を表示し続ける
+// (モーターはISR側で停止済み)。
 void TestMode_Run(void) {
     while (1) {
-        GyroData g = ICM_ReadGyro();
-        printf("X: %6d  Y: %6d  Z: %6d\r\n", g.x, g.y, g.z);
+        GyroData g = App_GetGyroRaw(); // ジャイロのSPIはISRが占有しているので直接読まない
+        printf("X: %6d  Y: %6d  Z: %6d  (Z: %7.1f dps)\r\n", g.x, g.y, g.z, App_GetGyroZ_dps());
+
+        printf("VBAT: %.2f V  FAILSAFE: %s\r\n",
+              FailSafe_GetFilteredVoltage(), FailSafe_CauseName(FailSafe_GetCause()));
 
         uint16_t enc_l = __HAL_TIM_GET_COUNTER(&htim4);
         uint16_t enc_r = __HAL_TIM_GET_COUNTER(&htim8);

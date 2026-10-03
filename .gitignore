@@ -21,3 +21,8 @@ st-link_gdbserver_log.txt
 .DS_Store
 Thumbs.db
 *.bak
+
+# local logs and reference material
+logs/
+error.md
+divergens.md

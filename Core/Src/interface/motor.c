@@ -1,15 +1,22 @@
 #include "main.h"
+#include "tim.h" // htim2 の宣言
 #include "interface/motor.h"
 
-extern TIM_HandleTypeDef htim2;
-
+// PWM開始のみ。STBYはLowのまま(ドライバ無効)にしておき、
+// 実際に駆動するときだけMotor_Enable()で有効化する。
 void Motor_Init(void) {
-    HAL_GPIO_WritePin(Motor_STBY_GPIO_Port, Motor_STBY_Pin, GPIO_PIN_SET);
     HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
 }
 
-// 1輪ぶん: valueの符号でCW/CCWを切り替え、絶対値をPWM_MAXでクランプして出力する。
+void Motor_Enable(void) {
+    HAL_GPIO_WritePin(Motor_STBY_GPIO_Port, Motor_STBY_Pin, GPIO_PIN_SET);
+}
+
+void Motor_Disable(void) {
+    HAL_GPIO_WritePin(Motor_STBY_GPIO_Port, Motor_STBY_Pin, GPIO_PIN_RESET);
+}
+
 static void DriveWheel(GPIO_TypeDef *cw_port, uint16_t cw_pin,
                         GPIO_TypeDef *ccw_port, uint16_t ccw_pin,
                         uint32_t channel, int16_t value) {

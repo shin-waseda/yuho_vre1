@@ -29,7 +29,10 @@
 /* USER CODE BEGIN Includes */
 #include "interface/gyro.h"
 #include "interface/motor.h"
+#include "interface/battery.h"
+#include "interface/encoder.h"
 #include "app/control_loop.h"
+#include "app/failsafe.h"
 #include "app/mode_ui.h"
 /* USER CODE END Includes */
 
@@ -114,19 +117,38 @@ int main(void)
   uint8_t whoami = ICM_Read(ICM_WHO_AM_I);
   printf("WHO_AM_I: 0x%02X\r\n", whoami);
 
+  // ジャイロのゼロ点補正(約1.1秒)。この間は機体を動かさないこと。
+  // App_ControlLoop_Init()がこの結果を取り込むので、必ずそれより前に行う。
+  printf("Gyro calibrating... keep still\r\n");
+  ICM_CalibrateBlocking(1000);
+  GyroOffset goff = ICM_GetOffset();
+  printf("Gyro offset X:%.1f Y:%.1f Z:%.1f\r\n", goff.x, goff.y, goff.z);
+
   Motor_Init();
 
 HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);  // ENC_L
 HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);  // ENC_R
 
-  App_ControlLoop_Init();
-  App_SetTargetVelocity(0.0f); // ゲイン未調整のため停止状態で書き込む
+  App_ControlLoop_Init(); // 制御ループは無効状態で起動する。各モード内でApp_ControlLoop_SetEnabled(true)する
+
+  // 起動時の電圧チェック。TIM6割り込み開始前なのでADCを直接読む。
+  // 低電圧なら発動させておき、走行系モードの有効化を拒否させる(TESTモードは使える)。
+  float vbat = Battery_MeasureVoltageBlocking(16);
+  printf("VBAT: %.2f V\r\n", vbat);
+  if (vbat < FAILSAFE_LOW_VOLTAGE_V) {
+    printf("WARNING: low battery (< %.2f V)\r\n", FAILSAFE_LOW_VOLTAGE_V);
+    FailSafe_Trip(FAILSAFE_LOW_VOLTAGE, vbat);
+  }
+  ModeUI_ShowBattery(vbat, 1500);
 
   // モード選択(右エンコーダの回転+ボタン確定)は、1kHz制御ループが
   // Encoder_GetDeltaR()を消費し始める前(=HAL_TIM_Base_Start_ITより前)に
   // 済ませる。でないとエンコーダの差分を奪い合ってしまう。
   RobotMode mode = ModeUI_Select();
 
+  // モード選択中などに溜まったエンコーダの差分を捨ててから制御ループを始める。
+  // (しないと最初のtickで左右の差分が一気に入り、オドメトリの向きが跳ぶ)
+  Encoder_SyncDelta();
   HAL_TIM_Base_Start_IT(&htim6);
 
   /* USER CODE END 2 */
@@ -141,6 +163,7 @@ HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);  // ENC_R
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    if (FailSafe_IsTripped()) FailSafe_Halt();
   }
   /* USER CODE END 3 */
 }

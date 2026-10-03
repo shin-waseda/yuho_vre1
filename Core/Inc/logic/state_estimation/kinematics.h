@@ -15,7 +15,6 @@ typedef struct {
     float angular_rad_s; // 機体旋回角速度(反時計回り正)
 } RobotVelocity;
 
-// 差動二輪の幾何学(トレッド幅)のみに依存する純粋関数。
 RobotVelocity Kinematics_WheelToRobot(WheelVelocity wheel);
 WheelVelocity  Kinematics_RobotToWheel(RobotVelocity robot);
 
