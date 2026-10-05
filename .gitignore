@@ -29,3 +29,6 @@ divergens.md
 
 # PC build output of tools/maze_sim
 tools/maze_sim/build/
+__pycache__/
+tools/maze_sim/mazes/
+maze_sim.md

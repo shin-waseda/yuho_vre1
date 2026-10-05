@@ -1,14 +1,24 @@
 #!/bin/sh
 # 迷路シミュレータを PC 向けにビルドする(ファームウェアのビルドではない)。
 # ファームウェアと同じ logic 層のソースをそのままコンパイルする。
+#   build/maze_sim        CLI
+#   build/maze_sim_lib.*  GUI (gui.py) が読み込む共有ライブラリ(gui.py も必要なら自動でビルドする)
 set -e
 cd "$(dirname "$0")"
 ROOT=../..
 mkdir -p build
-gcc -std=c11 -Wall -Wextra -O2 \
-    -I"$ROOT/Core/Inc" \
-    -o build/maze_sim \
-    maze_sim.c \
-    "$ROOT/Core/Src/logic/command.c" \
-    "$ROOT"/Core/Src/logic/maze/*.c
+
+LOGIC="$ROOT/Core/Src/logic/command.c $ROOT/Core/Src/logic/maze/*.c"
+CFLAGS="-std=c11 -Wall -Wextra -O2 -I$ROOT/Core/Inc"
+
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) LIB=build/maze_sim_lib.dll; LIBFLAGS="-shared -static-libgcc" ;;
+    Darwin*)              LIB=build/libmaze_sim.dylib; LIBFLAGS="-shared -fPIC" ;;
+    *)                    LIB=build/libmaze_sim.so;    LIBFLAGS="-shared -fPIC" ;;
+esac
+
+gcc $CFLAGS -o build/maze_sim maze_sim.c sim_core.c $LOGIC
 echo "built tools/maze_sim/build/maze_sim"
+
+gcc $CFLAGS $LIBFLAGS -o "$LIB" sim_api.c sim_core.c $LOGIC
+echo "built tools/maze_sim/$LIB"

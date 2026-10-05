@@ -6,6 +6,8 @@
 //   tools/maze_sim/build/maze_sim --random 1          乱数(シード1)で作った迷路で探索する
 //   tools/maze_sim/build/maze_sim maze.txt            テキストの迷路ファイルで探索する
 //   tools/maze_sim/build/maze_sim --batch 200         シード1〜200の迷路で続けて試し、結果だけ出す
+//   tools/maze_sim/build/maze_sim mazes/alljapan-*.txt  迷路ファイルが2つ以上なら、まとめて試す
+//   (大会の迷路は sh tools/maze_sim/fetch_mazes.sh で tools/maze_sim/mazes/ に取ってくる)
 // オプション:
 //   --algo dijkstra|adachi   探索のアルゴリズム(既定 dijkstra)
 //   --goal S,T90,T180,K      探索の行きのDijkstraのコスト(直進,90°旋回,180°旋回,既知区画の上乗せ)
@@ -33,11 +35,9 @@
 #include "logic/maze/priority_queue.h"
 #include "logic/maze/search_planner.h"
 #include "logic/maze/maze_print.h"
+#include "sim_core.h"
 
 #define STEP_LIMIT 5000 // 探索で指令をこれだけ実行しても終わらなければ打ち切る
-
-static const MazePos kGoals[MAZE_GOAL_COUNT] = MAZE_GOALS;
-static const MazePos kStart = { MAZE_START_X, MAZE_START_Y };
 
 // 大きな構造体は静的に置く
 static WallMap s_truth;     // 本当の迷路(全部の壁が既知)
@@ -45,166 +45,6 @@ static WallMap s_map;       // 探索で分かった地図
 static SearchPlanner s_planner;
 static MazeSolver s_solver;
 static CommandList s_route;
-
-// ------------------------------------------------------------
-// 本当の迷路を作る
-// ------------------------------------------------------------
-
-// 全部の内壁を既知の「なし」にしてから、壁を立てていく
-static void Truth_Clear(WallMap *m) {
-    WallMap_Init(m);
-    for (uint8_t y = 0; y < MAZE_SIZE; y++) {
-        for (uint8_t x = 0; x < MAZE_SIZE; x++) {
-            MazePos p = { x, y };
-            WallMap_SetWall(m, p, DIR_NORTH, false);
-            WallMap_SetWall(m, p, DIR_EAST, false);
-        }
-    }
-}
-
-static bool LoadMazeFile(const char *path, WallMap *m) {
-    enum { LINES = 2 * MAZE_SIZE + 1, WIDTH = 4 * MAZE_SIZE + 1 };
-    static char lines[LINES][256];
-
-    FILE *fp = fopen(path, "r");
-    if (fp == NULL) {
-        fprintf(stderr, "cannot open %s\n", path);
-        return false;
-    }
-    int n = 0;
-    while (n < LINES && fgets(lines[n], sizeof(lines[n]), fp) != NULL) {
-        size_t len = strcspn(lines[n], "\r\n");
-        // 足りない分は空白で埋めて、同じ幅の行として読む
-        while (len < WIDTH && len + 1 < sizeof(lines[n])) lines[n][len++] = ' ';
-        lines[n][len] = '\0';
-        n++;
-    }
-    fclose(fp);
-    if (n < LINES) {
-        fprintf(stderr, "%s: need %d lines, got %d\n", path, LINES, n);
-        return false;
-    }
-
-    Truth_Clear(m);
-    for (uint8_t y = 0; y < MAZE_SIZE; y++) {
-        int row_north = 2 * (MAZE_SIZE - 1 - y); // この区画の北の壁の行
-        int row_cell = row_north + 1;            // この区画の西・東の壁の行
-        for (uint8_t x = 0; x < MAZE_SIZE; x++) {
-            MazePos p = { x, y };
-            int col = 4 * x;
-            if (lines[row_north][col + 2] == '-') WallMap_SetWall(m, p, DIR_NORTH, true);
-            if (lines[row_cell][col] == '|') WallMap_SetWall(m, p, DIR_WEST, true);
-            if (lines[row_cell][col + 4] == '|') WallMap_SetWall(m, p, DIR_EAST, true);
-            if (y == 0 && lines[2 * MAZE_SIZE][col + 2] == '-') WallMap_SetWall(m, p, DIR_SOUTH, true);
-        }
-    }
-    return true;
-}
-
-// 環境に依らず同じ迷路になるよう、乱数は自前(xorshift32)
-static uint32_t s_rng;
-static uint32_t Rand(void) {
-    s_rng ^= s_rng << 13;
-    s_rng ^= s_rng >> 17;
-    s_rng ^= s_rng << 5;
-    return s_rng;
-}
-
-static bool IsStartEastWall(MazePos p, Direction d) {
-    MazePos n;
-    if (!MazePos_Step(p, d, &n)) return false;
-    return (MazePos_Equal(p, kStart) && d == DIR_EAST) || (MazePos_Equal(n, kStart) && d == DIR_WEST);
-}
-
-// 穴掘り法(深さ優先)で全区画がつながった迷路を作り、ところどころ壁を抜いてループも作る。
-// 規定どおり、スタート区画の東は壁、ゴールの4区画の間は壁なしにする。
-static void MakeRandomMaze(uint32_t seed, WallMap *m) {
-    s_rng = seed * 2654435761u + 1u;
-    if (s_rng == 0) s_rng = 1;
-
-    // 全部の壁を立てる
-    Truth_Clear(m);
-    for (uint8_t y = 0; y < MAZE_SIZE; y++) {
-        for (uint8_t x = 0; x < MAZE_SIZE; x++) {
-            MazePos p = { x, y };
-            for (int d = 0; d < 4; d++) WallMap_SetWall(m, p, (Direction)d, true);
-        }
-    }
-
-    static bool visited[MAZE_SIZE][MAZE_SIZE];
-    static MazePos stack[MAZE_CELL_COUNT];
-    memset(visited, 0, sizeof(visited));
-    int top = 0;
-    stack[top++] = kStart;
-    visited[kStart.y][kStart.x] = true;
-
-    while (top > 0) {
-        MazePos p = stack[top - 1];
-        Direction cand[4];
-        int nc = 0;
-        for (int d = 0; d < 4; d++) {
-            MazePos n;
-            if (!MazePos_Step(p, (Direction)d, &n)) continue;
-            if (visited[n.y][n.x]) continue;
-            if (IsStartEastWall(p, (Direction)d)) continue;
-            cand[nc++] = (Direction)d;
-        }
-        if (nc == 0) {
-            top--;
-            continue;
-        }
-        Direction d = cand[Rand() % (uint32_t)nc];
-        MazePos n;
-        MazePos_Step(p, d, &n);
-        WallMap_SetWall(m, p, d, false);
-        visited[n.y][n.x] = true;
-        stack[top++] = n;
-    }
-
-    // ループを作る(内壁のおよそ8%を抜く)
-    for (uint8_t y = 0; y < MAZE_SIZE; y++) {
-        for (uint8_t x = 0; x < MAZE_SIZE; x++) {
-            MazePos p = { x, y };
-            for (int d = 0; d < 2; d++) { // 北と東だけ見れば全部の内壁を1回ずつ見る
-                MazePos n;
-                if (!MazePos_Step(p, (Direction)d, &n)) continue;
-                if (IsStartEastWall(p, (Direction)d)) continue;
-                if (Rand() % 100u < 8u) WallMap_SetWall(m, p, (Direction)d, false);
-            }
-        }
-    }
-
-    // ゴールの区画どうしの間は壁なし
-    for (int i = 0; i < MAZE_GOAL_COUNT; i++) {
-        for (int d = 0; d < 4; d++) {
-            MazePos n;
-            if (!MazePos_Step(kGoals[i], (Direction)d, &n)) continue;
-            if (MazePos_InList(n, kGoals, MAZE_GOAL_COUNT)) WallMap_SetWall(m, kGoals[i], (Direction)d, false);
-        }
-    }
-}
-
-// ------------------------------------------------------------
-// 機体を動かす
-// ------------------------------------------------------------
-
-static WallObservation Sense(const WallMap *truth, MazePos p, Direction heading) {
-    WallObservation o;
-    o.front = WallMap_HasWall(truth, p, heading, WALL_VIEW_KNOWN);
-    o.right = WallMap_HasWall(truth, p, Dir_Turn(heading, 1), WALL_VIEW_KNOWN);
-    o.left = WallMap_HasWall(truth, p, Dir_Turn(heading, -1), WALL_VIEW_KNOWN);
-    return o;
-}
-
-// 指令を本当の迷路で実行する。壁にぶつかったらfalse。
-static bool Execute(const WallMap *truth, MazePos *pos, Direction *heading, Action a) {
-    *heading = Dir_Turn(*heading, Action_QuarterTurns(a.type));
-    for (uint8_t i = 0; i < a.cells; i++) {
-        if (WallMap_HasWall(truth, *pos, *heading, WALL_VIEW_KNOWN)) return false;
-        MazePos_Step(*pos, *heading, pos);
-    }
-    return true;
-}
 
 // ------------------------------------------------------------
 // 1つの迷路で試す
@@ -232,14 +72,14 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
 
     // --- 探索 ---
     WallMap_Init(&s_map);
-    SearchPlanner_Init(&s_planner, &s_map, algo, kStart, DIR_NORTH, kGoals, MAZE_GOAL_COUNT);
+    SearchPlanner_Init(&s_planner, &s_map, algo, kSimStart, DIR_NORTH, kSimGoals, MAZE_GOAL_COUNT);
     if (cfg->set_goal_cost) s_planner.cost_to_goal = cfg->goal_cost;
     if (cfg->set_back_cost) s_planner.cost_to_start = cfg->back_cost;
-    MazePos pos = kStart;
+    MazePos pos = kSimStart;
     Direction heading = DIR_NORTH;
 
     for (int step = 0; step < STEP_LIMIT; step++) {
-        WallObservation obs = Sense(truth, pos, heading);
+        WallObservation obs = SimCore_Sense(truth, pos, heading);
         SearchPhase before = s_planner.phase;
         Action a = SearchPlanner_Step(&s_planner, obs);
 
@@ -255,7 +95,7 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
             continue;
         }
 
-        if (!Execute(truth, &pos, &heading, a)) {
+        if (!SimCore_Execute(truth, &pos, &heading, a)) {
             if (!quiet) printf("CRASH: %s at (%u,%u)\n", Action_Name(a.type), pos.x, pos.y);
             return r;
         }
@@ -270,7 +110,7 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
         if (verbose) {
             printf("\n#%d %s -> (%u,%u)\n", step, Action_Name(a.type), pos.x, pos.y);
             MazePrint_Map(&s_map, algo == SEARCH_ALGO_DIJKSTRA ? &s_planner.work.solver : NULL,
-                          &pos, heading, kGoals, MAZE_GOAL_COUNT);
+                          &pos, heading, kSimGoals, MAZE_GOAL_COUNT);
         }
     }
     if (s_planner.phase != SEARCH_PHASE_DONE) {
@@ -279,13 +119,13 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
     }
 
     // --- 分かった壁だけで最短経路 ---
-    Dijkstra_Compute(&s_solver, &s_map, WALL_VIEW_KNOWN, NULL, kGoals, MAZE_GOAL_COUNT);
-    r.cost_found = Dijkstra_Cost(&s_solver, kStart, DIR_NORTH);
+    Dijkstra_Compute(&s_solver, &s_map, WALL_VIEW_KNOWN, NULL, kSimGoals, MAZE_GOAL_COUNT);
+    r.cost_found = Dijkstra_Cost(&s_solver, kSimStart, DIR_NORTH);
     if (!quiet) {
         printf("\n=== explored map (cost to goal, known walls only) ===\n");
-        MazePrint_Map(&s_map, &s_solver, NULL, DIR_NORTH, kGoals, MAZE_GOAL_COUNT);
+        MazePrint_Map(&s_map, &s_solver, NULL, DIR_NORTH, kSimGoals, MAZE_GOAL_COUNT);
     }
-    if (!Dijkstra_BuildRoute(&s_solver, kStart, DIR_NORTH, true, &s_route)) {
+    if (!Dijkstra_BuildRoute(&s_solver, kSimStart, DIR_NORTH, true, &s_route)) {
         if (!quiet) printf("no route on the explored map\n");
         return r;
     }
@@ -295,22 +135,22 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
     }
 
     // --- その経路を本当の迷路で走らせる ---
-    pos = kStart;
+    pos = kSimStart;
     heading = DIR_NORTH;
     for (uint16_t i = 0; i < s_route.count; i++) {
-        if (!Execute(truth, &pos, &heading, s_route.items[i])) {
+        if (!SimCore_Execute(truth, &pos, &heading, s_route.items[i])) {
             if (!quiet) printf("route CRASH at command %u\n", (unsigned)i);
             return r;
         }
     }
-    if (!MazePos_InList(pos, kGoals, MAZE_GOAL_COUNT)) {
+    if (!MazePos_InList(pos, kSimGoals, MAZE_GOAL_COUNT)) {
         if (!quiet) printf("route ended at (%u,%u), not a goal\n", pos.x, pos.y);
         return r;
     }
 
     // --- 迷路を全部知っていたときの最短と比べる ---
-    Dijkstra_Compute(&s_solver, truth, WALL_VIEW_KNOWN, NULL, kGoals, MAZE_GOAL_COUNT);
-    r.cost_best = Dijkstra_Cost(&s_solver, kStart, DIR_NORTH);
+    Dijkstra_Compute(&s_solver, truth, WALL_VIEW_KNOWN, NULL, kSimGoals, MAZE_GOAL_COUNT);
+    r.cost_best = Dijkstra_Cost(&s_solver, kSimStart, DIR_NORTH);
     r.ok = true;
     return r;
 }
@@ -372,8 +212,49 @@ static void PrintResult(const Result *r) {
            (r->cost_found == r->cost_best) ? "  = optimal" : "");
 }
 
+// まとめて試したときの集計
+typedef struct {
+    int count;
+    int failed;
+    int optimal;
+    long sum_goal;
+    long sum_back;
+    double sum_ratio;
+} BatchStats;
+
+static void Batch_Add(BatchStats *b, const Result *r, const char *label) {
+    b->count++;
+    if (!r->ok) {
+        printf("%s: FAILED\n", label);
+        b->failed++;
+        return;
+    }
+    b->sum_goal += r->moves_to_goal;
+    b->sum_back += r->moves_to_start;
+    b->sum_ratio += (double)r->cost_found / (double)r->cost_best;
+    if (r->cost_found == r->cost_best) b->optimal++;
+}
+
+static void Batch_Print(const BatchStats *b, const SimConfig *cfg) {
+    int ok = b->count - b->failed;
+    printf("%s", cfg->algo == SEARCH_ALGO_ADACHI ? "adachi  " : "dijkstra");
+    if (cfg->algo == SEARCH_ALGO_DIJKSTRA) {
+        PrintCost(" goal", &cfg->goal_cost);
+        PrintCost(" back", &cfg->back_cost);
+    }
+    printf(" | %d mazes, %d failed, optimal %3d", b->count, b->failed, b->optimal);
+    if (ok > 0) {
+        printf(", moves %.1f + %.1f = %.1f, cost ratio %.3f",
+               (double)b->sum_goal / ok, (double)b->sum_back / ok,
+               (double)(b->sum_goal + b->sum_back) / ok, b->sum_ratio / ok);
+    }
+    printf("\n");
+}
+
 int main(int argc, char **argv) {
-    const char *file = NULL;
+    // 迷路ファイル(2つ以上ならまとめて試す)
+    const char **files = calloc((size_t)argc, sizeof(*files));
+    int file_count = 0;
     long seed = -1;
     long batch = 0;
     bool verbose = false;
@@ -385,6 +266,7 @@ int main(int argc, char **argv) {
     cfg.goal_cost = MazeCost_Default();
     cfg.back_cost = MazeCost_Default();
     cfg.back_cost.known_cell = MAZE_COST_KNOWN_CELL_RETURN;
+    if (files == NULL) return 2;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--random") == 0 && i + 1 < argc) {
@@ -413,7 +295,7 @@ int main(int argc, char **argv) {
             PrintSizes();
             return 0;
         } else if (argv[i][0] != '-') {
-            file = argv[i];
+            files[file_count++] = argv[i];
         } else {
             fprintf(stderr, "unknown option: %s\n", argv[i]);
             return 2;
@@ -422,46 +304,42 @@ int main(int argc, char **argv) {
     if (!CheckCostFits("goal", &cfg.goal_cost) || !CheckCostFits("back", &cfg.back_cost)) return 2;
 
     if (batch > 0) {
-        int failed = 0, optimal = 0;
-        long sum_goal = 0, sum_back = 0;
-        double sum_ratio = 0.0;
+        BatchStats b = { 0, 0, 0, 0, 0, 0.0 };
         for (long s = 1; s <= batch; s++) {
-            MakeRandomMaze((uint32_t)s, &s_truth);
+            char label[32];
+            snprintf(label, sizeof(label), "seed %ld", s);
+            SimCore_MakeRandomMaze((uint32_t)s, &s_truth);
             Result r = RunOne(&s_truth, &cfg, false, true);
-            if (!r.ok) {
-                printf("seed %ld: FAILED\n", s);
-                failed++;
-                continue;
-            }
-            sum_goal += r.moves_to_goal;
-            sum_back += r.moves_to_start;
-            sum_ratio += (double)r.cost_found / (double)r.cost_best;
-            if (r.cost_found == r.cost_best) optimal++;
+            Batch_Add(&b, &r, label);
         }
-        int ok = (int)batch - failed;
-        printf("%s", cfg.algo == SEARCH_ALGO_ADACHI ? "adachi  " : "dijkstra");
-        if (cfg.algo == SEARCH_ALGO_DIJKSTRA) {
-            PrintCost(" goal", &cfg.goal_cost);
-            PrintCost(" back", &cfg.back_cost);
-        }
-        printf(" | %ld mazes, %d failed, optimal %3d", batch, failed, optimal);
-        if (ok > 0) {
-            printf(", moves %.1f + %.1f = %.1f, cost ratio %.3f",
-                   (double)sum_goal / ok, (double)sum_back / ok,
-                   (double)(sum_goal + sum_back) / ok, sum_ratio / ok);
-        }
-        printf("\n");
-        return failed == 0 ? 0 : 1;
+        Batch_Print(&b, &cfg);
+        return b.failed == 0 ? 0 : 1;
     }
 
-    if (file != NULL) {
-        if (!LoadMazeFile(file, &s_truth)) return 2;
+    if (file_count > 1) {
+        BatchStats b = { 0, 0, 0, 0, 0, 0.0 };
+        int unreadable = 0;
+        for (int i = 0; i < file_count; i++) {
+            if (!SimCore_LoadMazeFile(files[i], &s_truth)) {
+                unreadable++;
+                continue;
+            }
+            Result r = RunOne(&s_truth, &cfg, false, true);
+            Batch_Add(&b, &r, files[i]);
+        }
+        if (unreadable > 0) printf("%d files could not be read\n", unreadable);
+        Batch_Print(&b, &cfg);
+        return (b.failed == 0 && unreadable == 0) ? 0 : 1;
+    }
+
+    if (file_count == 1) {
+        if (!SimCore_LoadMazeFile(files[0], &s_truth)) return 2;
     } else {
-        MakeRandomMaze((uint32_t)(seed >= 0 ? seed : 1), &s_truth);
+        SimCore_MakeRandomMaze((uint32_t)(seed >= 0 ? seed : 1), &s_truth);
     }
 
     printf("=== maze ===\n");
-    MazePrint_Map(&s_truth, NULL, &kStart, DIR_NORTH, kGoals, MAZE_GOAL_COUNT);
+    MazePrint_Map(&s_truth, NULL, &kSimStart, DIR_NORTH, kSimGoals, MAZE_GOAL_COUNT);
 
     Result r = RunOne(&s_truth, &cfg, verbose, false);
     if (!r.ok) return 1;
