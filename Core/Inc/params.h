@@ -68,6 +68,20 @@
 #define VELOCITY_FF_ACC_L 0.00025f
 #define VELOCITY_FF_ACC_R 0.00025f
 
+// ============================================================
+// 角速度制御(車輪速度ループの外側)
+//   ω_cmd = ω_ref + KP×(ω_ref − ω_gyro) + KI×∫(ω_ref − ω_gyro)dt   [rad/s]
+// KI項は角度の誤差に比例するので、ずれた向きも元へ戻す。
+// 内側(車輪速度)が十分速い前提で、角度の誤差は時定数 (1+KP)/KI [s] で縮む。
+// 値は未調整の初期値(時定数 約0.1s)。GYRO_Z_SIGN が正しいことを先に確認すること
+// (逆だと正帰還になり回り出す)。
+// ============================================================
+
+#define ANGULAR_CONTROL_ENABLE 1     // 0にすると補正なし(比較試験用)
+#define ANGULAR_KP 0.5f              // [-]
+#define ANGULAR_KI 15.0f             // [1/s]
+#define ANGULAR_CORR_LIMIT_RAD_S 6.0f // 補正量の上限[rad/s](約340dps)
+
 // 迷路の1区画の長さ[mm]
 #define SECTION_MM 180.0f
 
@@ -119,6 +133,6 @@
 // 右エンコーダがこのパルス数だけ回転するたびにモードを1つ送る。
 // ============================================================
 
-#define MODE_SELECT_PULSES_PER_STEP (ENCODER_PULSES_PER_REV * 1.5f) // タイヤ1.5周で1モード
+#define MODE_SELECT_PULSES_PER_STEP (ENCODER_PULSES_PER_REV * 0.25f) // タイヤ1/4周で1モード
 
 #endif

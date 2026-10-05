@@ -6,34 +6,54 @@
 #include "interface/gyro.h"
 #include "interface/battery.h"
 #include "logic/state_estimation/kinematics.h"
+#include "logic/control/pid.h"
 #include "logic/control/velocity_pid.h"
 #include "logic/control/velocity_profile.h"
 #include "app/failsafe.h"
 
+#define DEG_TO_RAD (3.14159265f / 180.0f)
+
 static Odometry_t s_odo;
 static VelocityPID s_vpid;
+static PID_t s_ang_pid;            // 角速度ループ(外側)。入力[rad/s]、出力[rad/s]
 static WheelVelocity s_actual;
+
+// 目標(並進・回転)。プロファイル実行中はISRが毎tick書き換える。
 static float s_target_mm_s = 0.0f;
 static float s_target_acc = 0.0f;
+static float s_target_omega_dps = 0.0f;
+static float s_target_alpha_dps2 = 0.0f;
 static MotorPWM s_pwm = { 0, 0 };
 
-// 直進プロファイル。ISRだけが進める。
+// 走行プロファイル(直進 or 超信地旋回の一方)。ISRだけが進める。
+// 超信地旋回は、角度[deg]を「距離」、角速度[dps]を「速度」として同じ台形を使う。
+typedef enum {
+    MOTION_STRAIGHT,
+    MOTION_PIVOT,
+} MotionType;
+
 static VelocityProfile s_profile;
+static MotionType s_profile_type = MOTION_STRAIGHT;
+static float s_profile_sign = 1.0f; // 超信地旋回の向き(+1: 反時計回り)
 static volatile bool s_profile_active = false;
 static volatile bool s_motion_done = true;
 
-// メイン→ISRへの直進指令の受け渡し。パラメータを書いてから最後にフラグを立て、
+// メイン→ISRへの走行指令の受け渡し。パラメータを書いてから最後にフラグを立て、
 // ISRは次のtickでフラグを見て取り込む(取り込み中にメインが書き換えることはない)。
 typedef struct {
-    float distance_mm;
-    float v_max;
-    float v_end;
-    float accel;
-} StraightCommand;
-static StraightCommand s_pending;
+    MotionType type;
+    float distance; // [mm] or [deg](正の値)
+    float v_max;    // [mm/s] or [dps]
+    float v_end;    // [mm/s](超信地旋回は0)
+    float accel;    // [mm/s^2] or [dps^2]
+    float sign;     // 超信地旋回の向き
+} MotionCommand;
+static MotionCommand s_pending;
 static volatile bool s_start_pending = false;
+
 static GyroData s_gyro_raw = { 0, 0, 0 };
 static float s_gyro_z_dps = 0.0f;
+static float s_gyro_angle_deg = 0.0f; // ジャイロの積分角(起動からの累積、反時計回り正)
 static GyroOffset s_gyro_offset = { 0.0f, 0.0f, 0.0f };
 static ControlDebug s_dbg;
 
@@ -44,6 +64,10 @@ static bool s_prev_enabled = false;     // ISRからのみ触る
 void App_ControlLoop_Init(void) {
     Odometry_Reset(&s_odo);
     VelocityPID_Init(&s_vpid);
+    s_ang_pid.kp = ANGULAR_KP;
+    s_ang_pid.ki = ANGULAR_KI;
+    s_ang_pid.kd = 0.0f;
+    PID_Reset(&s_ang_pid);
     FailSafe_Init();
     s_gyro_offset = ICM_GetOffset(); // ICM_CalibrateBlocking()後に呼ばれる前提
     s_actual.left_mm_s = 0.0f;
@@ -56,14 +80,29 @@ void App_SetTargetVelocity(float mm_s) {
     s_profile_active = false;
     s_motion_done = true;
     s_target_acc = 0.0f;
+    s_target_omega_dps = 0.0f;
+    s_target_alpha_dps2 = 0.0f;
     s_target_mm_s = mm_s;
 }
 
 void App_StartStraight(float distance_mm, float v_max, float v_end, float accel) {
-    s_pending.distance_mm = distance_mm;
+    s_pending.type = MOTION_STRAIGHT;
+    s_pending.distance = distance_mm;
     s_pending.v_max = v_max;
     s_pending.v_end = v_end;
     s_pending.accel = accel;
+    s_pending.sign = 1.0f;
+    s_motion_done = false;
+    s_start_pending = true; // 最後に立てる
+}
+
+void App_StartPivot(float angle_deg, float omega_max_dps, float alpha_dps2) {
+    s_pending.type = MOTION_PIVOT;
+    s_pending.distance = fabsf(angle_deg);
+    s_pending.v_max = omega_max_dps;
+    s_pending.v_end = 0.0f;
+    s_pending.accel = alpha_dps2;
+    s_pending.sign = (angle_deg >= 0.0f) ? 1.0f : -1.0f;
     s_motion_done = false;
     s_start_pending = true; // 最後に立てる
 }
@@ -72,11 +111,22 @@ bool App_IsMotionDone(void) {
     return s_motion_done && !s_start_pending;
 }
 
-// ISRの先頭で呼ぶ。直進指令を取り込み、プロファイルを1tick進めて目標を更新する。
+// ISRの先頭で呼ぶ。走行指令を取り込み、プロファイルを1tick進めて目標を更新する。
 // 制御が無効の間は進めない(止まっているのに目標だけ進むのを防ぐ)。
 static void UpdateProfile(void) {
     if (s_start_pending) {
-        VelocityProfile_Start(&s_profile, s_pending.distance_mm, s_target_mm_s,
+        s_profile_type = s_pending.type;
+        s_profile_sign = s_pending.sign;
+        float v_start = 0.0f;
+        if (s_profile_type == MOTION_STRAIGHT) {
+            v_start = s_target_mm_s;     // 走りながら次の直進へつなげられるように
+            s_target_omega_dps = 0.0f;
+            s_target_alpha_dps2 = 0.0f;
+        } else {
+            s_target_mm_s = 0.0f;        // 超信地旋回はその場で回る
+            s_target_acc = 0.0f;
+        }
+        VelocityProfile_Start(&s_profile, s_pending.distance, v_start,
                               s_pending.v_max, s_pending.v_end, s_pending.accel);
         s_profile_active = true;
         s_start_pending = false;
@@ -84,11 +134,18 @@ static void UpdateProfile(void) {
     if (!s_profile_active || !s_enabled) return;
 
     VelocityProfile_Step(&s_profile, CONTROL_DT_S);
-    s_target_mm_s = s_profile.v;
-    s_target_acc = s_profile.a;
+    if (s_profile_type == MOTION_STRAIGHT) {
+        s_target_mm_s = s_profile.v;
+        s_target_acc = s_profile.a;
+    } else {
+        s_target_omega_dps = s_profile_sign * s_profile.v;
+        s_target_alpha_dps2 = s_profile_sign * s_profile.a;
+    }
     if (s_profile.done) {
         s_profile_active = false;
         s_target_acc = 0.0f;
+        s_target_alpha_dps2 = 0.0f;
+        if (s_profile_type == MOTION_PIVOT) s_target_omega_dps = 0.0f;
         s_motion_done = true;
     }
 }
@@ -131,6 +188,10 @@ float App_GetGyroZ_dps(void) {
     return s_gyro_z_dps;
 }
 
+float App_GetGyroAngle_deg(void) {
+    return s_gyro_angle_deg;
+}
+
 const ControlDebug *App_GetControlDebug(void) {
     return &s_dbg;
 }
@@ -163,6 +224,7 @@ static void ClearOutputDebug(void) {
     s_dbg.ff_r = 0.0f;
     s_dbg.i_l = 0.0f;
     s_dbg.i_r = 0.0f;
+    s_dbg.ang_corr_dps = 0.0f;
 }
 
 void App_ControlTick(void) {
@@ -173,13 +235,38 @@ void App_ControlTick(void) {
 
     s_gyro_raw = ICM_ReadGyro();
     s_gyro_z_dps = GYRO_Z_SIGN * ((float)s_gyro_raw.z - s_gyro_offset.z) / GYRO_SENSITIVITY_LSB_PER_DPS;
+    s_gyro_angle_deg += s_gyro_z_dps * CONTROL_DT_S;
 
     UpdateProfile();
 
-    RobotVelocity target_robot = { .linear_mm_s = s_target_mm_s, .angular_rad_s = 0.0f };
+    // ---- 角速度ループ(外側) ----
+    // ω_cmd = ω_ref + PI(ω_ref − ω_gyro)。I項は角度の誤差に相当するので、
+    // ずれた向きも元へ戻す(角度のPDと同じ働き)。出力は車輪速度の目標になる。
+    float omega_ref = s_target_omega_dps * DEG_TO_RAD;
+    float omega_meas = s_gyro_z_dps * DEG_TO_RAD;
+    float ang_corr = 0.0f;
+    bool control_active = s_enabled && !FailSafe_IsTripped();
+    bool robot_stopped = (s_target_mm_s == 0.0f) && (s_target_acc == 0.0f)
+                      && (s_target_omega_dps == 0.0f) && (s_target_alpha_dps2 == 0.0f)
+                      && (fabsf(s_actual.left_mm_s)  < VELOCITY_STOP_RESET_MM_S)
+                      && (fabsf(s_actual.right_mm_s) < VELOCITY_STOP_RESET_MM_S);
+    if (ANGULAR_CONTROL_ENABLE && control_active && !robot_stopped) {
+        ang_corr = PID_Update(&s_ang_pid, omega_ref - omega_meas, CONTROL_DT_S,
+                              -ANGULAR_CORR_LIMIT_RAD_S, ANGULAR_CORR_LIMIT_RAD_S);
+    } else {
+        PID_Reset(&s_ang_pid);
+    }
+
+    RobotVelocity target_robot = {
+        .linear_mm_s = s_target_mm_s,
+        .angular_rad_s = omega_ref + ang_corr,
+    };
     WheelVelocity target_wheel = Kinematics_RobotToWheel(target_robot);
-    // 加速度も速度と同じ線形変換で車輪ごとに分ける(直進なので左右同じ)。
-    RobotVelocity target_robot_acc = { .linear_mm_s = s_target_acc, .angular_rad_s = 0.0f };
+    // 加速度も速度と同じ線形変換で車輪ごとに分ける(FFには目標の加速度だけを使う)。
+    RobotVelocity target_robot_acc = {
+        .linear_mm_s = s_target_acc,
+        .angular_rad_s = s_target_alpha_dps2 * DEG_TO_RAD,
+    };
     WheelVelocity target_wheel_acc = Kinematics_RobotToWheel(target_robot_acc);
 
     FailSafeInput fs_in = {
@@ -200,6 +287,10 @@ void App_ControlTick(void) {
     s_dbg.vl = s_actual.left_mm_s;
     s_dbg.vr = s_actual.right_mm_s;
     s_dbg.vbat = vbat;
+    s_dbg.target_omega_dps = s_target_omega_dps;
+    s_dbg.gyro_z_dps = s_gyro_z_dps;
+    s_dbg.angle_deg = s_gyro_angle_deg;
+    s_dbg.ang_corr_dps = ang_corr / DEG_TO_RAD;
 
     // 発動中は毎tick止め直す。メインが直前にSetEnabled(true)と競合して
     // STBYをHighにしていても、ここで必ずLowへ戻る。
@@ -215,6 +306,8 @@ void App_ControlTick(void) {
         s_motion_done = true;
         s_target_mm_s = 0.0f;
         s_target_acc = 0.0f;
+        s_target_omega_dps = 0.0f;
+        s_target_alpha_dps2 = 0.0f;
         return;
     }
 
@@ -227,9 +320,11 @@ void App_ControlTick(void) {
     if (!s_prev_enabled) {
         // 有効化の立ち上がり。無効中に溜まった積分項・前回偏差を捨てる。
         VelocityPID_Reset(&s_vpid);
+        PID_Reset(&s_ang_pid);
         s_prev_enabled = true;
     }
 
+    // ---- 車輪速度ループ(内側) ----
     // 2自由度制御: FFは目標(速度・加速度)だけから、PIDは偏差から。単位はどちらも電圧[V]。
     float ff_l = VELOCITY_FF_FRIC_L * SignOf(target_wheel.left_mm_s)
                + VELOCITY_FF_GAIN_L * target_wheel.left_mm_s
@@ -239,10 +334,7 @@ void App_ControlTick(void) {
                + VELOCITY_FF_ACC_R  * target_wheel_acc.right_mm_s;
 
     WheelVelocity out;
-    bool stopped = (s_target_mm_s == 0.0f) && (s_target_acc == 0.0f)
-                && (fabsf(s_actual.left_mm_s)  < VELOCITY_STOP_RESET_MM_S)
-                && (fabsf(s_actual.right_mm_s) < VELOCITY_STOP_RESET_MM_S);
-    if (stopped) {
+    if (robot_stopped) {
         // 止まるべき所で止まった。I項を捨てて出力0にし、PWMが残り続けるのを防ぐ。
         VelocityPID_Reset(&s_vpid);
         out.left_mm_s = 0.0f;

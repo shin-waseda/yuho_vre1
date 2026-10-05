@@ -54,6 +54,12 @@ void Logger_Sample(void);
 // 止めた状態でのみ送る(記録中はISRと取り合うので送らない)。ブロッキング。
 void Logger_Dump(void);
 
+// 止めた状態でのみ、SDカードへCSV(1行目は列名)で保存する。ブロッキング。
+// 保存先は <dir>/<file>_NNNN.csv (dir/fileはLogger_SetDirName/SetFileName、
+// fileが未設定なら "log")。番号は空いているものを使い、上書きしない。
+// 保存したパスをpath_out(NULL可)へ書く。SD未マウント・失敗時はfalse。
+bool Logger_SaveCSV(char *path_out, uint32_t path_len);
+
 bool Logger_IsRecording(void);
 bool Logger_IsFull(void);
 uint32_t Logger_SampleCount(void);

@@ -13,10 +13,10 @@ typedef enum {
     MODE_VEL_PID,
     MODE_LED_TEST,
     MODE_STRAIGHT_TEST,
+    MODE_SD_DUMP,
+    MODE_SD_DUMP_ALL,
+    MODE_PIVOT_TEST,
     // 空きモード。中身を実装する時は名前を付け替える
-    MODE_4,
-    MODE_5,
-    MODE_6,
     MODE_7,
     MODE_8,
     MODE_9,
@@ -38,6 +38,10 @@ void ModeUI_ShowBattery(float vbat, uint32_t hold_ms);
 // (MODE_SELECT_PULSES_PER_STEPごと)でモードを送り、ボタン押下で
 // 確定して選択されたモードを返す。
 RobotMode ModeUI_Select(void);
+
+// 試験モードの走行後、記録したログをSDカードへCSVで保存し、結果をUARTとLEDで示す。
+// LED: 成功=LED1〜7点灯 / 失敗=LED1,3,5,7点灯 / SDなし=変えない。次の操作まで表示が残る。
+void ModeUI_SaveLogToSD(void);
 
 // ボタンが押されて離されるまで待つ(チャタリング除去付き)。
 // 待っている間にフェイルセーフが発動したらFailSafe_Halt()へ入る(戻らない)。

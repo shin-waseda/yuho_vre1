@@ -19,7 +19,8 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "adc.h"
-#include "sdio.h"
+#include "dma.h"
+#include "fatfs.h"
 #include "spi.h"
 #include "tim.h"
 #include "usart.h"
@@ -31,6 +32,7 @@
 #include "interface/motor.h"
 #include "interface/battery.h"
 #include "interface/encoder.h"
+#include "interface/sdcard.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
 #include "app/mode_ui.h"
@@ -97,8 +99,8 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_ADC1_Init();
-//  MX_SDIO_SD_Init();
   MX_SPI2_Init();
   MX_TIM2_Init();
   MX_TIM3_Init();
@@ -106,6 +108,7 @@ int main(void)
   MX_TIM8_Init();
   MX_USART1_UART_Init();
   MX_TIM6_Init();
+  MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
   setbuf(stdout, NULL);
 
@@ -140,6 +143,14 @@ HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);  // ENC_R
     FailSafe_Trip(FAILSAFE_LOW_VOLTAGE, vbat);
   }
   ModeUI_ShowBattery(vbat, 1500);
+
+  // SDカードのマウント。失敗しても起動は続け、ログのSD保存だけ無効になる。
+  // (カードがないとHALの初期化のタイムアウト待ちで数秒かかることがある)
+  if (SDCard_Mount()) {
+    printf("SD: mounted\r\n");
+  } else {
+    printf("SD: not available (logs are UART only)\r\n");
+  }
 
   // モード選択(右エンコーダの回転+ボタン確定)は、1kHz制御ループが
   // Encoder_GetDeltaR()を消費し始める前(=HAL_TIM_Base_Start_ITより前)に

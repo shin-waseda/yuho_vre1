@@ -20,6 +20,12 @@ void App_SetTargetVelocity(float mm_s);
 // 実際の開始は次のtick(ISRが取り込む)。完了はApp_IsMotionDone()で見る。
 // v_end=0なら止まる。制御が有効でないと進まない。
 void App_StartStraight(float distance_mm, float v_max, float v_end, float accel);
+
+// 台形プロファイルで超信地旋回する(その場で回る。止まって終わる)。
+// angle_deg: 正=反時計回り(左)、負=時計回り(右)。
+// 実際の開始は次のtick。完了はApp_IsMotionDone()で見る。制御が有効でないと進まない。
+void App_StartPivot(float angle_deg, float omega_max_dps, float alpha_dps2);
+
 bool App_IsMotionDone(void);
 
 // 速度PIDとモータ出力の有効/無効。起動時は無効。
@@ -53,6 +59,8 @@ MotorPWM App_GetMotorPWM(void);
 // TIM6割り込み開始後はジャイロのSPIをISRが占有するので、必ずこの経由で読むこと。
 GyroData App_GetGyroRaw(void);
 float App_GetGyroZ_dps(void);
+// ジャイロの角速度を積分した角度[deg](起動からの累積、反時計回り正)。
+float App_GetGyroAngle_deg(void);
 
 // ログ用。App_ControlTick()が毎tick更新する値(すべてfloat)。
 // Logger_AddField()に各メンバのアドレスを渡して記録する。
@@ -66,6 +74,10 @@ typedef struct {
     float ff_l, ff_r;  // FF項[V] (速度FF + 加速度FF)
     float i_l, i_r;    // PIDのI項[V]
     float vbat;        // フィルタ後の電池電圧[V]
+    float target_omega_dps; // 目標角速度(プロファイル)
+    float gyro_z_dps;       // ジャイロの角速度
+    float angle_deg;        // ジャイロの積分角(起動からの累積)
+    float ang_corr_dps;     // 角速度ループの補正量(目標角速度に足した分)
 } ControlDebug;
 
 const ControlDebug *App_GetControlDebug(void);

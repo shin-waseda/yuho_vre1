@@ -7,7 +7,11 @@
 #include "app/vel_pid_test.h"
 #include "app/led_test.h"
 #include "app/straight_test.h"
+#include "app/sd_dump.h"
+#include "app/pivot_test.h"
 #include "app/failsafe.h"
+#include "app/logger.h"
+#include "interface/sdcard.h"
 
 static const char *ModeName(RobotMode mode) {
     switch (mode) {
@@ -15,6 +19,9 @@ static const char *ModeName(RobotMode mode) {
         case MODE_VEL_PID:       return "VEL_PID";
         case MODE_LED_TEST:      return "LED_TEST";
         case MODE_STRAIGHT_TEST: return "STRAIGHT";
+        case MODE_SD_DUMP:       return "SD_DUMP";
+        case MODE_SD_DUMP_ALL:   return "SD_DUMP_ALL";
+        case MODE_PIVOT_TEST:    return "PIVOT";
         default:                 return "EMPTY";
     }
 }
@@ -24,6 +31,21 @@ static void WaitButtonRelease(void) {
         HAL_Delay(10);
     }
     HAL_Delay(20); // 離した直後のチャタリングを読まない
+}
+
+void ModeUI_SaveLogToSD(void) {
+    if (!SDCard_IsMounted()) {
+        printf("SD: not mounted, skip saving\r\n");
+        return;
+    }
+    char path[64];
+    if (Logger_SaveCSV(path, sizeof(path))) {
+        printf("SD: saved %s\r\n", path);
+        LED_SetShiftPattern(0x007Fu); // LED1〜7 (U6修理前でも光る範囲)
+    } else {
+        printf("SD: save failed\r\n");
+        LED_SetShiftPattern(0x0055u); // LED1,3,5,7
+    }
 }
 
 void ModeUI_WaitClick(void) {
@@ -123,6 +145,15 @@ void ModeUI_Run(RobotMode mode) {
             break;
         case MODE_STRAIGHT_TEST:
             StraightTest_Run();
+            break;
+        case MODE_SD_DUMP:
+            SdDump_Run();
+            break;
+        case MODE_SD_DUMP_ALL:
+            SdDumpAll_Run();
+            break;
+        case MODE_PIVOT_TEST:
+            PivotTest_Run();
             break;
         default:
             break;

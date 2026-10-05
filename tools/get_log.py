@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
-"""yuho の Logger (Core/Src/app/logger.c) が送るログを受け取り、CSV に保存する。
+"""yuho の Logger (Core/Src/app/logger.c) が送るログと、SD_DUMP モード
+(Core/Src/app/sd_dump.c) が送る SD カードのファイルを受け取り、保存する。
 
-送信形式 (divergence_v3 と同じ):
+SD_DUMP の形式 (SD 上のパスのまま logs/<path> に保存。同名があれば _dupN を付ける):
+    FILE_START
+    <path>
+    SIZE:<bytes>
+    <ファイルの中身>
+    FILE_END            (FILE_ERROR なら SD 側で読めなかったので保存しない)
+
+Logger の形式 (divergence_v3 と同じ):
     BIN_START
     <dir>
     <file>              (空なら "log")
@@ -34,6 +42,8 @@ PLOT_GROUPS = [
     ("velocity [mm/s]", ["target", "vl", "vr"]),
     ("accel [mm/s^2]", ["target_acc"]),
     ("position [mm]", ["pos_ref", "x_mm"]),
+    ("angular [dps]", ["omega_ref", "gyro_z", "ang_corr"]),
+    ("angle [deg]", ["angle_ref", "angle"]),
     ("pwm", ["pwm_l", "pwm_r"]),
     ("voltage term [V]", ["ff_l", "ff_r", "i_l", "i_r"]),
     ("vbat [V]", ["vbat"]),
@@ -109,6 +119,42 @@ def receive_table(ser):
     return dir_name, file_name, timestamp, names, rows
 
 
+def receive_file(ser):
+    """FILE_START の直後から FILE_END/FILE_ERROR までを読み、(path, data, ok) を返す。"""
+    path = read_line(ser)
+    size_line = read_line(ser)
+    if not size_line.startswith("SIZE:"):
+        raise ValueError(f"expected SIZE:, got {size_line!r}")
+    size = int(size_line.split(":", 1)[1])
+    data = read_exact(ser, size)
+    end_line = read_line(ser)
+    if end_line not in ("FILE_END", "FILE_ERROR"):
+        print(f"[warn] expected FILE_END, got {end_line!r}", file=sys.stderr)
+    return path, data, end_line == "FILE_END"
+
+
+def save_file(out_root: Path, path: str, data: bytes):
+    """SD 上のパス (例: straight/trapezoid_0001.csv) を out_root の下に同じ構成で保存する。
+    同じ名前(または _dupN)で中身も同じファイルがあれば保存せず None を返す。
+    同名で中身が違えば上書きせず _dup1, _dup2 ... を付ける。"""
+    parts = [safe_name(p, "_") for p in path.replace("\\", "/").split("/") if p not in ("", ".", "..")]
+    if not parts:
+        parts = ["unnamed"]
+    dest = out_root.joinpath(*parts)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        stem, suffix = dest.stem, dest.suffix
+        candidates = [dest] + sorted(dest.parent.glob(f"{stem}_dup*{suffix}"))
+        if any(c.read_bytes() == data for c in candidates):
+            return None
+        i = 1
+        while (dest.parent / f"{stem}_dup{i}{suffix}").exists():
+            i += 1
+        dest = dest.parent / f"{stem}_dup{i}{suffix}"
+    dest.write_bytes(data)
+    return dest
+
+
 def save_csv(out_root: Path, dir_name, file_name, timestamp, names, rows) -> Path:
     out_dir = out_root / safe_name(dir_name, ".")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -173,6 +219,23 @@ def run_receiver(args):
         while True:
             line = read_line(ser)
             if not line:
+                continue
+            if line == "FILE_START":
+                try:
+                    path, data, ok = receive_file(ser)
+                except (ValueError, TimeoutError) as e:
+                    print(f"[error] broken file: {e}", file=sys.stderr)
+                    continue
+                if not ok:
+                    print(f"[error] {path}: read error on the SD side, not saved", file=sys.stderr)
+                    continue
+                dest = save_file(out_root, path, data)
+                if dest is None:
+                    print(f"[skip] {path} (already received, same content)")
+                    continue
+                print(f"[saved] {dest} ({len(data)} bytes)")
+                if args.plot and dest.suffix.lower() == ".csv":
+                    plot_csv(dest)
                 continue
             if line != "BIN_START":
                 print(line)

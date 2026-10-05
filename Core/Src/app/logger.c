@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include "interface/uart.h"
+#include "interface/sdcard.h"
 
 // 1回のLogger_Sample()(制御の1tick)の長さ[ms]。制御周期は1ms以上の前提。
 #define LOGGER_TICK_MS ((uint32_t)(CONTROL_DT_S * 1000.0f + 0.5f))
@@ -150,6 +151,55 @@ void Logger_Dump(void) {
     UART_WriteBytes((const uint8_t *)s_buffer, size);
 
     printf("BIN_END\r\n");
+}
+
+// CSVを溜めてからまとめてf_writeする作業用バッファ。
+// 1行は最大でも 16列 × 16文字 程度なので、残りがこれを切ったら書き出す。
+#define CSV_BUF_SIZE      1024
+#define CSV_LINE_RESERVE  320
+static char s_csv_buf[CSV_BUF_SIZE] __attribute__((aligned(4)));
+
+bool Logger_SaveCSV(char *path_out, uint32_t path_len) {
+    if (s_state != LOGGER_STOPPED) {
+        printf("no data to save!\r\n");
+        return false;
+    }
+    if (!SDCard_IsMounted()) return false;
+
+    const char *file = (s_file_name != NULL && s_file_name[0] != '\0') ? s_file_name : "log";
+    if (!SDCard_OpenNewSequential(s_dir_name, file, "csv", path_out, path_len)) return false;
+
+    bool ok = true;
+    uint32_t n = 0;
+
+    // 1行目: 列名
+    for (uint32_t i = 0; i < s_field_count; i++) {
+        n += (uint32_t)snprintf(&s_csv_buf[n], CSV_BUF_SIZE - n, "%s%s",
+                                (i > 0) ? "," : "", s_fields[i].name);
+    }
+    n += (uint32_t)snprintf(&s_csv_buf[n], CSV_BUF_SIZE - n, "\r\n");
+
+    // 2行目以降: データ
+    for (uint32_t r = 0; r < s_sample_count && ok; r++) {
+        const float *row = &s_buffer[r * s_field_count];
+        for (uint32_t i = 0; i < s_field_count; i++) {
+            n += (uint32_t)snprintf(&s_csv_buf[n], CSV_BUF_SIZE - n, "%s%.6g",
+                                    (i > 0) ? "," : "", (double)row[i]);
+        }
+        n += (uint32_t)snprintf(&s_csv_buf[n], CSV_BUF_SIZE - n, "\r\n");
+
+        if (CSV_BUF_SIZE - n < CSV_LINE_RESERVE) {
+            ok = SDCard_Write(s_csv_buf, n);
+            n = 0;
+        }
+    }
+    if (ok && n > 0) {
+        ok = SDCard_Write(s_csv_buf, n);
+    }
+
+    // 書き込みに失敗しても閉じる(開いたままだと次が開けない)
+    bool closed = SDCard_Close();
+    return ok && closed;
 }
 
 bool Logger_IsRecording(void) {
