@@ -135,4 +135,30 @@
 
 #define MODE_SELECT_PULSES_PER_STEP (ENCODER_PULSES_PER_REV * 0.25f) // タイヤ1/4周で1モード
 
+// ============================================================
+// 迷路 (logic/maze)
+// 座標はスタート区画が(0, 0)、xが東、yが北へ増える。スタートでは北を向く。
+// ============================================================
+
+#define MAZE_SIZE 16 // 1辺の区画数(クラシック)
+
+#define MAZE_START_X 0
+#define MAZE_START_Y 0
+
+// ゴール区画(クラシック16×16は中央の4区画)
+#define MAZE_GOAL_MAX   9 // 登録できるゴール区画の最大数(3×3まで)
+#define MAZE_GOAL_COUNT 4
+#define MAZE_GOALS { { 7, 7 }, { 8, 7 }, { 7, 8 }, { 8, 8 } }
+
+// Dijkstraのコスト。直進1区画あたりと、向きを変える分の上乗せ(BlueEyesと同じ値)。
+// 旋回を高くするほど、曲がる回数の少ない経路を選ぶ。
+#define MAZE_COST_STRAIGHT 1
+#define MAZE_COST_TURN90   7
+#define MAZE_COST_TURN180  50
+
+// 探索の帰りに、4方向の壁がすべて分かっている区画へ入るときに上乗せするコスト。
+// 大きいほど、まだ見ていない区画を通って帰ろうとする(帰りの距離は延びる)。
+// 0にすると最短で帰る。値は tools/maze_sim で調整する(3は仮の値)。
+#define MAZE_COST_KNOWN_CELL_RETURN 3
+
 #endif

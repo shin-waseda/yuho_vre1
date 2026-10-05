@@ -26,3 +26,6 @@ Thumbs.db
 logs/
 error.md
 divergens.md
+
+# PC build output of tools/maze_sim
+tools/maze_sim/build/
