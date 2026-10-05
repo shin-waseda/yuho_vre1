@@ -23,7 +23,7 @@
     C           コスト(歩数)の表示      T       まだ見ていない壁の表示
     ↑ / ↓       速さ                   ESC / Q 終わる
 迷路の一覧の中:
-    ↑ / ↓ / PageUp / PageDown  選ぶ(選んだ迷路は左にプレビューが出る)
+    ↑ / ↓ / PageUp / PageDown  選ぶ(押し続けると連続で動く。選んだ迷路は左にプレビューが出る)
     → / Enter  分類に入る・迷路を開く    ← / BackSpace  分類の一覧へ戻る
     M          お気に入りに登録 / 解除    ESC / L        一覧を閉じる
 """
@@ -42,6 +42,11 @@ CELL = 36       # 1区画の大きさ[px]
 MARGIN = 28
 PANEL_W = 400   # 右側の情報欄の幅
 FPS = 60
+
+# 迷路の一覧で、移動キーを押し続けたときの連続移動
+REPEAT_KEYS = (pygame.K_UP, pygame.K_DOWN, pygame.K_PAGEUP, pygame.K_PAGEDOWN)
+REPEAT_DELAY_S = 0.35     # 押してから連続移動が始まるまで
+REPEAT_INTERVAL_S = 0.05  # 連続移動の間隔(1秒に20行)
 
 COLOR_BG = (24, 24, 28)
 COLOR_GRID = (52, 52, 58)
@@ -114,6 +119,8 @@ class MazeGui:
         self.browser_scroll = 0
         self.browser_msg = ""
         self.preview_cache = {}
+        self.repeat_key = None     # 押し続けている移動キー(迷路の一覧の中だけ)
+        self.repeat_timer = 0.0    # 次に連続移動するまでの残り時間[s]
 
         pygame.init()
         maze_px = self.n * CELL
@@ -651,6 +658,19 @@ class MazeGui:
             self.speed = max(1, self.speed // 2)
         return True
 
+    def repeat_browser_key(self, dt):
+        """迷路の一覧で移動キーを押し続けている間、一定の間隔で同じ移動を繰り返す"""
+        if self.repeat_key is None:
+            return
+        # 一覧を閉じた・キーを離した(KEYUP を取りこぼした場合も)ら止める
+        if not self.browser_open or not pygame.key.get_pressed()[self.repeat_key]:
+            self.repeat_key = None
+            return
+        self.repeat_timer -= dt
+        while self.repeat_timer <= 0:
+            self.browser_key(self.repeat_key)
+            self.repeat_timer += REPEAT_INTERVAL_S
+
     def run(self):
         running = True
         while running:
@@ -659,7 +679,15 @@ class MazeGui:
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
+                    in_browser = self.browser_open
                     running = self.handle_key(event.key)
+                    if in_browser and event.key in REPEAT_KEYS:
+                        self.repeat_key = event.key
+                        self.repeat_timer = REPEAT_DELAY_S
+                elif event.type == pygame.KEYUP and event.key == self.repeat_key:
+                    self.repeat_key = None
+
+            self.repeat_browser_key(dt)
 
             interval = 1.0 / self.speed
             self.anim += dt / min(interval, 0.25)
