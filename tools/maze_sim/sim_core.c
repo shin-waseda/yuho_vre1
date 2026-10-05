@@ -24,7 +24,7 @@ static void Truth_Clear(WallMap *m) {
     }
 }
 
-bool SimCore_LoadMazeFile(const char *path, WallMap *m) {
+bool SimCore_LoadMazeFile(const char *path, WallMap *m, MazePos *goals, uint8_t *goal_count) {
     enum { LINES = 2 * MAZE_SIZE + 1, WIDTH = 4 * MAZE_SIZE + 1 };
     static char lines[LINES][256];
 
@@ -34,8 +34,10 @@ bool SimCore_LoadMazeFile(const char *path, WallMap *m) {
         return false;
     }
     int n = 0;
+    size_t first_width = 0;
     while (n < LINES && fgets(lines[n], sizeof(lines[n]), fp) != NULL) {
         size_t len = strcspn(lines[n], "\r\n");
+        if (n == 0) first_width = len;
         // 足りない分は空白で埋めて、同じ幅の行として読む
         while (len < WIDTH && len + 1 < sizeof(lines[n])) lines[n][len++] = ' ';
         lines[n][len] = '\0';
@@ -46,8 +48,15 @@ bool SimCore_LoadMazeFile(const char *path, WallMap *m) {
         fprintf(stderr, "%s: need %d lines, got %d\n", path, LINES, n);
         return false;
     }
+    // 1行目(北の外周)の幅で大きさを確かめる(32×32 のハーフサイズの迷路などを読まないように)
+    if (first_width != WIDTH) {
+        fprintf(stderr, "%s: not a %dx%d maze (first line has %u chars, expected %d)\n",
+                path, MAZE_SIZE, MAZE_SIZE, (unsigned)first_width, WIDTH);
+        return false;
+    }
 
     Truth_Clear(m);
+    *goal_count = 0;
     for (uint8_t y = 0; y < MAZE_SIZE; y++) {
         int row_north = 2 * (MAZE_SIZE - 1 - y); // この区画の北の壁の行
         int row_cell = row_north + 1;            // この区画の西・東の壁の行
@@ -58,6 +67,10 @@ bool SimCore_LoadMazeFile(const char *path, WallMap *m) {
             if (lines[row_cell][col] == '|') WallMap_SetWall(m, p, DIR_WEST, true);
             if (lines[row_cell][col + 4] == '|') WallMap_SetWall(m, p, DIR_EAST, true);
             if (y == 0 && lines[2 * MAZE_SIZE][col + 2] == '-') WallMap_SetWall(m, p, DIR_SOUTH, true);
+            // 区画の真ん中の 'G' はゴール(入りきらない分は捨てる)
+            if (lines[row_cell][col + 2] == 'G' && *goal_count < MAZE_GOAL_MAX) {
+                goals[(*goal_count)++] = p;
+            }
         }
     }
     return true;

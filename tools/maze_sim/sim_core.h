@@ -12,7 +12,10 @@ extern const MazePos kSimGoals[MAZE_GOAL_COUNT]; // params.h の MAZE_GOALS
 extern const MazePos kSimStart;                  // params.h の MAZE_START_X/Y
 
 // 迷路ファイル(micromouseonline/mazefiles の classic 形式)を読む。失敗したらfalse。
-bool SimCore_LoadMazeFile(const char *path, WallMap *truth);
+// 区画の真ん中に 'G' がある区画を goals に書き(MAZE_GOAL_MAX 個まで)、その数を goal_count に書く。
+// 'G' がなければ goal_count は 0(呼び出し側で kSimGoals を使う)。
+// MAZE_SIZE×MAZE_SIZE でないファイル(32×32 など)は読まない。
+bool SimCore_LoadMazeFile(const char *path, WallMap *truth, MazePos *goals, uint8_t *goal_count);
 
 // 穴掘り法で迷路を作り、ところどころ壁を抜いてループも作る(seedが同じなら同じ迷路)。
 void SimCore_MakeRandomMaze(uint32_t seed, WallMap *truth);

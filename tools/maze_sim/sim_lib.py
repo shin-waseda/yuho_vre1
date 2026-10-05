@@ -132,20 +132,29 @@ class MazeSim:
             fn.restype = res
 
         self.size = self.dll.sim_maze_size()
-        xs = (ctypes.c_uint8 * 16)()
-        ys = (ctypes.c_uint8 * 16)()
-        n = self.dll.sim_goals(xs, ys, 16)
-        self.goals = [(xs[i], ys[i]) for i in range(n)]
+        self._read_goals()
         sx, sy = ctypes.c_uint8(), ctypes.c_uint8()
         self.dll.sim_start(ctypes.byref(sx), ctypes.byref(sy))
         self.start = (sx.value, sy.value)
 
+    def _read_goals(self):
+        """今の迷路のゴール(迷路ファイルの G、なければ params.h の MAZE_GOALS)"""
+        xs = (ctypes.c_uint8 * 16)()
+        ys = (ctypes.c_uint8 * 16)()
+        n = self.dll.sim_goals(xs, ys, 16)
+        self.goals = [(xs[i], ys[i]) for i in range(n)]
+
     # --- 本当の迷路 ---
     def new_random(self, seed):
         self.dll.sim_new_random(seed & 0xFFFFFFFF)
+        self._read_goals()
 
     def load_file(self, path):
-        return self.dll.sim_load_file(path.encode("utf-8")) == 1
+        """読めたら True。MAZE_SIZE×MAZE_SIZE でない迷路(32×32 など)は False"""
+        ok = self.dll.sim_load_file(path.encode("utf-8")) == 1
+        if ok:
+            self._read_goals()
+        return ok
 
     # --- 探索 ---
     def reset(self, algo, goal_cost=None, back_cost=None):

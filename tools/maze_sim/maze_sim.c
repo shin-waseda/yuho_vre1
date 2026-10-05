@@ -46,6 +46,26 @@ static SearchPlanner s_planner;
 static MazeSolver s_solver;
 static CommandList s_route;
 
+// 今の迷路のゴール。迷路ファイルに 'G' があればそれ、なければ params.h の MAZE_GOALS
+static MazePos s_goals[MAZE_GOAL_MAX];
+static uint8_t s_goal_count;
+
+static void UseDefaultGoals(void) {
+    for (uint8_t i = 0; i < MAZE_GOAL_COUNT; i++) s_goals[i] = kSimGoals[i];
+    s_goal_count = MAZE_GOAL_COUNT;
+}
+
+static bool LoadMaze(const char *path) {
+    if (!SimCore_LoadMazeFile(path, &s_truth, s_goals, &s_goal_count)) return false;
+    if (s_goal_count == 0) UseDefaultGoals();
+    return true;
+}
+
+static void MakeRandomMaze(uint32_t seed) {
+    SimCore_MakeRandomMaze(seed, &s_truth);
+    UseDefaultGoals();
+}
+
 // ------------------------------------------------------------
 // 1つの迷路で試す
 // ------------------------------------------------------------
@@ -72,7 +92,7 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
 
     // --- 探索 ---
     WallMap_Init(&s_map);
-    SearchPlanner_Init(&s_planner, &s_map, algo, kSimStart, DIR_NORTH, kSimGoals, MAZE_GOAL_COUNT);
+    SearchPlanner_Init(&s_planner, &s_map, algo, kSimStart, DIR_NORTH, s_goals, s_goal_count);
     if (cfg->set_goal_cost) s_planner.cost_to_goal = cfg->goal_cost;
     if (cfg->set_back_cost) s_planner.cost_to_start = cfg->back_cost;
     MazePos pos = kSimStart;
@@ -110,7 +130,7 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
         if (verbose) {
             printf("\n#%d %s -> (%u,%u)\n", step, Action_Name(a.type), pos.x, pos.y);
             MazePrint_Map(&s_map, algo == SEARCH_ALGO_DIJKSTRA ? &s_planner.work.solver : NULL,
-                          &pos, heading, kSimGoals, MAZE_GOAL_COUNT);
+                          &pos, heading, s_goals, s_goal_count);
         }
     }
     if (s_planner.phase != SEARCH_PHASE_DONE) {
@@ -119,11 +139,11 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
     }
 
     // --- 分かった壁だけで最短経路 ---
-    Dijkstra_Compute(&s_solver, &s_map, WALL_VIEW_KNOWN, NULL, kSimGoals, MAZE_GOAL_COUNT);
+    Dijkstra_Compute(&s_solver, &s_map, WALL_VIEW_KNOWN, NULL, s_goals, s_goal_count);
     r.cost_found = Dijkstra_Cost(&s_solver, kSimStart, DIR_NORTH);
     if (!quiet) {
         printf("\n=== explored map (cost to goal, known walls only) ===\n");
-        MazePrint_Map(&s_map, &s_solver, NULL, DIR_NORTH, kSimGoals, MAZE_GOAL_COUNT);
+        MazePrint_Map(&s_map, &s_solver, NULL, DIR_NORTH, s_goals, s_goal_count);
     }
     if (!Dijkstra_BuildRoute(&s_solver, kSimStart, DIR_NORTH, true, &s_route)) {
         if (!quiet) printf("no route on the explored map\n");
@@ -143,13 +163,13 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
             return r;
         }
     }
-    if (!MazePos_InList(pos, kSimGoals, MAZE_GOAL_COUNT)) {
+    if (!MazePos_InList(pos, s_goals, s_goal_count)) {
         if (!quiet) printf("route ended at (%u,%u), not a goal\n", pos.x, pos.y);
         return r;
     }
 
     // --- 迷路を全部知っていたときの最短と比べる ---
-    Dijkstra_Compute(&s_solver, truth, WALL_VIEW_KNOWN, NULL, kSimGoals, MAZE_GOAL_COUNT);
+    Dijkstra_Compute(&s_solver, truth, WALL_VIEW_KNOWN, NULL, s_goals, s_goal_count);
     r.cost_best = Dijkstra_Cost(&s_solver, kSimStart, DIR_NORTH);
     r.ok = true;
     return r;
@@ -308,7 +328,7 @@ int main(int argc, char **argv) {
         for (long s = 1; s <= batch; s++) {
             char label[32];
             snprintf(label, sizeof(label), "seed %ld", s);
-            SimCore_MakeRandomMaze((uint32_t)s, &s_truth);
+            MakeRandomMaze((uint32_t)s);
             Result r = RunOne(&s_truth, &cfg, false, true);
             Batch_Add(&b, &r, label);
         }
@@ -320,7 +340,7 @@ int main(int argc, char **argv) {
         BatchStats b = { 0, 0, 0, 0, 0, 0.0 };
         int unreadable = 0;
         for (int i = 0; i < file_count; i++) {
-            if (!SimCore_LoadMazeFile(files[i], &s_truth)) {
+            if (!LoadMaze(files[i])) {
                 unreadable++;
                 continue;
             }
@@ -333,13 +353,13 @@ int main(int argc, char **argv) {
     }
 
     if (file_count == 1) {
-        if (!SimCore_LoadMazeFile(files[0], &s_truth)) return 2;
+        if (!LoadMaze(files[0])) return 2;
     } else {
-        SimCore_MakeRandomMaze((uint32_t)(seed >= 0 ? seed : 1), &s_truth);
+        MakeRandomMaze((uint32_t)(seed >= 0 ? seed : 1));
     }
 
     printf("=== maze ===\n");
-    MazePrint_Map(&s_truth, NULL, &kSimStart, DIR_NORTH, kSimGoals, MAZE_GOAL_COUNT);
+    MazePrint_Map(&s_truth, NULL, &kSimStart, DIR_NORTH, s_goals, s_goal_count);
 
     Result r = RunOne(&s_truth, &cfg, verbose, false);
     if (!r.ok) return 1;

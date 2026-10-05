@@ -37,12 +37,22 @@ static SearchPlanner s_planner;
 static MazeSolver s_solver; // 最短経路の計算用(プランナーの作業領域とは別)
 static CommandList s_route;
 
+// 今の迷路のゴール。迷路ファイルに 'G' があればそれ、なければ params.h の MAZE_GOALS
+static MazePos s_goals[MAZE_GOAL_MAX];
+static uint8_t s_goal_count;
+
+static void UseDefaultGoals(void) {
+    for (uint8_t i = 0; i < MAZE_GOAL_COUNT; i++) s_goals[i] = kSimGoals[i];
+    s_goal_count = MAZE_GOAL_COUNT;
+}
+
 static MazePos s_pos;
 static Direction s_heading;
 static int s_moves_to_goal;
 static int s_moves_back;
 static int s_status;
 static SearchAlgo s_algo;
+static bool s_has_values; // リセット後、プランナーが一度でも経路を計算したか(区画の値の表示用)
 
 static MazeCost CostFromArray(const uint16_t *c, MazeCost fallback) {
     if (c == NULL) return fallback;
@@ -55,10 +65,11 @@ SIM_EXPORT int sim_maze_size(void) {
 }
 
 SIM_EXPORT int sim_goals(uint8_t *xs, uint8_t *ys, int max) {
-    int n = (MAZE_GOAL_COUNT < max) ? MAZE_GOAL_COUNT : max;
+    if (s_goal_count == 0) UseDefaultGoals(); // まだ迷路を読んでいない
+    int n = (s_goal_count < max) ? s_goal_count : max;
     for (int i = 0; i < n; i++) {
-        xs[i] = kSimGoals[i].x;
-        ys[i] = kSimGoals[i].y;
+        xs[i] = s_goals[i].x;
+        ys[i] = s_goals[i].y;
     }
     return n;
 }
@@ -70,11 +81,14 @@ SIM_EXPORT void sim_start(uint8_t *x, uint8_t *y) {
 
 SIM_EXPORT void sim_new_random(uint32_t seed) {
     SimCore_MakeRandomMaze(seed, &s_truth);
+    UseDefaultGoals();
 }
 
-// 成功で1、失敗で0
+// 成功で1、失敗で0(32×32 など MAZE_SIZE でない迷路も失敗)。ゴールは迷路ファイルの 'G'。
 SIM_EXPORT int sim_load_file(const char *path) {
-    return SimCore_LoadMazeFile(path, &s_truth) ? 1 : 0;
+    if (!SimCore_LoadMazeFile(path, &s_truth, s_goals, &s_goal_count)) return 0;
+    if (s_goal_count == 0) UseDefaultGoals();
+    return 1;
 }
 
 // 探索を最初からやり直す。costはそれぞれ {直進, 90°, 180°, 既知区画} の4要素(NULLなら既定値)。
@@ -91,7 +105,7 @@ SIM_EXPORT int sim_reset(int algo, const uint16_t *goal_cost, const uint16_t *ba
     if (!MAZE_COST_FITS(to_start.straight, to_start.turn90, to_start.turn180, to_start.known_cell)) return 0;
 
     WallMap_Init(&s_map);
-    SearchPlanner_Init(&s_planner, &s_map, s_algo, kSimStart, DIR_NORTH, kSimGoals, MAZE_GOAL_COUNT);
+    SearchPlanner_Init(&s_planner, &s_map, s_algo, kSimStart, DIR_NORTH, s_goals, s_goal_count);
     s_planner.cost_to_goal = to_goal;
     s_planner.cost_to_start = to_start;
 
@@ -100,6 +114,7 @@ SIM_EXPORT int sim_reset(int algo, const uint16_t *goal_cost, const uint16_t *ba
     s_moves_to_goal = 0;
     s_moves_back = 0;
     s_status = SIM_MOVED;
+    s_has_values = false;
     return 1;
 }
 
@@ -114,6 +129,7 @@ SIM_EXPORT int sim_step(uint8_t *type, uint8_t *cells) {
 
     WallObservation obs = SimCore_Sense(&s_truth, s_pos, s_heading);
     Action a = SearchPlanner_Step(&s_planner, obs);
+    s_has_values = true;
     *type = a.type;
     *cells = a.cells;
 
@@ -174,6 +190,7 @@ SIM_EXPORT int sim_cell_known(int x, int y) {
 // プランナーが最後に計算した、その区画の値(Dijkstraはゴールまでの最小コスト、足立法は歩数)。
 // 行けない・まだ計算していなければ 0xFFFF。
 SIM_EXPORT uint16_t sim_cell_value(int x, int y) {
+    if (!s_has_values) return 0xFFFFu;
     MazePos p = { (uint8_t)x, (uint8_t)y };
     if (s_algo == SEARCH_ALGO_ADACHI) {
         return s_planner.work.step.step[p.y][p.x];
@@ -190,10 +207,10 @@ SIM_EXPORT uint16_t sim_cell_value(int x, int y) {
 // 指令を types/cells に最大 max 個書いて個数を返す(行けなければ0)。
 // cost_found: その経路のコスト、cost_best: 迷路を全部知っていたときの最短のコスト。
 SIM_EXPORT int sim_route(uint8_t *types, uint8_t *cells, int max, uint16_t *cost_found, uint16_t *cost_best) {
-    Dijkstra_Compute(&s_solver, &s_truth, WALL_VIEW_KNOWN, NULL, kSimGoals, MAZE_GOAL_COUNT);
+    Dijkstra_Compute(&s_solver, &s_truth, WALL_VIEW_KNOWN, NULL, s_goals, s_goal_count);
     *cost_best = Dijkstra_Cost(&s_solver, kSimStart, DIR_NORTH);
 
-    Dijkstra_Compute(&s_solver, &s_map, WALL_VIEW_KNOWN, NULL, kSimGoals, MAZE_GOAL_COUNT);
+    Dijkstra_Compute(&s_solver, &s_map, WALL_VIEW_KNOWN, NULL, s_goals, s_goal_count);
     *cost_found = Dijkstra_Cost(&s_solver, kSimStart, DIR_NORTH);
     if (!Dijkstra_BuildRoute(&s_solver, kSimStart, DIR_NORTH, true, &s_route)) return 0;
 
