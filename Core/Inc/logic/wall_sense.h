@@ -1,4 +1,4 @@
-#ifndef INC_WALLSENSE_H
+#ifndef INC_WALLSENSE_H_
 #define INC_WALLSENSE_H_
 
 

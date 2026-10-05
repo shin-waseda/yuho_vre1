@@ -1,5 +1,5 @@
-#ifndef GYRO_H
-#define GYRO_H
+#ifndef INC_GYRO_H_
+#define INC_GYRO_H_
 
 #include "global.h"
 #include "params.h"

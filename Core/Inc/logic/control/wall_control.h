@@ -4,6 +4,6 @@
 
 #include "global.h"
 #include "params.h"
-#include "wall_sense.h"
+#include "logic/wall_sense.h"
 
 #endif
