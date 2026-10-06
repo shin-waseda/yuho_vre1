@@ -48,16 +48,19 @@ typedef enum {
 // 試験モードの走行後、記録したログをSDカードへCSVで保存し、結果をUARTに出す。
 // 成功ならマイコン直結のLED全部を0.5秒点灯して消す(ブロッキング)。
 // 失敗のときはLEDを変えずに SD_SAVE_FAILED を返すので、呼び出し側が
-// 次のボタン待ちを ModeUI_WaitClickBlinking() にして知らせる。
+// 次のボタン待ちを ModeUI_WaitClickBlinking(MODE_UI_LED_SD_ERROR) にして知らせる。
 SdSaveResult ModeUI_SaveLogToSD(void);
+
+// SDへの保存の失敗を知らせる直結LED(左後ろ = LED_6)
+#define MODE_UI_LED_SD_ERROR LED_REAR_LEFT
 
 // ボタンが押されて離されるまで待つ(チャタリング除去付き)。
 // 待っている間にフェイルセーフが発動したらFailSafe_Halt()へ入る(戻らない)。
 void ModeUI_WaitClick(void);
 
-// ModeUI_WaitClick() と同じだが、待っている間マイコン直結のLED全部を0.1秒周期で点滅させる
-// (SDへの保存の失敗などのエラー表示)。押されたらLEDを消して戻る。
-void ModeUI_WaitClickBlinking(void);
+// ModeUI_WaitClick() と同じだが、待っている間マイコン直結のLED(leds のビット。led.h の
+// LED_FRONT_RIGHT など)を0.1秒周期で点滅させる(エラー表示)。押されたらLEDを消して戻る。
+void ModeUI_WaitClickBlinking(uint8_t leds);
 
 // 選択されたモードを実行する。未知のモードは何もしない。
 void ModeUI_Run(RobotMode mode);

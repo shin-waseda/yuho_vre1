@@ -96,15 +96,22 @@ float FailSafe_GetFilteredVoltage(void) {
     return s_vbat_filtered;
 }
 
-// 発動原因の番号nを、マイコン直結のLED_1〜nの点滅で示す(n個点灯 ⇔ 全消灯)。
+// 発動原因を、マイコン直結のLEDの点滅で示す(点灯 ⇔ 全消灯)。
 // シフトレジスタ(595)を通さないので、595側が壊れていても表示できる。
 #define FAILSAFE_BLINK_MS 250
 
-_Static_assert(FAILSAFE_GYRO_DIVERGE <= LED_DIRECT_COUNT, "FailSafeCause exceeds direct LED count");
+static uint8_t CauseLeds(FailSafeCause cause) {
+    switch (cause) {
+        case FAILSAFE_LOW_VOLTAGE:      return LED_REAR_RIGHT;                              // LED_5
+        case FAILSAFE_VELOCITY_DIVERGE: return LED_FRONT_RIGHT | LED_LEFT;                  // LED_1,2
+        case FAILSAFE_GYRO_DIVERGE:     return LED_FRONT_RIGHT | LED_LEFT | LED_FRONT_LEFT; // LED_1〜3
+        default:                        return LED_DIRECT_ALL;
+    }
+}
 
 void FailSafe_Halt(void) {
     FailSafeCause cause = s_cause;
-    uint8_t pattern = (uint8_t)((1u << (unsigned)cause) - 1u);
+    uint8_t pattern = CauseLeds(cause);
 
     // 直前のモード表示などが残っていると紛らわしいので、シフトレジスタのLEDは消しておく
     LED_SetShiftPattern(0x0000u);

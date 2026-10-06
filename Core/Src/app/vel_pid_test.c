@@ -85,7 +85,7 @@ void VelPIDTest_Run(void) {
 
         printf("press button to DUMP\r\n");
         if (saved == SD_SAVE_FAILED) {
-            ModeUI_WaitClickBlinking(); // 保存の失敗を直結LEDの点滅で知らせながら待つ
+            ModeUI_WaitClickBlinking(MODE_UI_LED_SD_ERROR); // 保存の失敗を左後ろのLEDの点滅で知らせながら待つ
         } else {
             ModeUI_WaitClick();
         }

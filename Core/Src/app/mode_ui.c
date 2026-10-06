@@ -33,8 +33,6 @@ static void WaitButtonRelease(void) {
     HAL_Delay(20); // 離した直後のチャタリングを読まない
 }
 
-// 直結LED全部(LED_1〜LED_DIRECT_COUNT)のビット
-#define DIRECT_LED_ALL ((uint8_t)((1u << LED_DIRECT_COUNT) - 1u))
 #define SD_SAVE_OK_LIGHT_MS   500 // 保存できたときに全部点灯する時間
 #define ERROR_BLINK_HALF_MS   50  // エラーの点滅の半周期(0.1秒周期)
 
@@ -49,7 +47,7 @@ SdSaveResult ModeUI_SaveLogToSD(void) {
         return SD_SAVE_FAILED;
     }
     printf("SD: saved %s\r\n", path);
-    LED_SetDirectPattern(DIRECT_LED_ALL);
+    LED_SetDirectPattern(LED_DIRECT_ALL);
     HAL_Delay(SD_SAVE_OK_LIGHT_MS);
     LED_SetDirectPattern(0x00u);
     return SD_SAVE_OK;
@@ -71,7 +69,7 @@ void ModeUI_WaitClick(void) {
     WaitButtonRelease();
 }
 
-void ModeUI_WaitClickBlinking(void) {
+void ModeUI_WaitClickBlinking(uint8_t leds) {
     bool on = false;
     uint32_t last_toggle = HAL_GetTick() - ERROR_BLINK_HALF_MS; // すぐ1回目を点ける
     while (1) {
@@ -80,7 +78,7 @@ void ModeUI_WaitClickBlinking(void) {
         if (HAL_GetTick() - last_toggle >= ERROR_BLINK_HALF_MS) {
             last_toggle += ERROR_BLINK_HALF_MS;
             on = !on;
-            LED_SetDirectPattern(on ? DIRECT_LED_ALL : 0x00u);
+            LED_SetDirectPattern(on ? leds : 0x00u);
         }
         HAL_Delay(1);
     }
