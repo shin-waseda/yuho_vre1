@@ -7,7 +7,7 @@
 #include "app/logger.h"
 
 // 走行条件: 区画数ぶんを 最高速度・加速度 で走って止まる。
-#define STRAIGHT_TEST_SECTIONS   15
+#define STRAIGHT_TEST_SECTIONS   6   // 走らせる場所の広さに合わせる(6区画 = 1080mm)
 #define STRAIGHT_TEST_V_MAX      300.0f  // [mm/s]
 #define STRAIGHT_TEST_ACCEL      2000.0f // [mm/s^2]
 
@@ -26,7 +26,7 @@
 #define STRAIGHT_TEST_LOG_MS \
     (STRAIGHT_TEST_PRE_MS + STRAIGHT_TEST_MOTION_MS + STRAIGHT_TEST_POST_MS + 500u)
 
-// ボタンを離してから走り出すまでの待ち[ms](手を離す時間)。
+// 手を離してから走り出すまでの待ち[ms](手を離す時間)。
 #define STRAIGHT_TEST_START_DELAY_MS 1000
 
 static void SetupLogger(void) {
@@ -44,6 +44,7 @@ static void SetupLogger(void) {
     Logger_AddField("vl_ref", &d->vl_ref);
     Logger_AddField("vr_ref", &d->vr_ref);
     Logger_AddField("gyro_z", &d->gyro_z_dps);
+    Logger_AddField("angle_ref", &d->angle_ref_deg);
     Logger_AddField("angle", &d->angle_deg);
     Logger_AddField("ang_corr", &d->ang_corr_dps);
     Logger_AddField("ff_l", &d->ff_l);
@@ -103,8 +104,8 @@ void StraightTest_Run(void) {
            (unsigned long)STRAIGHT_TEST_MOTION_MS, (unsigned long)STRAIGHT_TEST_TIMEOUT_MS,
            (unsigned long)STRAIGHT_TEST_LOG_MS);
     printf("KP=%.4f KI=%.4f [V]\r\n", VELOCITY_KP, VELOCITY_KI);
-    printf("ANGULAR: %s KP=%.2f KI=%.2f\r\n", ANGULAR_CONTROL_ENABLE ? "ON" : "OFF",
-           ANGULAR_KP, ANGULAR_KI);
+    printf("ANGULAR: %s ANGULAR_KP=%.2f ANGLE_KP=%.2f\r\n",
+           ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", ANGULAR_KP, ANGLE_KP);
     printf("FF L: fric=%.3f gain=%.5f acc=%.6f / R: fric=%.3f gain=%.5f acc=%.6f [V]\r\n",
            VELOCITY_FF_FRIC_L, VELOCITY_FF_GAIN_L, VELOCITY_FF_ACC_L,
            VELOCITY_FF_FRIC_R, VELOCITY_FF_GAIN_R, VELOCITY_FF_ACC_R);
@@ -114,9 +115,11 @@ void StraightTest_Run(void) {
     SetupLogger();
 
     while (1) {
-        printf("press button to RUN\r\n");
-        ModeUI_WaitClick();
-        HAL_Delay(STRAIGHT_TEST_START_DELAY_MS);
+        printf("hold hand over front-left sensor to RUN\r\n");
+        ModeUI_WaitHandStart();
+        HAL_Delay(STRAIGHT_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+        // 機体が止まっている間に、ジャイロのゼロ点を測り直す(起動時の補正からずれていることがある)
+        printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
 
         RunOnce();
         printf("done: %lu samples x %lu fields (recordable %lu ms)\r\n",

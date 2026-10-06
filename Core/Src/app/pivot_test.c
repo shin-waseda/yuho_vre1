@@ -23,7 +23,7 @@
 #define PIVOT_TEST_LOG_MS \
     (PIVOT_TEST_PRE_MS + 2u * PIVOT_TEST_TURN_MS + PIVOT_TEST_HOLD_MS + PIVOT_TEST_POST_MS + 500u)
 
-// ボタンを離してから回り出すまでの待ち[ms](手を離す時間)。
+// 手を離してから回り出すまでの待ち[ms](手を離す時間)。
 #define PIVOT_TEST_START_DELAY_MS 1000
 
 static void SetupLogger(void) {
@@ -34,7 +34,7 @@ static void SetupLogger(void) {
     Logger_SetFileName("turn90");
     Logger_AddField("omega_ref", &d->target_omega_dps);
     Logger_AddField("gyro_z", &d->gyro_z_dps);
-    Logger_AddField("angle_ref", &d->pos_ref); // プロファイルの進んだ角度(符号なし)
+    Logger_AddField("angle_ref", &d->angle_ref_deg); // 目標の向き(angle と同じ基準)
     Logger_AddField("angle", &d->angle_deg);
     Logger_AddField("ang_corr", &d->ang_corr_dps);
     Logger_AddField("vl", &d->vl);
@@ -108,8 +108,8 @@ static void RunOnce(void) {
 void PivotTest_Run(void) {
     printf("PIVOT TEST: +%.0f deg then -%.0f deg, omega=%.0f dps, alpha=%.0f dps^2\r\n",
            PIVOT_TEST_ANGLE_DEG, PIVOT_TEST_ANGLE_DEG, PIVOT_TEST_OMEGA_DPS, PIVOT_TEST_ALPHA_DPS2);
-    printf("ANGULAR: %s KP=%.2f KI=%.2f, GYRO_Z_SIGN=%.0f\r\n",
-           ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", ANGULAR_KP, ANGULAR_KI, GYRO_Z_SIGN);
+    printf("ANGULAR: %s ANGULAR_KP=%.2f ANGLE_KP=%.2f, GYRO_Z_SIGN=%.0f\r\n",
+           ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", ANGULAR_KP, ANGLE_KP, GYRO_Z_SIGN);
     // 書き込んだプログラムの設定をログと突き合わせられるように出しておく
     printf("TREAD=%.2f mm, PIVOT_FF_FRIC L=%.2f R=%.2f V\r\n",
            TREAD_WIDTH_MM, PIVOT_FF_FRIC_L, PIVOT_FF_FRIC_R);
@@ -119,9 +119,11 @@ void PivotTest_Run(void) {
     SetupLogger();
 
     while (1) {
-        printf("press button to RUN\r\n");
-        ModeUI_WaitClick();
-        HAL_Delay(PIVOT_TEST_START_DELAY_MS);
+        printf("hold hand over front-left sensor to RUN\r\n");
+        ModeUI_WaitHandStart();
+        HAL_Delay(PIVOT_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+        // 機体が止まっている間に、ジャイロのゼロ点を測り直す(起動時の補正からずれていることがある)
+        printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
 
         RunOnce();
         printf("done: %lu samples x %lu fields (recordable %lu ms)\r\n",

@@ -62,6 +62,12 @@ float App_GetGyroZ_dps(void);
 // ジャイロの角速度を積分した角度[deg](起動からの累積、反時計回り正)。
 float App_GetGyroAngle_deg(void);
 
+// ジャイロ Z のゼロ点を、ms ミリ秒の平均で測り直す(ブロッキング)。機体を止めた状態で、
+// 制御を無効にしているとき(走り出す直前など)に呼ぶこと。TIM6割り込みの中で測る
+// (割り込みがジャイロの SPI を使っているので、メインからは読まない)。
+// 測り直したゼロ点[LSB]を返す。割り込みが動いていないなどで測れなければ、元のゼロ点を返す。
+float App_RecalibrateGyroZ(uint32_t ms);
+
 // ログ用。App_ControlTick()が毎tick更新する値(すべてfloat)。
 // Logger_AddField()に各メンバのアドレスを渡して記録する。
 typedef struct {
@@ -78,6 +84,7 @@ typedef struct {
     float target_omega_dps; // 目標角速度(プロファイル)
     float gyro_z_dps;       // ジャイロの角速度
     float angle_deg;        // ジャイロの積分角(起動からの累積)
+    float angle_ref_deg;    // 目標の向き(angle_deg と同じ基準。止まってもリセットしない)
     float ang_corr_dps;     // 角速度ループの補正量(目標角速度に足した分)
 } ControlDebug;
 

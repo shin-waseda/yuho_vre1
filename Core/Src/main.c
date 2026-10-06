@@ -134,13 +134,14 @@ HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);  // ENC_R
 
   App_ControlLoop_Init(); // 制御ループは無効状態で起動する。各モード内でApp_ControlLoop_SetEnabled(true)する
 
-  // 起動時の電圧チェック。TIM6割り込み開始前なのでADCを直接読む。
-  // 低電圧なら発動させておき、走行系モードの有効化を拒否させる(TESTモードは使える)。
+  // 起動時の電圧チェック(表示だけ)。TIM6割り込み開始前なのでADCを直接読む。
+  // ここではフェイルセーフを発動させない。USB や ST-LINK の給電で先に起動してから
+  // バッテリーの電源が入ると、この1回の測定だけ低く出てしまうため。
+  // 電圧低下の判定は、TIM6割り込みの FailSafe_Update() が常に行っている(0.5秒続いたら発動)。
   float vbat = Battery_MeasureVoltageBlocking(16);
   printf("VBAT: %.2f V\r\n", vbat);
   if (vbat < FAILSAFE_LOW_VOLTAGE_V) {
-    printf("WARNING: low battery (< %.2f V)\r\n", FAILSAFE_LOW_VOLTAGE_V);
-    FailSafe_Trip(FAILSAFE_LOW_VOLTAGE, vbat);
+    printf("WARNING: low battery at startup (< %.2f V)\r\n", FAILSAFE_LOW_VOLTAGE_V);
   }
   ModeUI_ShowBattery(vbat, 1500);
 

@@ -14,7 +14,7 @@
 #define VEL_PID_TEST_POST_MS          800
 #define VEL_PID_TEST_TOTAL_MS (VEL_PID_TEST_PRE_MS + VEL_PID_TEST_STEP_MS + VEL_PID_TEST_POST_MS)
 
-// ボタンを離してから走り出すまでの待ち[ms](手を離す時間)。
+// 手を離してから走り出すまでの待ち[ms](手を離す時間)。
 #define VEL_PID_TEST_START_DELAY_MS 1000
 
 static void SetupLogger(void) {
@@ -73,9 +73,11 @@ void VelPIDTest_Run(void) {
     SetupLogger();
 
     while (1) {
-        printf("press button to RUN\r\n");
-        ModeUI_WaitClick();
-        HAL_Delay(VEL_PID_TEST_START_DELAY_MS);
+        printf("hold hand over front-left sensor to RUN\r\n");
+        ModeUI_WaitHandStart();
+        HAL_Delay(VEL_PID_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+        // 機体が止まっている間に、ジャイロのゼロ点を測り直す(起動時の補正からずれていることがある)
+        printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
 
         RunOnce();
         printf("done: %lu samples x %lu fields (recordable %lu ms)\r\n",

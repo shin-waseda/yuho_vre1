@@ -62,6 +62,11 @@ void ModeUI_WaitClick(void);
 // LED_FRONT_RIGHT など)を0.1秒周期で点滅させる(エラー表示)。押されたらLEDを消して戻る。
 void ModeUI_WaitClickBlinking(uint8_t leds);
 
+// 非接触スタート。左前の壁センサー(FL)に手をかざして(SENSOR_START_THRESHOLD を
+// SENSOR_START_HOLD_MS 続けて超える)、離すまで待つ。かざしている間は左前の直結LEDを点ける。
+// 待っている間にフェイルセーフが発動したらFailSafe_Halt()へ入る(戻らない)。
+void ModeUI_WaitHandStart(void);
+
 // 選択されたモードを実行する。未知のモードは何もしない。
 void ModeUI_Run(RobotMode mode);
 

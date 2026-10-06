@@ -1,12 +1,12 @@
 #include "app/control_loop.h"
 
 #include <math.h>
+#include "main.h" // HAL_GetTick / HAL_Delay(App_RecalibrateGyroZ の待ち)
 #include "interface/encoder.h"
 #include "interface/motor.h"
 #include "interface/gyro.h"
 #include "interface/battery.h"
 #include "logic/state_estimation/kinematics.h"
-#include "logic/control/pid.h"
 #include "logic/control/velocity_pid.h"
 #include "logic/control/velocity_profile.h"
 #include "app/failsafe.h"
@@ -15,8 +15,12 @@
 
 static Odometry_t s_odo;
 static VelocityPID s_vpid;
-static PID_t s_ang_pid;            // 角速度ループ(外側)。入力[rad/s]、出力[rad/s]
 static WheelVelocity s_actual;
+
+// 角度・角速度のループ(外側)。ISRからのみ触る。
+// 目標の向き[deg]。制御が無効の間は今の向きに合わせておき、有効にした時点の向きを基準に
+// プロファイルの角速度を積分して進める。止まってもリセットしない。
+static float s_angle_ref_deg = 0.0f;
 
 // 目標(並進・回転)。プロファイル実行中はISRが毎tick書き換える。
 static float s_target_mm_s = 0.0f;
@@ -55,6 +59,12 @@ static GyroData s_gyro_raw = { 0, 0, 0 };
 static float s_gyro_z_dps = 0.0f;
 static float s_gyro_angle_deg = 0.0f; // ジャイロの積分角(起動からの累積、反時計回り正)
 static GyroOffset s_gyro_offset = { 0.0f, 0.0f, 0.0f };
+
+// ジャイロ Z のゼロ点の測り直し。メインが合計と回数を0にしてから残りtick数を書き、
+// ISRが毎tick足し込んで、0になったらゼロ点を更新する。
+static volatile uint32_t s_gyro_cal_ticks_left = 0;
+static float s_gyro_cal_sum = 0.0f;
+static uint32_t s_gyro_cal_count = 0;
 static ControlDebug s_dbg;
 
 // メインループが書き、ISRが読む。フェイルセーフ発動時はISRもfalseを書く。
@@ -64,10 +74,6 @@ static bool s_prev_enabled = false;     // ISRからのみ触る
 void App_ControlLoop_Init(void) {
     Odometry_Reset(&s_odo);
     VelocityPID_Init(&s_vpid);
-    s_ang_pid.kp = ANGULAR_KP;
-    s_ang_pid.ki = ANGULAR_KI;
-    s_ang_pid.kd = 0.0f;
-    PID_Reset(&s_ang_pid);
     FailSafe_Init();
     s_gyro_offset = ICM_GetOffset(); // ICM_CalibrateBlocking()後に呼ばれる前提
     s_actual.left_mm_s = 0.0f;
@@ -192,6 +198,24 @@ float App_GetGyroAngle_deg(void) {
     return s_gyro_angle_deg;
 }
 
+float App_RecalibrateGyroZ(uint32_t ms) {
+    uint32_t ticks = (uint32_t)((float)ms / (CONTROL_DT_S * 1000.0f));
+    if (ticks == 0) ticks = 1;
+    s_gyro_cal_sum = 0.0f;
+    s_gyro_cal_count = 0;
+    s_gyro_cal_ticks_left = ticks; // 最後に書く(ここからISRが足し込み始める)
+
+    uint32_t t0 = HAL_GetTick();
+    while (s_gyro_cal_ticks_left > 0) {
+        if (HAL_GetTick() - t0 > ms * 2u + 100u) {
+            s_gyro_cal_ticks_left = 0; // 割り込みが動いていない。元のゼロ点のまま
+            break;
+        }
+        HAL_Delay(1);
+    }
+    return s_gyro_offset.z;
+}
+
 const ControlDebug *App_GetControlDebug(void) {
     return &s_dbg;
 }
@@ -234,34 +258,61 @@ void App_ControlTick(void) {
     s_actual = Odometry_Update(&s_odo, delta_l, delta_r, CONTROL_DT_S);
 
     s_gyro_raw = ICM_ReadGyro();
+    if (s_gyro_cal_ticks_left > 0) {
+        s_gyro_cal_sum += (float)s_gyro_raw.z;
+        s_gyro_cal_count++;
+        if (--s_gyro_cal_ticks_left == 0) {
+            s_gyro_offset.z = s_gyro_cal_sum / (float)s_gyro_cal_count;
+        }
+    }
     s_gyro_z_dps = GYRO_Z_SIGN * ((float)s_gyro_raw.z - s_gyro_offset.z) / GYRO_SENSITIVITY_LSB_PER_DPS;
     s_gyro_angle_deg += s_gyro_z_dps * CONTROL_DT_S;
 
     UpdateProfile();
 
-    // ---- 角速度ループ(外側) ----
-    // ω_cmd = ω_ref + PI(ω_ref − ω_gyro)。I項は角度の誤差に相当するので、
-    // ずれた向きも元へ戻す(角度のPDと同じ働き)。出力は車輪速度の目標になる。
+    bool control_active = s_enabled && !FailSafe_IsTripped();
+
+    // ---- 目標の向き ----
+    // 制御が無効の間は今の向きに合わせておくので、有効にした時点の向きが基準になる。
+    if (control_active) {
+        s_angle_ref_deg += s_target_omega_dps * CONTROL_DT_S;
+    } else {
+        s_angle_ref_deg = s_gyro_angle_deg;
+    }
+
+    // ---- 角度・角速度のループ(外側) ----
+    // ω_cmd = ω_ref + ANGLE_KP×(θ_ref − θ) + ANGULAR_KP×(ω_ref − ω)。出力は車輪速度の目標になる。
     float omega_ref = s_target_omega_dps * DEG_TO_RAD;
     float omega_meas = s_gyro_z_dps * DEG_TO_RAD;
+    float angle_err_deg = s_angle_ref_deg - s_gyro_angle_deg;
     float ang_corr = 0.0f;
-    bool control_active = s_enabled && !FailSafe_IsTripped();
-    bool robot_stopped = (s_target_mm_s == 0.0f) && (s_target_acc == 0.0f)
+    // 制御が有効な間は、止まっていても常に効かせる(止まっている間も向きを保つ)
+    if (ANGULAR_CONTROL_ENABLE && control_active) {
+        ang_corr = ANGLE_KP * angle_err_deg * DEG_TO_RAD + ANGULAR_KP * (omega_ref - omega_meas);
+        if (ang_corr > ANGULAR_CORR_LIMIT_RAD_S) ang_corr = ANGULAR_CORR_LIMIT_RAD_S;
+        if (ang_corr < -ANGULAR_CORR_LIMIT_RAD_S) ang_corr = -ANGULAR_CORR_LIMIT_RAD_S;
+    }
+
+    // 止まるべき所で止まったら、車輪速度ループの I 項を捨てて出力0にする(摩擦で止まった後に
+    // PWM が出続けるのを防ぐ)。角度の制御が有効なら、止まっている間も向きを保つので使わない。
+    bool robot_stopped = !ANGULAR_CONTROL_ENABLE
+                      && (s_target_mm_s == 0.0f) && (s_target_acc == 0.0f)
                       && (s_target_omega_dps == 0.0f) && (s_target_alpha_dps2 == 0.0f)
                       && (fabsf(s_actual.left_mm_s)  < VELOCITY_STOP_RESET_MM_S)
                       && (fabsf(s_actual.right_mm_s) < VELOCITY_STOP_RESET_MM_S);
-    if (ANGULAR_CONTROL_ENABLE && control_active && !robot_stopped) {
-        ang_corr = PID_Update(&s_ang_pid, omega_ref - omega_meas, CONTROL_DT_S,
-                              -ANGULAR_CORR_LIMIT_RAD_S, ANGULAR_CORR_LIMIT_RAD_S);
-    } else {
-        PID_Reset(&s_ang_pid);
-    }
 
     RobotVelocity target_robot = {
         .linear_mm_s = s_target_mm_s,
         .angular_rad_s = omega_ref + ang_corr,
     };
     WheelVelocity target_wheel = Kinematics_RobotToWheel(target_robot);
+    // FF はプロファイルの目標だけから計算する(2自由度制御。補正は PID が受け持つ)。
+    // 補正を含めると、止まっていて補正がほぼ0のとき、摩擦FFの符号が誤差の揺れで反転してしまう。
+    RobotVelocity target_robot_ff = {
+        .linear_mm_s = s_target_mm_s,
+        .angular_rad_s = omega_ref,
+    };
+    WheelVelocity target_wheel_ff = Kinematics_RobotToWheel(target_robot_ff);
     // 加速度も速度と同じ線形変換で車輪ごとに分ける(FFには目標の加速度だけを使う)。
     RobotVelocity target_robot_acc = {
         .linear_mm_s = s_target_acc,
@@ -292,6 +343,7 @@ void App_ControlTick(void) {
     s_dbg.target_omega_dps = s_target_omega_dps;
     s_dbg.gyro_z_dps = s_gyro_z_dps;
     s_dbg.angle_deg = s_gyro_angle_deg;
+    s_dbg.angle_ref_deg = s_angle_ref_deg;
     s_dbg.ang_corr_dps = ang_corr / DEG_TO_RAD;
 
     // 発動中は毎tick止め直す。メインが直前にSetEnabled(true)と競合して
@@ -321,22 +373,21 @@ void App_ControlTick(void) {
     }
     if (!s_prev_enabled) {
         // 有効化の立ち上がり。無効中に溜まった積分項・前回偏差を捨てる。
+        // (目標の向きは、無効の間ずっと今の向きに合わせてあるので、ここでは何もしない)
         VelocityPID_Reset(&s_vpid);
-        PID_Reset(&s_ang_pid);
         s_prev_enabled = true;
     }
 
     // ---- 車輪速度ループ(内側) ----
     // 2自由度制御: FFは目標(速度・加速度)だけから、PIDは偏差から。単位はどちらも電圧[V]。
-    float ff_l = VELOCITY_FF_FRIC_L * SignOf(target_wheel.left_mm_s)
-               + VELOCITY_FF_GAIN_L * target_wheel.left_mm_s
+    float ff_l = VELOCITY_FF_FRIC_L * SignOf(target_wheel_ff.left_mm_s)
+               + VELOCITY_FF_GAIN_L * target_wheel_ff.left_mm_s
                + VELOCITY_FF_ACC_L  * target_wheel_acc.left_mm_s;
-    float ff_r = VELOCITY_FF_FRIC_R * SignOf(target_wheel.right_mm_s)
-               + VELOCITY_FF_GAIN_R * target_wheel.right_mm_s
+    float ff_r = VELOCITY_FF_FRIC_R * SignOf(target_wheel_ff.right_mm_s)
+               + VELOCITY_FF_GAIN_R * target_wheel_ff.right_mm_s
                + VELOCITY_FF_ACC_R  * target_wheel_acc.right_mm_s;
 
     // 超信地旋回(直進の目標が0で、旋回の目標がある)では、タイヤが横にこすれる摩擦を足す。
-    // 向きは角速度の補正ではなくプロファイルの目標で決める(補正の符号が揺れても FF が反転しないように)。
     if (s_target_mm_s == 0.0f && s_target_acc == 0.0f && s_target_omega_dps != 0.0f) {
         float turn = SignOf(s_target_omega_dps); // +1: 反時計回り(右の車輪が前へ、左が後ろへ)
         ff_l -= PIVOT_FF_FRIC_L * turn;

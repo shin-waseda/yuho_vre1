@@ -86,6 +86,29 @@ void ModeUI_WaitClickBlinking(uint8_t leds) {
     WaitButtonRelease();
 }
 
+void ModeUI_WaitHandStart(void) {
+    // かざす: 左前のセンサーがしきい値を続けて超えるまで待つ
+    uint32_t above_since = HAL_GetTick();
+    while (1) {
+        if (FailSafe_IsTripped()) FailSafe_Halt();
+        if (ad_fl <= SENSOR_START_THRESHOLD) {
+            above_since = HAL_GetTick();
+        } else if (HAL_GetTick() - above_since >= SENSOR_START_HOLD_MS) {
+            break;
+        }
+        HAL_Delay(1);
+    }
+    printf("hand detected (FL:%u)\r\n", ad_fl); // しきい値を見直すときの目安
+    LED_SetDirectPattern(LED_FRONT_LEFT);
+
+    // 離す: しきい値を下回るまで待つ
+    while (ad_fl > SENSOR_START_THRESHOLD) {
+        if (FailSafe_IsTripped()) FailSafe_Halt();
+        HAL_Delay(1);
+    }
+    LED_SetDirectPattern(0x00u);
+}
+
 // 2個点灯の窓をずらして表示するため、窓が収まるモード数に制限する。
 // (モードm≥1はLED m, m+1を使うので、最大モード番号は LED_SHIFT_COUNT-1)
 _Static_assert(MODE_COUNT <= LED_SHIFT_COUNT, "MODE_COUNT exceeds shift LED display range");
