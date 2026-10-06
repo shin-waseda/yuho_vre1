@@ -154,7 +154,7 @@ void Logger_Dump(void) {
 }
 
 // CSVを溜めてからまとめてf_writeする作業用バッファ。
-// 1行は最大でも 16列 × 16文字 程度なので、残りがこれを切ったら書き出す。
+// 1行は最大でも LOGGER_MAX_FIELDS(18)列 × 16文字 = 288文字 程度なので、残りがこれを切ったら書き出す。
 #define CSV_BUF_SIZE      1024
 #define CSV_LINE_RESERVE  320
 static char s_csv_buf[CSV_BUF_SIZE] __attribute__((aligned(4)));

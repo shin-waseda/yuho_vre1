@@ -41,6 +41,8 @@ static void SetupLogger(void) {
     Logger_AddField("x_mm", &d->x_mm);
     Logger_AddField("vl", &d->vl);
     Logger_AddField("vr", &d->vr);
+    Logger_AddField("vl_ref", &d->vl_ref);
+    Logger_AddField("vr_ref", &d->vr_ref);
     Logger_AddField("gyro_z", &d->gyro_z_dps);
     Logger_AddField("angle", &d->angle_deg);
     Logger_AddField("ang_corr", &d->ang_corr_dps);

@@ -39,6 +39,8 @@ static void SetupLogger(void) {
     Logger_AddField("ang_corr", &d->ang_corr_dps);
     Logger_AddField("vl", &d->vl);
     Logger_AddField("vr", &d->vr);
+    Logger_AddField("vl_ref", &d->vl_ref);
+    Logger_AddField("vr_ref", &d->vr_ref);
     Logger_AddField("pwm_l", &d->pwm_l);
     Logger_AddField("pwm_r", &d->pwm_r);
     Logger_AddField("ff_l", &d->ff_l);
@@ -108,6 +110,9 @@ void PivotTest_Run(void) {
            PIVOT_TEST_ANGLE_DEG, PIVOT_TEST_ANGLE_DEG, PIVOT_TEST_OMEGA_DPS, PIVOT_TEST_ALPHA_DPS2);
     printf("ANGULAR: %s KP=%.2f KI=%.2f, GYRO_Z_SIGN=%.0f\r\n",
            ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", ANGULAR_KP, ANGULAR_KI, GYRO_Z_SIGN);
+    // 書き込んだプログラムの設定をログと突き合わせられるように出しておく
+    printf("TREAD=%.2f mm, PIVOT_FF_FRIC L=%.2f R=%.2f V\r\n",
+           TREAD_WIDTH_MM, PIVOT_FF_FRIC_L, PIVOT_FF_FRIC_R);
 
     if (FailSafe_IsTripped()) FailSafe_Halt(); // 起動時の低電圧など
 

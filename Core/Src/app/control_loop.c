@@ -286,6 +286,8 @@ void App_ControlTick(void) {
     s_dbg.x_mm = s_odo.pose.x_mm;
     s_dbg.vl = s_actual.left_mm_s;
     s_dbg.vr = s_actual.right_mm_s;
+    s_dbg.vl_ref = target_wheel.left_mm_s;
+    s_dbg.vr_ref = target_wheel.right_mm_s;
     s_dbg.vbat = vbat;
     s_dbg.target_omega_dps = s_target_omega_dps;
     s_dbg.gyro_z_dps = s_gyro_z_dps;
@@ -332,6 +334,14 @@ void App_ControlTick(void) {
     float ff_r = VELOCITY_FF_FRIC_R * SignOf(target_wheel.right_mm_s)
                + VELOCITY_FF_GAIN_R * target_wheel.right_mm_s
                + VELOCITY_FF_ACC_R  * target_wheel_acc.right_mm_s;
+
+    // 超信地旋回(直進の目標が0で、旋回の目標がある)では、タイヤが横にこすれる摩擦を足す。
+    // 向きは角速度の補正ではなくプロファイルの目標で決める(補正の符号が揺れても FF が反転しないように)。
+    if (s_target_mm_s == 0.0f && s_target_acc == 0.0f && s_target_omega_dps != 0.0f) {
+        float turn = SignOf(s_target_omega_dps); // +1: 反時計回り(右の車輪が前へ、左が後ろへ)
+        ff_l -= PIVOT_FF_FRIC_L * turn;
+        ff_r += PIVOT_FF_FRIC_R * turn;
+    }
 
     WheelVelocity out;
     if (robot_stopped) {

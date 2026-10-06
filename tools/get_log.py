@@ -39,7 +39,7 @@ from pathlib import Path
 
 # グラフでまとめて表示する列の組 (先頭から順に1段ずつ)
 PLOT_GROUPS = [
-    ("velocity [mm/s]", ["target", "vl", "vr"]),
+    ("velocity [mm/s]", ["target", "vl", "vr", "vl_ref", "vr_ref"]),
     ("accel [mm/s^2]", ["target_acc"]),
     ("position [mm]", ["pos_ref", "x_mm"]),
     ("angular [dps]", ["omega_ref", "gyro_z", "ang_corr"]),

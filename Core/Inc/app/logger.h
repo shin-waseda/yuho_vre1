@@ -21,7 +21,7 @@
 //
 // 先頭の列は常に "time_s"(記録開始からの秒)。
 
-#define LOGGER_MAX_FIELDS  16
+#define LOGGER_MAX_FIELDS  18
 // 8列なら1500サンプル(1kHzで1.5s)。長い記録はLogger_SetDuration()で間引く。48KB。
 #define LOGGER_BUFFER_SIZE (8u * 1500u)
 

@@ -70,6 +70,7 @@ typedef struct {
     float pos_ref;     // プロファイルの目標位置[mm](直進の開始から)
     float x_mm;        // オドメトリのX[mm]
     float vl, vr;      // 実車輪速度[mm/s]
+    float vl_ref, vr_ref; // 車輪速度の目標[mm/s](角速度の補正を含む。車輪速度ループに渡す値)
     float pwm_l, pwm_r;
     float ff_l, ff_r;  // FF項[V] (速度FF + 加速度FF)
     float i_l, i_r;    // PIDのI項[V]
