@@ -81,10 +81,14 @@ void VelPIDTest_Run(void) {
         printf("done: %lu samples x %lu fields (recordable %lu ms)\r\n",
                (unsigned long)Logger_SampleCount(), (unsigned long)Logger_FieldCount(),
                (unsigned long)Logger_RecordableMs());
-        ModeUI_SaveLogToSD(); // SDがあれば自動で保存(UARTの線なしでも残る)
+        SdSaveResult saved = ModeUI_SaveLogToSD(); // SDがあれば自動で保存(UARTの線なしでも残る)
 
         printf("press button to DUMP\r\n");
-        ModeUI_WaitClick();
+        if (saved == SD_SAVE_FAILED) {
+            ModeUI_WaitClickBlinking(); // 保存の失敗を直結LEDの点滅で知らせながら待つ
+        } else {
+            ModeUI_WaitClick();
+        }
         Logger_Dump();
     }
 }

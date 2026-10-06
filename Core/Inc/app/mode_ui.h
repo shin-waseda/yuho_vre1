@@ -39,13 +39,25 @@ void ModeUI_ShowBattery(float vbat, uint32_t hold_ms);
 // 確定して選択されたモードを返す。
 RobotMode ModeUI_Select(void);
 
-// 試験モードの走行後、記録したログをSDカードへCSVで保存し、結果をUARTとLEDで示す。
-// LED: 成功=LED1〜7点灯 / 失敗=LED1,3,5,7点灯 / SDなし=変えない。次の操作まで表示が残る。
-void ModeUI_SaveLogToSD(void);
+typedef enum {
+    SD_SAVE_SKIPPED, // SDカードがない(マウントされていない)ので保存しなかった
+    SD_SAVE_OK,
+    SD_SAVE_FAILED,
+} SdSaveResult;
+
+// 試験モードの走行後、記録したログをSDカードへCSVで保存し、結果をUARTに出す。
+// 成功ならマイコン直結のLED全部を0.5秒点灯して消す(ブロッキング)。
+// 失敗のときはLEDを変えずに SD_SAVE_FAILED を返すので、呼び出し側が
+// 次のボタン待ちを ModeUI_WaitClickBlinking() にして知らせる。
+SdSaveResult ModeUI_SaveLogToSD(void);
 
 // ボタンが押されて離されるまで待つ(チャタリング除去付き)。
 // 待っている間にフェイルセーフが発動したらFailSafe_Halt()へ入る(戻らない)。
 void ModeUI_WaitClick(void);
+
+// ModeUI_WaitClick() と同じだが、待っている間マイコン直結のLED全部を0.1秒周期で点滅させる
+// (SDへの保存の失敗などのエラー表示)。押されたらLEDを消して戻る。
+void ModeUI_WaitClickBlinking(void);
 
 // 選択されたモードを実行する。未知のモードは何もしない。
 void ModeUI_Run(RobotMode mode);

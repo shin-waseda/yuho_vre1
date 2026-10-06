@@ -96,21 +96,27 @@ float FailSafe_GetFilteredVoltage(void) {
     return s_vbat_filtered;
 }
 
-// 発動原因の番号nを、LED1〜nの点滅で示す(n個点灯 ⇔ 全消灯)。
+// 発動原因の番号nを、マイコン直結のLED_1〜nの点滅で示す(n個点灯 ⇔ 全消灯)。
+// シフトレジスタ(595)を通さないので、595側が壊れていても表示できる。
 #define FAILSAFE_BLINK_MS 250
+
+_Static_assert(FAILSAFE_GYRO_DIVERGE <= LED_DIRECT_COUNT, "FailSafeCause exceeds direct LED count");
 
 void FailSafe_Halt(void) {
     FailSafeCause cause = s_cause;
-    uint16_t pattern = (uint16_t)((1u << (unsigned)cause) - 1u);
+    uint8_t pattern = (uint8_t)((1u << (unsigned)cause) - 1u);
+
+    // 直前のモード表示などが残っていると紛らわしいので、シフトレジスタのLEDは消しておく
+    LED_SetShiftPattern(0x0000u);
 
     while (1) {
         printf("FAILSAFE: %s (value=%.2f, vbat=%.2f V)\r\n",
                FailSafe_CauseName(cause), s_trip_value, s_vbat_filtered);
 
         for (int i = 0; i < 4; i++) {
-            LED_SetShiftPattern(pattern);
+            LED_SetDirectPattern(pattern);
             HAL_Delay(FAILSAFE_BLINK_MS);
-            LED_SetShiftPattern(0x0000u);
+            LED_SetDirectPattern(0x00u);
             HAL_Delay(FAILSAFE_BLINK_MS);
         }
     }

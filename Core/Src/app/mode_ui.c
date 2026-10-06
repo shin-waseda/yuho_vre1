@@ -33,30 +33,58 @@ static void WaitButtonRelease(void) {
     HAL_Delay(20); // 離した直後のチャタリングを読まない
 }
 
-void ModeUI_SaveLogToSD(void) {
+// 直結LED全部(LED_1〜LED_DIRECT_COUNT)のビット
+#define DIRECT_LED_ALL ((uint8_t)((1u << LED_DIRECT_COUNT) - 1u))
+#define SD_SAVE_OK_LIGHT_MS   500 // 保存できたときに全部点灯する時間
+#define ERROR_BLINK_HALF_MS   50  // エラーの点滅の半周期(0.1秒周期)
+
+SdSaveResult ModeUI_SaveLogToSD(void) {
     if (!SDCard_IsMounted()) {
         printf("SD: not mounted, skip saving\r\n");
-        return;
+        return SD_SAVE_SKIPPED;
     }
     char path[64];
-    if (Logger_SaveCSV(path, sizeof(path))) {
-        printf("SD: saved %s\r\n", path);
-        LED_SetShiftPattern(0x007Fu); // LED1〜7 (U6修理前でも光る範囲)
-    } else {
+    if (!Logger_SaveCSV(path, sizeof(path))) {
         printf("SD: save failed\r\n");
-        LED_SetShiftPattern(0x0055u); // LED1,3,5,7
+        return SD_SAVE_FAILED;
     }
+    printf("SD: saved %s\r\n", path);
+    LED_SetDirectPattern(DIRECT_LED_ALL);
+    HAL_Delay(SD_SAVE_OK_LIGHT_MS);
+    LED_SetDirectPattern(0x00u);
+    return SD_SAVE_OK;
+}
+
+// ボタンが押されたら(チャタリングを除いて)true
+static bool ButtonClicked(void) {
+    if (!Button_IsPressed()) return false;
+    HAL_Delay(20);
+    return Button_IsPressed();
 }
 
 void ModeUI_WaitClick(void) {
     while (1) {
         if (FailSafe_IsTripped()) FailSafe_Halt();
-        if (Button_IsPressed()) {
-            HAL_Delay(20);
-            if (Button_IsPressed()) break;
-        }
+        if (ButtonClicked()) break;
         HAL_Delay(10);
     }
+    WaitButtonRelease();
+}
+
+void ModeUI_WaitClickBlinking(void) {
+    bool on = false;
+    uint32_t last_toggle = HAL_GetTick() - ERROR_BLINK_HALF_MS; // すぐ1回目を点ける
+    while (1) {
+        if (FailSafe_IsTripped()) FailSafe_Halt(); // フェイルセーフの表示に切り替わる
+        if (ButtonClicked()) break;
+        if (HAL_GetTick() - last_toggle >= ERROR_BLINK_HALF_MS) {
+            last_toggle += ERROR_BLINK_HALF_MS;
+            on = !on;
+            LED_SetDirectPattern(on ? DIRECT_LED_ALL : 0x00u);
+        }
+        HAL_Delay(1);
+    }
+    LED_SetDirectPattern(0x00u);
     WaitButtonRelease();
 }
 
