@@ -36,9 +36,9 @@ static void SetupLogger(void) {
     Logger_SetDirName("straight");
     Logger_SetFileName("trapezoid");
     Logger_AddField("target", &d->target_mm_s);
-    Logger_AddField("target_acc", &d->target_acc);
-    Logger_AddField("pos_ref", &d->pos_ref);
-    Logger_AddField("x_mm", &d->x_mm);
+    Logger_AddField("pos_ref", &d->pos_ref); // 目標の距離(dist と同じ基準)
+    Logger_AddField("dist", &d->dist_mm);
+    Logger_AddField("pos_corr", &d->pos_corr);
     Logger_AddField("vl", &d->vl);
     Logger_AddField("vr", &d->vr);
     Logger_AddField("vl_ref", &d->vl_ref);
@@ -106,6 +106,8 @@ void StraightTest_Run(void) {
     printf("KP=%.4f KI=%.4f [V]\r\n", VELOCITY_KP, VELOCITY_KI);
     printf("ANGULAR: %s ANGULAR_KP=%.2f ANGLE_KP=%.2f\r\n",
            ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", ANGULAR_KP, ANGLE_KP);
+    printf("POSITION: %s POSITION_KP=%.2f\r\n",
+           POSITION_CONTROL_ENABLE ? "ON" : "OFF", POSITION_KP);
     printf("FF L: fric=%.3f gain=%.5f acc=%.6f / R: fric=%.3f gain=%.5f acc=%.6f [V]\r\n",
            VELOCITY_FF_FRIC_L, VELOCITY_FF_GAIN_L, VELOCITY_FF_ACC_L,
            VELOCITY_FF_FRIC_R, VELOCITY_FF_GAIN_R, VELOCITY_FF_ACC_R);

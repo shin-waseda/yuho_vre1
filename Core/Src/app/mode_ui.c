@@ -9,22 +9,47 @@
 #include "app/straight_test.h"
 #include "app/sd_dump.h"
 #include "app/pivot_test.h"
+#include "app/party_mode.h"
 #include "app/failsafe.h"
 #include "app/logger.h"
 #include "interface/sdcard.h"
 
 static const char *ModeName(RobotMode mode) {
     switch (mode) {
-        case MODE_TEST:          return "TEST";
+        case MODE_SENSOR:        return "SENSOR";
         case MODE_VEL_PID:       return "VEL_PID";
-        case MODE_LED_TEST:      return "LED_TEST";
         case MODE_STRAIGHT_TEST: return "STRAIGHT";
+        case MODE_PIVOT_TEST:    return "PIVOT";
+        case MODE_LED_TEST:      return "LED_TEST";
+        case MODE_PARTY:         return "PARTY";
         case MODE_SD_DUMP:       return "SD_DUMP";
         case MODE_SD_DUMP_ALL:   return "SD_DUMP_ALL";
-        case MODE_PIVOT_TEST:    return "PIVOT";
-        default:                 return "EMPTY";
+        default:                 return "UNKNOWN";
     }
 }
+
+// ---- メニューの階層 ----
+// 一番上の階層の各項目が、その中のモードの一覧を持つ。並び順がエンコーダで送る順になる。
+static const RobotMode s_test_modes[] = {
+    MODE_SENSOR, MODE_VEL_PID, MODE_STRAIGHT_TEST, MODE_PIVOT_TEST, MODE_LED_TEST, MODE_PARTY,
+};
+static const RobotMode s_sd_modes[] = {
+    MODE_SD_DUMP, MODE_SD_DUMP_ALL,
+};
+
+typedef struct {
+    const char *name;
+    const RobotMode *modes;
+    uint8_t count;
+} ModeMenu;
+
+#define MENU_COUNT_OF(a) ((uint8_t)(sizeof(a) / sizeof((a)[0])))
+
+static const ModeMenu s_menus[] = {
+    { "TEST", s_test_modes, MENU_COUNT_OF(s_test_modes) },
+    { "SD",   s_sd_modes,   MENU_COUNT_OF(s_sd_modes) },
+};
+#define MENU_TOP_COUNT MENU_COUNT_OF(s_menus)
 
 static void WaitButtonRelease(void) {
     while (Button_IsPressed()) {
@@ -109,18 +134,19 @@ void ModeUI_WaitHandStart(void) {
     LED_SetDirectPattern(0x00u);
 }
 
-// 2個点灯の窓をずらして表示するため、窓が収まるモード数に制限する。
-// (モードm≥1はLED m, m+1を使うので、最大モード番号は LED_SHIFT_COUNT-1)
-_Static_assert(MODE_COUNT <= LED_SHIFT_COUNT, "MODE_COUNT exceeds shift LED display range");
+// 2個点灯の窓をずらして表示するため、窓が収まる項目数に制限する。
+// (番号m≥1はLED m, m+1を使うので、最大の番号は LED_SHIFT_COUNT-1)
+_Static_assert(MENU_COUNT_OF(s_menus) <= LED_SHIFT_COUNT, "too many top menus for shift LED display");
+_Static_assert(MENU_COUNT_OF(s_test_modes) <= LED_SHIFT_COUNT, "too many TEST modes for shift LED display");
+_Static_assert(MENU_COUNT_OF(s_sd_modes) <= LED_SHIFT_COUNT, "too many SD modes for shift LED display");
 
-// モード0は全点灯。モードm(≥1)はLED m, m+1 (1始まり)の2個点灯で示す。
-// 例: TEST(0)→全点灯 / VEL_PID(1)→LED1,2
-static void ShowMode(RobotMode mode) {
-    printf("MODE %2d: %s\r\n", (int)mode, ModeName(mode));
-    if (mode == 0) {
+// 階層ごとの、今選んでいる項目の番号をLEDで示す。番号0は全点灯、番号m(≥1)はLED m, m+1 (1始まり)の2個点灯。
+// 例: 0番目→全点灯 / 1番目→LED1,2
+static void ShowIndex(uint8_t index) {
+    if (index == 0) {
         LED_SetShiftPattern(0xFFFFu);
     } else {
-        LED_SetShiftPattern((uint16_t)(0x3u << (mode - 1)));
+        LED_SetShiftPattern((uint16_t)(0x3u << (index - 1)));
     }
 }
 
@@ -144,11 +170,23 @@ void ModeUI_ShowBattery(float vbat, uint32_t hold_ms) {
     HAL_Delay(hold_ms);
 }
 
-RobotMode ModeUI_Select(void) {
-    RobotMode mode = MODE_TEST;
+// menu が NULL なら一番上の階層、そうでなければその中のモードの i 番目を表示する
+static void ShowItem(const ModeMenu *menu, uint8_t i) {
+    if (menu == NULL) {
+        printf("MENU %d: %s\r\n", (int)i, s_menus[i].name);
+    } else {
+        printf("%s %d: %s\r\n", menu->name, (int)i, ModeName(menu->modes[i]));
+    }
+    ShowIndex(i);
+}
+
+// 右エンコーダの回転で 0〜count-1 を送り、ボタンで確定した番号を返す。
+static uint8_t SelectIndex(const ModeMenu *menu, uint8_t count) {
+    uint8_t index = 0;
     float accumulated = 0.0f;
 
-    ShowMode(mode);
+    (void)Encoder_GetDeltaR(); // 前の階層で決定するまでに回った分を捨てる
+    ShowItem(menu, index);
 
     while (1) {
         if (Button_IsPressed()) {
@@ -163,27 +201,34 @@ RobotMode ModeUI_Select(void) {
 
         while (accumulated >= MODE_SELECT_PULSES_PER_STEP) {
             accumulated -= MODE_SELECT_PULSES_PER_STEP;
-            mode = (RobotMode)((mode + 1) % MODE_COUNT);
-            ShowMode(mode);
+            index = (uint8_t)((index + 1u) % count);
+            ShowItem(menu, index);
         }
         while (accumulated <= -MODE_SELECT_PULSES_PER_STEP) {
             accumulated += MODE_SELECT_PULSES_PER_STEP;
-            mode = (RobotMode)((mode - 1 + MODE_COUNT) % MODE_COUNT);
-            ShowMode(mode);
+            index = (uint8_t)((index + count - 1u) % count);
+            ShowItem(menu, index);
         }
 
         HAL_Delay(10);
     }
 
-    // 決定のボタンを離すまで待つ。でないと各モードの最初のボタン待ちが、
+    // 決定のボタンを離すまで待つ。でないと次の階層や各モードの最初のボタン待ちが、
     // 押されたままの決定ボタンを拾ってしまう。
     WaitButtonRelease();
+    return index;
+}
+
+RobotMode ModeUI_Select(void) {
+    const ModeMenu *menu = &s_menus[SelectIndex(NULL, MENU_TOP_COUNT)];
+    RobotMode mode = menu->modes[SelectIndex(menu, menu->count)];
+    printf("MODE: %s / %s\r\n", menu->name, ModeName(mode));
     return mode;
 }
 
 void ModeUI_Run(RobotMode mode) {
     switch (mode) {
-        case MODE_TEST:
+        case MODE_SENSOR:
             TestMode_Run();
             break;
         case MODE_VEL_PID:
@@ -194,6 +239,9 @@ void ModeUI_Run(RobotMode mode) {
             break;
         case MODE_STRAIGHT_TEST:
             StraightTest_Run();
+            break;
+        case MODE_PARTY:
+            PartyMode_Run();
             break;
         case MODE_SD_DUMP:
             SdDump_Run();

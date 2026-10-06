@@ -28,6 +28,11 @@ void App_StartPivot(float angle_deg, float omega_max_dps, float alpha_dps2);
 
 bool App_IsMotionDone(void);
 
+// 位置の制御(前後の位置を保つ)を効かせるかどうか。起動時は true。
+// false の間は目標の距離を今の距離に合わせ続けるので、true に戻しても補正は跳ばない。
+// (宴会芸モードのように、向きだけ保ちたいときに false にする)
+void App_SetPositionHold(bool en);
+
 // 速度PIDとモータ出力の有効/無効。起動時は無効。
 // 無効中もオドメトリ更新は続ける(PIDとモータ出力だけ止める)。
 // 有効化した直後のtickでPIDの内部状態をリセットする。
@@ -73,7 +78,9 @@ float App_RecalibrateGyroZ(uint32_t ms);
 typedef struct {
     float target_mm_s; // 目標並進速度
     float target_acc;  // 目標並進加速度[mm/s^2]
-    float pos_ref;     // プロファイルの目標位置[mm](直進の開始から)
+    float pos_ref;     // 目標の距離[mm](制御を有効にした時点から。止まってもリセットしない)
+    float dist_mm;     // 進んだ距離[mm](pos_ref と同じ基準。左右の車輪の平均を積分)
+    float pos_corr;    // 位置のループの補正量[mm/s](目標速度に足した分)
     float x_mm;        // オドメトリのX[mm]
     float vl, vr;      // 実車輪速度[mm/s]
     float vl_ref, vr_ref; // 車輪速度の目標[mm/s](角速度の補正を含む。車輪速度ループに渡す値)

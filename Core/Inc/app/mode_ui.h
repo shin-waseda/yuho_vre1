@@ -8,25 +8,19 @@
 #include "interface/uart.h"
 #include "robot_state.h"
 
+// 実行するモード(メニューの末端)。メニューの階層と並び順は mode_ui.c の表で決める。
+//   TEST: SENSOR / VEL_PID / STRAIGHT / PIVOT / LED_TEST / PARTY
+//   SD  : DUMP / DUMP_ALL
 typedef enum {
-    MODE_TEST = 0,
+    MODE_SENSOR = 0,    // センサー・ジャイロ・エンコーダの値を表示し続ける
     MODE_VEL_PID,
-    MODE_LED_TEST,
     MODE_STRAIGHT_TEST,
+    MODE_PIVOT_TEST,
+    MODE_LED_TEST,
+    MODE_PARTY,         // 宴会芸(床を回されても同じ方向を向き続ける)
     MODE_SD_DUMP,
     MODE_SD_DUMP_ALL,
-    MODE_PIVOT_TEST,
-    // 空きモード。中身を実装する時は名前を付け替える
-    MODE_7,
-    MODE_8,
-    MODE_9,
-    MODE_10,
-    MODE_11,
-    MODE_12,
-    MODE_13,
-    MODE_14,
-    MODE_15,
-    MODE_COUNT // シフトレジスタLED表示の都合で最大16(mode_ui.cの_Static_assert参照)
+    MODE_COUNT
 } RobotMode;
 
 // 起動時のバッテリー残量をLEDバーで表示する(ブロッキング、hold_ms待つ)。
@@ -34,9 +28,10 @@ typedef enum {
 // の点灯本数に線形に割り当てる。しきい値未満は全消灯。
 void ModeUI_ShowBattery(float vbat, uint32_t hold_ms);
 
-// 起動時に一度呼ぶブロッキング処理。右エンコーダの回転
-// (MODE_SELECT_PULSES_PER_STEPごと)でモードを送り、ボタン押下で
-// 確定して選択されたモードを返す。
+// 起動時に一度呼ぶブロッキング処理。まず一番上の階層(TEST / SD)を選び、
+// 次にその中のモードを選ぶ(上の階層には戻らない。戻るにはリセット)。
+// どちらも右エンコーダの回転(MODE_SELECT_PULSES_PER_STEPごと)で送り、
+// ボタン押下で確定する。選択されたモードを返す。
 RobotMode ModeUI_Select(void);
 
 typedef enum {

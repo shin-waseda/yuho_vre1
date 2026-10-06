@@ -168,7 +168,7 @@ HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);  // ENC_R
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
-  ModeUI_Run(mode); // TESTモードは戻らない。他モードは現状未実装。
+  ModeUI_Run(mode); // 今あるモードはどれも戻らない
 
   while (1)
   {

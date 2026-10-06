@@ -22,6 +22,12 @@ static WheelVelocity s_actual;
 // プロファイルの角速度を積分して進める。止まってもリセットしない。
 static float s_angle_ref_deg = 0.0f;
 
+// 位置のループ(外側、並進方向)。ISRからのみ触る。
+// 目標の距離と進んだ距離[mm]。どちらも制御が無効の間は0にしておき、有効にした時点を基準にする。
+static float s_pos_ref_mm = 0.0f;
+static float s_dist_mm = 0.0f;
+static volatile bool s_position_hold = true; // メインが書き、ISRが読む
+
 // 目標(並進・回転)。プロファイル実行中はISRが毎tick書き換える。
 static float s_target_mm_s = 0.0f;
 static float s_target_acc = 0.0f;
@@ -115,6 +121,10 @@ void App_StartPivot(float angle_deg, float omega_max_dps, float alpha_dps2) {
 
 bool App_IsMotionDone(void) {
     return s_motion_done && !s_start_pending;
+}
+
+void App_SetPositionHold(bool en) {
+    s_position_hold = en;
 }
 
 // ISRの先頭で呼ぶ。走行指令を取り込み、プロファイルを1tick進めて目標を更新する。
@@ -249,6 +259,7 @@ static void ClearOutputDebug(void) {
     s_dbg.i_l = 0.0f;
     s_dbg.i_r = 0.0f;
     s_dbg.ang_corr_dps = 0.0f;
+    s_dbg.pos_corr = 0.0f;
 }
 
 void App_ControlTick(void) {
@@ -274,10 +285,27 @@ void App_ControlTick(void) {
 
     // ---- 目標の向き ----
     // 制御が無効の間は今の向きに合わせておくので、有効にした時点の向きが基準になる。
+    // ---- 目標の距離と進んだ距離 ----
+    // 制御が無効の間はどちらも0にしておくので、有効にした時点が基準になる。
     if (control_active) {
         s_angle_ref_deg += s_target_omega_dps * CONTROL_DT_S;
+        s_pos_ref_mm += s_target_mm_s * CONTROL_DT_S;
+        s_dist_mm += 0.5f * (s_actual.left_mm_s + s_actual.right_mm_s) * CONTROL_DT_S;
+        if (!s_position_hold) s_pos_ref_mm = s_dist_mm; // 位置を保たない間は、今の距離に合わせておく
     } else {
         s_angle_ref_deg = s_gyro_angle_deg;
+        s_pos_ref_mm = 0.0f;
+        s_dist_mm = 0.0f;
+    }
+
+    // ---- 位置のループ(外側、並進方向) ----
+    // v_cmd = v_ref + POSITION_KP×(s_ref − s)。出力は車輪速度の目標になる。
+    float pos_corr = 0.0f;
+    // 角度と同じく、止まっていても常に効かせる(止まっている間も位置を保つ)
+    if (POSITION_CONTROL_ENABLE && s_position_hold && control_active) {
+        pos_corr = POSITION_KP * (s_pos_ref_mm - s_dist_mm);
+        if (pos_corr > POSITION_CORR_LIMIT_MM_S) pos_corr = POSITION_CORR_LIMIT_MM_S;
+        if (pos_corr < -POSITION_CORR_LIMIT_MM_S) pos_corr = -POSITION_CORR_LIMIT_MM_S;
     }
 
     // ---- 角度・角速度のループ(外側) ----
@@ -294,15 +322,15 @@ void App_ControlTick(void) {
     }
 
     // 止まるべき所で止まったら、車輪速度ループの I 項を捨てて出力0にする(摩擦で止まった後に
-    // PWM が出続けるのを防ぐ)。角度の制御が有効なら、止まっている間も向きを保つので使わない。
-    bool robot_stopped = !ANGULAR_CONTROL_ENABLE
+    // PWM が出続けるのを防ぐ)。角度か位置の制御が有効なら、止まっている間も保つので使わない。
+    bool robot_stopped = !ANGULAR_CONTROL_ENABLE && !POSITION_CONTROL_ENABLE
                       && (s_target_mm_s == 0.0f) && (s_target_acc == 0.0f)
                       && (s_target_omega_dps == 0.0f) && (s_target_alpha_dps2 == 0.0f)
                       && (fabsf(s_actual.left_mm_s)  < VELOCITY_STOP_RESET_MM_S)
                       && (fabsf(s_actual.right_mm_s) < VELOCITY_STOP_RESET_MM_S);
 
     RobotVelocity target_robot = {
-        .linear_mm_s = s_target_mm_s,
+        .linear_mm_s = s_target_mm_s + pos_corr,
         .angular_rad_s = omega_ref + ang_corr,
     };
     WheelVelocity target_wheel = Kinematics_RobotToWheel(target_robot);
@@ -333,7 +361,9 @@ void App_ControlTick(void) {
 
     s_dbg.target_mm_s = s_target_mm_s;
     s_dbg.target_acc = s_target_acc;
-    s_dbg.pos_ref = s_profile.pos_mm;
+    s_dbg.pos_ref = s_pos_ref_mm;
+    s_dbg.dist_mm = s_dist_mm;
+    s_dbg.pos_corr = pos_corr;
     s_dbg.x_mm = s_odo.pose.x_mm;
     s_dbg.vl = s_actual.left_mm_s;
     s_dbg.vr = s_actual.right_mm_s;
@@ -389,9 +419,16 @@ void App_ControlTick(void) {
 
     // 超信地旋回(直進の目標が0で、旋回の目標がある)では、タイヤが横にこすれる摩擦を足す。
     if (s_target_mm_s == 0.0f && s_target_acc == 0.0f && s_target_omega_dps != 0.0f) {
-        float turn = SignOf(s_target_omega_dps); // +1: 反時計回り(右の車輪が前へ、左が後ろへ)
-        ff_l -= PIVOT_FF_FRIC_L * turn;
-        ff_r += PIVOT_FF_FRIC_R * turn;
+        // 回る向きで必要な電圧が違うので、向きごとに分ける
+        if (s_target_omega_dps > 0.0f) {
+            // 反時計回り(左回り): 右の車輪が前へ、左が後ろへ
+            ff_l -= PIVOT_FF_FRIC_CCW_L;
+            ff_r += PIVOT_FF_FRIC_CCW_R;
+        } else {
+            // 時計回り(右回り): 左の車輪が前へ、右が後ろへ
+            ff_l += PIVOT_FF_FRIC_CW_L;
+            ff_r -= PIVOT_FF_FRIC_CW_R;
+        }
     }
 
     WheelVelocity out;

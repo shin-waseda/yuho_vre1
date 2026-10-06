@@ -37,6 +37,9 @@ static void SetupLogger(void) {
     Logger_AddField("angle_ref", &d->angle_ref_deg); // 目標の向き(angle と同じ基準)
     Logger_AddField("angle", &d->angle_deg);
     Logger_AddField("ang_corr", &d->ang_corr_dps);
+    // 前後のずれ。旋回では目標の距離が0のままなので、そのまま位置の誤差になる
+    // (位置の補正 = −POSITION_KP × dist。列の上限のため pos_corr は記録しない)
+    Logger_AddField("dist", &d->dist_mm);
     Logger_AddField("vl", &d->vl);
     Logger_AddField("vr", &d->vr);
     Logger_AddField("vl_ref", &d->vl_ref);
@@ -110,9 +113,12 @@ void PivotTest_Run(void) {
            PIVOT_TEST_ANGLE_DEG, PIVOT_TEST_ANGLE_DEG, PIVOT_TEST_OMEGA_DPS, PIVOT_TEST_ALPHA_DPS2);
     printf("ANGULAR: %s ANGULAR_KP=%.2f ANGLE_KP=%.2f, GYRO_Z_SIGN=%.0f\r\n",
            ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", ANGULAR_KP, ANGLE_KP, GYRO_Z_SIGN);
+    printf("POSITION: %s POSITION_KP=%.2f\r\n",
+           POSITION_CONTROL_ENABLE ? "ON" : "OFF", POSITION_KP);
     // 書き込んだプログラムの設定をログと突き合わせられるように出しておく
-    printf("TREAD=%.2f mm, PIVOT_FF_FRIC L=%.2f R=%.2f V\r\n",
-           TREAD_WIDTH_MM, PIVOT_FF_FRIC_L, PIVOT_FF_FRIC_R);
+    printf("TREAD=%.2f mm, PIVOT_FF_FRIC CCW L=%.2f R=%.2f / CW L=%.2f R=%.2f V\r\n",
+           TREAD_WIDTH_MM, PIVOT_FF_FRIC_CCW_L, PIVOT_FF_FRIC_CCW_R,
+           PIVOT_FF_FRIC_CW_L, PIVOT_FF_FRIC_CW_R);
 
     if (FailSafe_IsTripped()) FailSafe_Halt(); // 起動時の低電圧など
 
