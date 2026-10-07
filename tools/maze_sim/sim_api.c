@@ -11,6 +11,8 @@
 #include "logic/maze/dijkstra.h"
 #include "logic/maze/step_map.h"
 #include "logic/maze/search_planner.h"
+#include "logic/maze/run_path.h"
+#include "logic/maze/time_dijkstra.h"
 
 #ifdef _WIN32
 #define SIM_EXPORT __declspec(dllexport)
@@ -36,6 +38,8 @@ static WallMap s_map;
 static SearchPlanner s_planner;
 static MazeSolver s_solver; // 最短経路の計算用(プランナーの作業領域とは別)
 static CommandList s_route;
+static TimeSolver s_time_solver; // 最短走行(時間)の計算用
+static RunList s_run;
 
 // 今の迷路のゴール。迷路ファイルに 'G' があればそれ、なければ params.h の MAZE_GOALS
 static MazePos s_goals[MAZE_GOAL_MAX];
@@ -218,6 +222,58 @@ SIM_EXPORT int sim_route(uint8_t *types, uint8_t *cells, int max, uint16_t *cost
     for (int i = 0; i < n; i++) {
         types[i] = s_route.items[i].type;
         cells[i] = s_route.items[i].cells;
+    }
+    return n;
+}
+
+// ---- 最短走行(時間) ----
+
+// sim_run_plan() の kind
+enum {
+    SIM_PLAN_TIME = 0,      // 探索で分かった壁だけで、走行時間が最短の経路(TimeDijkstra)
+    SIM_PLAN_COST = 1,      // 探索で分かった壁だけで、コストが最短の経路を大回りに置き換えたもの
+    SIM_PLAN_TIME_BEST = 2, // 迷路を全部知っていたときの、走行時間が最短の経路
+};
+
+// 速度のパラメータ(params.h の RUN_*)と区画の大きさ。
+// out[0] 加速度, [1] 最高速度, [2] 小回り90°, [3] 大回り90°, [4] 大回り180°, [5] SECTION_MM
+SIM_EXPORT void sim_run_profile(float *out) {
+    RunProfile p = RunProfile_Default();
+    out[0] = p.accel;
+    out[1] = p.vmax;
+    out[2] = p.v_turn[RUN_SMALL90_R];
+    out[3] = p.v_turn[RUN_LARGE90_R];
+    out[4] = p.v_turn[RUN_LARGE180_R];
+    out[5] = SECTION_MM;
+}
+
+// 最短走行の指令の列を求め、types/halves/times(指令ごとの時間[s])に最大 max 個書いて個数を返す
+// (行けなければ0)。total に合計の時間[s]、feasible に加速度が足りているか(1/0)を書く。
+// 指令はスタートの区画の中心から、北向きに静止した状態で始まる。
+SIM_EXPORT int sim_run_plan(int kind, uint8_t *types, uint8_t *halves, float *times, int max,
+                            float *total, int *feasible) {
+    RunProfile prof = RunProfile_Default();
+    *total = 0.0f;
+    *feasible = 0;
+
+    if (kind == SIM_PLAN_COST) {
+        Dijkstra_Compute(&s_solver, &s_map, WALL_VIEW_KNOWN, NULL, s_goals, s_goal_count);
+        if (!Dijkstra_BuildRoute(&s_solver, kSimStart, DIR_NORTH, true, &s_route)) return 0;
+        if (!RunPath_FromRoute(&s_route, &prof, true, &s_run)) return 0;
+    } else {
+        const WallMap *map = (kind == SIM_PLAN_TIME_BEST) ? &s_truth : &s_map;
+        TimeDijkstra_Compute(&s_time_solver, map, WALL_VIEW_KNOWN, &prof, s_goals, s_goal_count,
+                             kSimStart, DIR_NORTH);
+        if (!TimeDijkstra_BuildRun(&s_time_solver, &s_run)) return 0;
+    }
+
+    static float t[RUN_LIST_MAX];
+    *feasible = RunList_EstimateTime(&s_run, &prof, total, t, NULL) ? 1 : 0;
+    int n = (s_run.count < max) ? s_run.count : max;
+    for (int i = 0; i < n; i++) {
+        types[i] = s_run.items[i].type;
+        halves[i] = s_run.items[i].halves;
+        times[i] = t[i];
     }
     return n;
 }

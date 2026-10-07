@@ -22,6 +22,10 @@
     A           アルゴリズムを切り替えて最初から
     C           コスト(歩数)の表示      T       まだ見ていない壁の表示
     ↑ / ↓       速さ                   ESC / Q 終わる
+探索が終わった後(最短走行):
+    G           最短走行を再生 / 一時停止(終わっていれば最初から)
+    V           表示する経路を切り替え(時間で最短 / コストで最短+大回り / 全部知っていたら)
+    SPACE       再生中は一時停止        ↑ / ↓   再生中は再生の速さ(実時間の何倍か)
 迷路の一覧の中:
     ↑ / ↓ / PageUp / PageDown  選ぶ(押し続けると連続で動く。選んだ迷路は左にプレビューが出る)
     → / Enter  分類に入る・迷路を開く    ← / BackSpace  分類の一覧へ戻る
@@ -29,6 +33,7 @@
 """
 
 import argparse
+import math
 import os
 import sys
 
@@ -36,6 +41,7 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")  # pygame の起動メ�
 import pygame  # noqa: E402
 
 import maze_catalog as mc  # noqa: E402
+import run_motion as rm  # noqa: E402
 import sim_lib as sl  # noqa: E402
 
 CELL = 36       # 1区画の大きさ[px]
@@ -59,7 +65,9 @@ COLOR_WALL_PREVIEW = (210, 210, 220) # 一覧のプレビューの壁
 COLOR_MOUSE = (0, 200, 255)
 COLOR_MOUSE_DIR = (255, 230, 80)
 COLOR_TRAIL = (0, 120, 160)
-COLOR_ROUTE = (255, 210, 60)
+COLOR_ROUTE = (255, 210, 60)        # 最短走行の直進
+COLOR_RUN_SMALL = (255, 130, 50)     # 最短走行の小回り
+COLOR_RUN_LARGE = (210, 110, 255)    # 最短走行の大回り
 COLOR_TEXT = (225, 225, 230)
 COLOR_DIM = (140, 140, 150)
 COLOR_BAD = (255, 90, 90)
@@ -93,6 +101,8 @@ class MazeGui:
         self.goal_cost = args.goal
         self.back_cost = args.back
         self.speed = args.speed
+        self.plan_kind = sl.PLAN_TIME  # 表示・再生する最短走行の経路
+        self.run_scale = 1.0           # 再生の速さ(実時間の何倍か)
 
         # 迷路の一覧(my_mazes/ と mazes/)とお気に入り
         self.entries = mc.load_entries()
@@ -133,6 +143,7 @@ class MazeGui:
         self.font_jp = jp_font(15)
         self.font_jp_small = jp_font(12)
 
+        self.prof = self.sim.run_profile()
         self.load_maze()
 
     # ------------------------------------------------------------
@@ -173,6 +184,9 @@ class MazeGui:
         self.trail = [self.pose[:2]]
         self.step_timer = 0.0
         self.route = None         # 探索が終わったら (指令の列, 見つけたコスト, 真の最短)
+        self.plans = None         # 探索が終わったら {kind: (合計の時間, 加速度が足りるか, RunMotion)}
+        self.run_t = None         # 最短走行の再生の時刻[s](None なら再生していない)
+        self.run_playing = False
         self.message = ""
 
     def finished(self):
@@ -193,11 +207,34 @@ class MazeGui:
             self.message = "reached goal"
         elif self.status == sl.SIM_DONE:
             self.route = self.sim.route()
-            self.message = "search done"
+            self.plans = {}
+            for kind in (sl.PLAN_TIME, sl.PLAN_COST, sl.PLAN_TIME_BEST):
+                plan = self.sim.run_plan(kind)
+                if plan:
+                    cmds, times, total, feasible = plan
+                    motion = rm.RunMotion(cmds, times, self.prof, self.sim.start)
+                    self.plans[kind] = (total, feasible, motion)
+            self.message = "search done (G: fastest run)"
             self.paused = True
         elif self.finished():
             self.message = sl.STATUS_NAMES[self.status]
             self.paused = True
+
+    def current_motion(self):
+        if not self.plans or self.plan_kind not in self.plans:
+            return None
+        return self.plans[self.plan_kind][2]
+
+    def toggle_run(self):
+        """最短走行の再生 / 一時停止。終わっていれば最初から"""
+        motion = self.current_motion()
+        if motion is None:
+            return
+        if self.run_t is None or self.run_t >= motion.duration:
+            self.run_t = 0.0
+            self.run_playing = True
+        else:
+            self.run_playing = not self.run_playing
 
     def run_to_end(self):
         while not self.finished():
@@ -320,6 +357,11 @@ class MazeGui:
         r = self.cell_rect(x, y)
         return r.centerx, r.centery
 
+    def mm_to_px(self, p):
+        """最短走行の座標[mm](スタート区画の左下が原点、北が +y)を画面の座標へ"""
+        s = CELL / self.prof["section"]
+        return MARGIN + p[0] * s, MARGIN + self.n * CELL - p[1] * s
+
     def wall_line(self, x, y, d):
         r = self.cell_rect(x, y)
         if d == 0:
@@ -395,22 +437,29 @@ class MazeGui:
         pygame.draw.lines(self.screen, COLOR_TRAIL, False, pts, 2)
 
     def draw_route(self):
-        if not self.route:
+        """最短走行の経路(V で切り替え)。固定の形で、直進・小回り・大回りで色を分ける"""
+        motion = self.current_motion()
+        if motion is None:
             return
-        actions = self.route[0]
-        x, y = self.sim.start
-        d = 0
-        pts = [self.cell_center(x, y)]
-        for t, cells in actions:
-            d = (d + sl.ACTION_QUARTER_TURNS[t]) % 4
-            for _ in range(cells):
-                x += sl.DIR_DX[d]
-                y += sl.DIR_DY[d]
-                pts.append(self.cell_center(x, y))
-        if len(pts) >= 2:
-            pygame.draw.lines(self.screen, COLOR_ROUTE, False, pts, 4)
+        for seg in motion.segments:
+            if seg.type == sl.RUN_STRAIGHT:
+                color = COLOR_ROUTE
+            elif seg.type in (sl.RUN_SMALL90_R, sl.RUN_SMALL90_L):
+                color = COLOR_RUN_SMALL
+            else:
+                color = COLOR_RUN_LARGE
+            pygame.draw.lines(self.screen, color, False, [self.mm_to_px(p) for p in seg.points()], 3)
 
     def draw_mouse(self):
+        motion = self.current_motion()
+        if self.run_t is not None and motion is not None:
+            pos, heading, _, _ = motion.state_at(self.run_t)
+            cx, cy = self.mm_to_px(pos)
+            r = CELL * 0.28
+            pygame.draw.circle(self.screen, COLOR_MOUSE, (int(cx), int(cy)), int(r))
+            tip = (cx + math.cos(heading) * r, cy - math.sin(heading) * r)
+            pygame.draw.line(self.screen, COLOR_MOUSE_DIR, (cx, cy), tip, 3)
+            return
         x0, y0, _ = self.prev_pose
         x1, y1, d = self.pose
         a = min(self.anim, 1.0)
@@ -567,23 +616,41 @@ class MazeGui:
             add(f">> {self.message}", COLOR_BAD if bad else COLOR_GOOD)
 
         if self.route:
-            actions, found, best = self.route
+            _, found, best = self.route
             add("")
-            add("fastest-run route (known walls)")
-            if found == best:
-                add(f"  cost {found} = optimal", COLOR_GOOD)
-            else:
-                add(f"  cost {found} (best {best})", COLOR_TEXT)
-            add(f"  {len(actions) - 1} commands")
+            add(f"route cost {found}" + (" = optimal" if found == best else f" (best {best})"),
+                COLOR_GOOD if found == best else COLOR_TEXT)
+        if self.plans:
+            add("fastest run (V: switch, G: play)")
+            best_time = self.plans[sl.PLAN_TIME_BEST][0] if sl.PLAN_TIME_BEST in self.plans else None
+            for kind, label in ((sl.PLAN_TIME, "time-optimal"), (sl.PLAN_COST, "cost + large"),
+                                (sl.PLAN_TIME_BEST, "all walls known")):
+                mark = ">" if kind == self.plan_kind else " "
+                if kind not in self.plans:
+                    add(f"{mark} {label:16s} no route", COLOR_BAD)
+                    continue
+                total, feasible, _ = self.plans[kind]
+                color = COLOR_TEXT if kind == self.plan_kind else COLOR_DIM
+                if not feasible:
+                    color = COLOR_BAD
+                elif kind == sl.PLAN_TIME and best_time is not None and total <= best_time + 1e-4:
+                    color = COLOR_GOOD
+                add(f"{mark} {label:16s} {total:7.3f} s" + ("" if feasible else " (accel!)"), color)
+            motion = self.current_motion()
+            if self.run_t is not None and motion is not None:
+                _, _, v, i = motion.state_at(self.run_t)
+                add(f"  t {self.run_t:6.3f} s  x{self.run_scale:g}  v {v:5.0f} mm/s")
+                add(f"  {sl.RUN_NAMES[motion.segments[i].type]}", COLOR_DIM)
 
         add("")
-        add("PAUSED" if self.paused else "RUNNING", COLOR_GOOD if not self.paused else COLOR_DIM)
-        for k in ["SPACE/P  play / pause", "S / ->   step", "F        run to end",
-                  "R        restart", "L        maze list", "M        favorite",
-                  "N / B    next / prev maze", "A        switch algo",
-                  f"C        cost [{'on' if self.show_cost else 'off'}]",
-                  f"T        hidden walls [{'on' if self.show_hidden else 'off'}]",
-                  "UP/DOWN  speed", "ESC/Q    quit"]:
+        if self.run_t is not None:
+            add("RUN PLAYING" if self.run_playing else "RUN PAUSED", COLOR_GOOD if self.run_playing else COLOR_DIM)
+        else:
+            add("PAUSED" if self.paused else "RUNNING", COLOR_GOOD if not self.paused else COLOR_DIM)
+        for k in ["SPACE/P play  S/-> step  F to end",
+                  "R restart  L list  M fav  N/B maze",
+                  f"A algo  C cost[{'on' if self.show_cost else 'off'}]  T hidden[{'on' if self.show_hidden else 'off'}]",
+                  "G run  V plan  UP/DOWN speed  Q quit"]:
             add(k, COLOR_DIM)
 
         for text, color, font in lines:
@@ -622,8 +689,17 @@ class MazeGui:
         if key in (pygame.K_ESCAPE, pygame.K_q):
             return False
         if key in (pygame.K_SPACE, pygame.K_p):
-            if not self.finished():
+            if self.run_t is not None:
+                self.toggle_run()
+            elif not self.finished():
                 self.paused = not self.paused
+        elif key == pygame.K_g:
+            self.toggle_run()
+        elif key == pygame.K_v:
+            if self.plans:
+                self.plan_kind = (self.plan_kind + 1) % 3
+                self.run_t = None
+                self.run_playing = False
         elif key in (pygame.K_s, pygame.K_RIGHT):
             self.paused = True
             self.do_step()
@@ -653,9 +729,15 @@ class MazeGui:
         elif key == pygame.K_t:
             self.show_hidden = not self.show_hidden
         elif key == pygame.K_UP:
-            self.speed = min(200, self.speed * 2)
+            if self.run_t is not None:
+                self.run_scale = min(4.0, self.run_scale * 2)
+            else:
+                self.speed = min(200, self.speed * 2)
         elif key == pygame.K_DOWN:
-            self.speed = max(1, self.speed // 2)
+            if self.run_t is not None:
+                self.run_scale = max(1 / 16, self.run_scale / 2)
+            else:
+                self.speed = max(1, self.speed // 2)
         return True
 
     def repeat_browser_key(self, dt):
@@ -688,6 +770,12 @@ class MazeGui:
                     self.repeat_key = None
 
             self.repeat_browser_key(dt)
+
+            motion = self.current_motion()
+            if self.run_playing and motion is not None and not self.browser_open:
+                self.run_t = min(motion.duration, self.run_t + dt * self.run_scale)
+                if self.run_t >= motion.duration:
+                    self.run_playing = False
 
             interval = 1.0 / self.speed
             self.anim += dt / min(interval, 0.25)

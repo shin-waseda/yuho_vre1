@@ -22,7 +22,9 @@
 //   北(上)から 2*MAZE_SIZE+1 行。角は 'o' か '+'、横の壁は "---"、縦の壁は '|'。
 //
 // 流れ: 探索(ゴールへ行ってスタートへ戻る) → 分かった壁だけで最短経路を計算 →
-//       その経路を本当の迷路で走らせて、壁にぶつからずゴールに着くか確かめる。
+//       その経路を本当の迷路で走らせて、壁にぶつからずゴールに着くか確かめる →
+//       最短走行の時間を見積もる(コストが最短の経路を大回りに置き換えたもの、
+//       走行時間が最短の経路(TimeDijkstra)、迷路を全部知っていたときの走行時間が最短の経路)。
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,6 +37,8 @@
 #include "logic/maze/priority_queue.h"
 #include "logic/maze/search_planner.h"
 #include "logic/maze/maze_print.h"
+#include "logic/maze/run_path.h"
+#include "logic/maze/time_dijkstra.h"
 #include "sim_core.h"
 
 #define STEP_LIMIT 5000 // 探索で指令をこれだけ実行しても終わらなければ打ち切る
@@ -45,6 +49,9 @@ static WallMap s_map;       // 探索で分かった地図
 static SearchPlanner s_planner;
 static MazeSolver s_solver;
 static CommandList s_route;
+static RunList s_run;
+static TimeSolver s_time_solver;
+static CommandList s_run_route; // 最短走行の指令を区画の経路に戻したもの(壁の確認用)
 
 // 今の迷路のゴール。迷路ファイルに 'G' があればそれ、なければ params.h の MAZE_GOALS
 static MazePos s_goals[MAZE_GOAL_MAX];
@@ -76,7 +83,68 @@ typedef struct {
     int moves_to_start;   // 探索の帰り(区画数)
     uint16_t cost_found;  // 探索で分かった壁だけでの最短コスト
     uint16_t cost_best;   // 迷路を全部知っていたときの最短コスト
+    float time_small;     // 見つけた経路を小回りだけで走ったときの時間[s](負なら加速度が足りない)
+    float time_large;     // 見つけた経路を大回りに置き換えて走ったときの時間[s](同上)
+    float time_opt;       // 時間で選んだ経路(TimeDijkstra)の時間[s](負なら失敗)
+    float time_opt_best;  // 迷路を全部知っていたときの、時間で選んだ経路の時間[s]
 } Result;
+
+static void PrintRunList(const char *title, const RunList *list, const float *times) {
+    printf("\n=== %s ===\n", title);
+    for (uint16_t i = 0; i < list->count; i++) {
+        const RunCommand *c = &list->items[i];
+        if (c->type == RUN_STRAIGHT) {
+            printf("%3u: %-10s x%-3u/2 %6.3f s\n", (unsigned)i, RunType_Name((RunType)c->type),
+                   (unsigned)c->halves, (double)times[i]);
+        } else {
+            printf("%3u: %-10s        %6.3f s\n", (unsigned)i, RunType_Name((RunType)c->type),
+                   (double)times[i]);
+        }
+    }
+}
+
+// mapの分かっている壁だけで、時間が最短の最短走行の経路を求めて時間[s]を返す(失敗なら負)。
+// 経路は本当の迷路(truth)でも走らせ、壁にぶつからずにゴールで止まるかを確かめる。
+static float TimeOptimalRun(const WallMap *map, const WallMap *truth, bool print) {
+    RunProfile prof = RunProfile_Default();
+    TimeDijkstra_Compute(&s_time_solver, map, WALL_VIEW_KNOWN, &prof, s_goals, s_goal_count,
+                         kSimStart, DIR_NORTH);
+    if (!TimeDijkstra_BuildRun(&s_time_solver, &s_run)) {
+        if (print) printf("time-optimal: no route\n");
+        return -1.0f;
+    }
+    float total;
+    float times[RUN_LIST_MAX];
+    bool ok = RunList_EstimateTime(&s_run, &prof, &total, times, NULL);
+    if (print) PrintRunList("fastest-run commands (time-optimal)", &s_run, times);
+
+    // 計算の時間と見積もりの時間が合うか(直進がまとまると見積もりの方が短くなることはある)
+    double planned = (double)TimeDijkstra_StartTime(&s_time_solver) * 1e-6;
+    if (!ok || (double)total > planned + 1e-3) {
+        printf("time-optimal: estimate mismatch (planned %.4f s, estimated %.4f s, feasible %d)\n",
+               planned, (double)total, ok);
+        return -1.0f;
+    }
+
+    // 区画の経路に戻して、本当の迷路で走らせる
+    if (!RunList_ToRoute(&s_run, &s_run_route)) {
+        printf("time-optimal: could not convert to a cell route\n");
+        return -1.0f;
+    }
+    MazePos pos = kSimStart;
+    Direction heading = DIR_NORTH;
+    for (uint16_t i = 0; i < s_run_route.count; i++) {
+        if (!SimCore_Execute(truth, &pos, &heading, s_run_route.items[i])) {
+            printf("time-optimal: route CRASH at cell command %u\n", (unsigned)i);
+            return -1.0f;
+        }
+    }
+    if (!MazePos_InList(pos, s_goals, s_goal_count)) {
+        printf("time-optimal: route ended at (%u,%u), not a goal\n", pos.x, pos.y);
+        return -1.0f;
+    }
+    return total;
+}
 
 typedef struct {
     SearchAlgo algo;
@@ -87,7 +155,7 @@ typedef struct {
 } SimConfig;
 
 static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, bool quiet) {
-    Result r = { false, 0, 0, MAZE_COST_INF, MAZE_COST_INF };
+    Result r = { false, 0, 0, MAZE_COST_INF, MAZE_COST_INF, -1.0f, -1.0f, -1.0f, -1.0f };
     SearchAlgo algo = cfg->algo;
 
     // --- 探索 ---
@@ -168,9 +236,33 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
         return r;
     }
 
+    // --- 最短走行の指令に置き換えて、走行時間を見積もる ---
+    RunProfile prof = RunProfile_Default();
+    for (int large = 0; large <= 1; large++) {
+        float total;
+        float times[RUN_LIST_MAX];
+        float *t = large ? &r.time_large : &r.time_small;
+        if (!RunPath_FromRoute(&s_route, &prof, large != 0, &s_run)) {
+            if (!quiet) printf("could not convert the route to run commands\n");
+            continue;
+        }
+        bool ok = RunList_EstimateTime(&s_run, &prof, &total, times, NULL);
+        *t = ok ? total : -1.0f;
+        if (!quiet && large) {
+            PrintRunList("fastest-run commands (route above, large turns)", &s_run, times);
+            if (!ok) printf("(acceleration is not enough somewhere in this route)\n");
+        }
+    }
+
+    // --- 時間で最短の経路を求める ---
+    r.time_opt = TimeOptimalRun(&s_map, truth, !quiet);
+    if (r.time_opt < 0.0f) return r;
+
     // --- 迷路を全部知っていたときの最短と比べる ---
     Dijkstra_Compute(&s_solver, truth, WALL_VIEW_KNOWN, NULL, s_goals, s_goal_count);
     r.cost_best = Dijkstra_Cost(&s_solver, kSimStart, DIR_NORTH);
+    r.time_opt_best = TimeOptimalRun(truth, truth, false);
+    if (r.time_opt_best < 0.0f) return r;
     r.ok = true;
     return r;
 }
@@ -230,6 +322,10 @@ static void PrintResult(const Result *r) {
     printf("search: %d moves to goal, %d moves back\n", r->moves_to_goal, r->moves_to_start);
     printf("route cost: %u (best possible %u)%s\n", (unsigned)r->cost_found, (unsigned)r->cost_best,
            (r->cost_found == r->cost_best) ? "  = optimal" : "");
+    printf("run time: %.3f s small turns only, %.3f s with large turns (negative = not feasible)\n",
+           (double)r->time_small, (double)r->time_large);
+    printf("time-optimal run: %.3f s (best possible %.3f s)%s\n", (double)r->time_opt,
+           (double)r->time_opt_best, (r->time_opt <= r->time_opt_best + 1e-4f) ? "  = optimal" : "");
 }
 
 // まとめて試したときの集計
@@ -240,6 +336,12 @@ typedef struct {
     long sum_goal;
     long sum_back;
     double sum_ratio;
+    int timed;          // 小回り・大回りとも時間が出た迷路の数
+    double sum_small;
+    double sum_large;
+    double sum_opt;      // 時間で選んだ経路(timed の迷路だけ)
+    double sum_opt_best;
+    int opt_optimal;     // 時間で選んだ経路が、全部知っていたときと同じ時間だった迷路の数
 } BatchStats;
 
 static void Batch_Add(BatchStats *b, const Result *r, const char *label) {
@@ -253,6 +355,14 @@ static void Batch_Add(BatchStats *b, const Result *r, const char *label) {
     b->sum_back += r->moves_to_start;
     b->sum_ratio += (double)r->cost_found / (double)r->cost_best;
     if (r->cost_found == r->cost_best) b->optimal++;
+    if (r->time_small > 0.0f && r->time_large > 0.0f) {
+        b->timed++;
+        b->sum_small += r->time_small;
+        b->sum_large += r->time_large;
+        b->sum_opt += r->time_opt;
+        b->sum_opt_best += r->time_opt_best;
+    }
+    if (r->time_opt <= r->time_opt_best + 1e-4f) b->opt_optimal++;
 }
 
 static void Batch_Print(const BatchStats *b, const SimConfig *cfg) {
@@ -267,6 +377,12 @@ static void Batch_Print(const BatchStats *b, const SimConfig *cfg) {
         printf(", moves %.1f + %.1f = %.1f, cost ratio %.3f",
                (double)b->sum_goal / ok, (double)b->sum_back / ok,
                (double)(b->sum_goal + b->sum_back) / ok, b->sum_ratio / ok);
+    }
+    if (b->timed > 0) {
+        printf(", run time %.3f s (small) %.3f s (large) %.3f s (time-opt, best %.3f s, optimal %d)",
+               b->sum_small / b->timed, b->sum_large / b->timed,
+               b->sum_opt / b->timed, b->sum_opt_best / b->timed, b->opt_optimal);
+        if (b->timed < ok) printf(" [%d not feasible]", ok - b->timed);
     }
     printf("\n");
 }
@@ -324,7 +440,7 @@ int main(int argc, char **argv) {
     if (!CheckCostFits("goal", &cfg.goal_cost) || !CheckCostFits("back", &cfg.back_cost)) return 2;
 
     if (batch > 0) {
-        BatchStats b = { 0, 0, 0, 0, 0, 0.0 };
+        BatchStats b = { 0 };
         for (long s = 1; s <= batch; s++) {
             char label[32];
             snprintf(label, sizeof(label), "seed %ld", s);
@@ -337,7 +453,7 @@ int main(int argc, char **argv) {
     }
 
     if (file_count > 1) {
-        BatchStats b = { 0, 0, 0, 0, 0, 0.0 };
+        BatchStats b = { 0 };
         int unreadable = 0;
         for (int i = 0; i < file_count; i++) {
             if (!LoadMaze(files[i])) {

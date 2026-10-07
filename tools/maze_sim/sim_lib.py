@@ -29,6 +29,16 @@ ACTION_STOP, ACTION_FORWARD, ACTION_TURN_RIGHT, ACTION_TURN_LEFT, ACTION_TURN_BA
 ACTION_NAMES = ["STOP", "FORWARD", "RIGHT", "LEFT", "BACK"]
 ACTION_QUARTER_TURNS = [0, 0, 1, -1, 2]
 
+# RunType (logic/maze/run_path.h と同じ)
+(RUN_STOP, RUN_STRAIGHT, RUN_SMALL90_R, RUN_SMALL90_L,
+ RUN_LARGE90_R, RUN_LARGE90_L, RUN_LARGE180_R, RUN_LARGE180_L) = range(8)
+RUN_NAMES = ["STOP", "STRAIGHT", "SMALL90_R", "SMALL90_L", "LARGE90_R", "LARGE90_L", "LARGE180_R", "LARGE180_L"]
+RUN_QUARTER_TURNS = [0, 0, 1, -1, 1, -1, 2, -2]
+
+# sim_run_plan() の kind (sim_api.c と同じ)
+PLAN_TIME, PLAN_COST, PLAN_TIME_BEST = range(3)
+PLAN_NAMES = ["time-optimal", "cost route + large turns", "best possible (all walls)"]
+
 # sim_wall() の戻り値
 WALL_OPEN, WALL_EXISTS, WALL_UNKNOWN = range(3)
 
@@ -110,6 +120,7 @@ class MazeSim:
         u8p = ctypes.POINTER(ctypes.c_uint8)
         u16p = ctypes.POINTER(ctypes.c_uint16)
         intp = ctypes.POINTER(ctypes.c_int)
+        floatp = ctypes.POINTER(ctypes.c_float)
         sig = {
             "sim_maze_size": ([], ctypes.c_int),
             "sim_goals": ([u8p, u8p, ctypes.c_int], ctypes.c_int),
@@ -125,6 +136,8 @@ class MazeSim:
             "sim_cell_known": ([ctypes.c_int, ctypes.c_int], ctypes.c_int),
             "sim_cell_value": ([ctypes.c_int, ctypes.c_int], ctypes.c_uint16),
             "sim_route": ([u8p, u8p, ctypes.c_int, u16p, u16p], ctypes.c_int),
+            "sim_run_profile": ([floatp], None),
+            "sim_run_plan": ([ctypes.c_int, u8p, u8p, floatp, ctypes.c_int, floatp, intp], ctypes.c_int),
         }
         for name, (args, res) in sig.items():
             fn = getattr(self.dll, name)
@@ -202,6 +215,29 @@ class MazeSim:
         found, best = ctypes.c_uint16(), ctypes.c_uint16()
         n = self.dll.sim_route(types, cells, 300, ctypes.byref(found), ctypes.byref(best))
         return [(types[i], cells[i]) for i in range(n)], found.value, best.value
+
+    # --- 最短走行(時間) ---
+    def run_profile(self):
+        """速度のパラメータ(params.h の RUN_*)と区画の大きさ[mm]"""
+        out = (ctypes.c_float * 6)()
+        self.dll.sim_run_profile(out)
+        return {"accel": out[0], "vmax": out[1],
+                "v_turn": {RUN_SMALL90_R: out[2], RUN_SMALL90_L: out[2],
+                           RUN_LARGE90_R: out[3], RUN_LARGE90_L: out[3],
+                           RUN_LARGE180_R: out[4], RUN_LARGE180_L: out[4]},
+                "section": out[5]}
+
+    def run_plan(self, kind):
+        """最短走行の指令の列。([(種類, 半区画数), ...], [指令ごとの時間], 合計[s], 加速度が足りるか)。
+        行けなければ None。kind は PLAN_TIME / PLAN_COST / PLAN_TIME_BEST。"""
+        types = (ctypes.c_uint8 * 300)()
+        halves = (ctypes.c_uint8 * 300)()
+        times = (ctypes.c_float * 300)()
+        total, feasible = ctypes.c_float(), ctypes.c_int()
+        n = self.dll.sim_run_plan(kind, types, halves, times, 300, ctypes.byref(total), ctypes.byref(feasible))
+        if n == 0:
+            return None
+        return [(types[i], halves[i]) for i in range(n)], [times[i] for i in range(n)], total.value, feasible.value == 1
 
 
 if __name__ == "__main__":
