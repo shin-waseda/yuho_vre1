@@ -10,6 +10,7 @@
 #include "app/sd_dump.h"
 #include "app/pivot_test.h"
 #include "app/party_mode.h"
+#include "app/sensor_log.h"
 #include "app/failsafe.h"
 #include "app/logger.h"
 #include "interface/sdcard.h"
@@ -17,6 +18,7 @@
 static const char *ModeName(RobotMode mode) {
     switch (mode) {
         case MODE_SENSOR:        return "SENSOR";
+        case MODE_SENSOR_LOG:    return "SENSOR_LOG";
         case MODE_VEL_PID:       return "VEL_PID";
         case MODE_STRAIGHT_TEST: return "STRAIGHT";
         case MODE_PIVOT_TEST:    return "PIVOT";
@@ -31,7 +33,7 @@ static const char *ModeName(RobotMode mode) {
 // ---- メニューの階層 ----
 // 一番上の階層の各項目が、その中のモードの一覧を持つ。並び順がエンコーダで送る順になる。
 static const RobotMode s_test_modes[] = {
-    MODE_SENSOR, MODE_VEL_PID, MODE_STRAIGHT_TEST, MODE_PIVOT_TEST, MODE_LED_TEST, MODE_PARTY,
+    MODE_SENSOR, MODE_SENSOR_LOG, MODE_VEL_PID, MODE_STRAIGHT_TEST, MODE_PIVOT_TEST, MODE_LED_TEST, MODE_PARTY,
 };
 static const RobotMode s_sd_modes[] = {
     MODE_SD_DUMP, MODE_SD_DUMP_ALL,
@@ -230,6 +232,9 @@ void ModeUI_Run(RobotMode mode) {
     switch (mode) {
         case MODE_SENSOR:
             TestMode_Run();
+            break;
+        case MODE_SENSOR_LOG:
+            SensorLog_Run();
             break;
         case MODE_VEL_PID:
             VelPIDTest_Run();

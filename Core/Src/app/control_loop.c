@@ -9,6 +9,7 @@
 #include "logic/state_estimation/kinematics.h"
 #include "logic/control/velocity_pid.h"
 #include "logic/control/velocity_profile.h"
+#include "logic/control/wall_control.h"
 #include "app/failsafe.h"
 
 #define DEG_TO_RAD (3.14159265f / 180.0f)
@@ -27,6 +28,10 @@ static float s_angle_ref_deg = 0.0f;
 static float s_pos_ref_mm = 0.0f;
 static float s_dist_mm = 0.0f;
 static volatile bool s_position_hold = true; // メインが書き、ISRが読む
+
+// 壁の制御(直進中に、壁センサーで目標の向きを動かす)。ISRからのみ触る。
+static WallControl s_wall;
+static bool s_wall_active = false; // 前のtickで壁の制御を動かしていたか
 
 // 目標(並進・回転)。プロファイル実行中はISRが毎tick書き換える。
 static float s_target_mm_s = 0.0f;
@@ -298,6 +303,21 @@ void App_ControlTick(void) {
         s_dist_mm = 0.0f;
     }
 
+    // ---- 壁の制御 ----
+    // 直進中(並進の目標あり、旋回の目標なし)だけ、壁センサーのずれに応じて目標の向きを動かす。
+    // 止まっている間と超信地旋回中は使わない。直進を始めるたびに切れ目の検出の履歴を捨てる。
+    float wall_corr_dps = 0.0f;
+    bool wall_straight = control_active && (s_target_mm_s > 0.0f) && (s_target_omega_dps == 0.0f);
+    if (WALL_CONTROL_ENABLE && wall_straight) {
+        if (!s_wall_active) WallControl_Reset(&s_wall);
+        WallSensorValues wv = { .l = ad_l, .fl = ad_fl, .fr = ad_fr, .r = ad_r };
+        wall_corr_dps = WallControl_Update(&s_wall, wv, s_dist_mm, NULL, NULL);
+        s_angle_ref_deg += wall_corr_dps * CONTROL_DT_S;
+        s_wall_active = true;
+    } else {
+        s_wall_active = false;
+    }
+
     // ---- 位置のループ(外側、並進方向) ----
     // v_cmd = v_ref + POSITION_KP×(s_ref − s)。出力は車輪速度の目標になる。
     float pos_corr = 0.0f;
@@ -375,6 +395,12 @@ void App_ControlTick(void) {
     s_dbg.angle_deg = s_gyro_angle_deg;
     s_dbg.angle_ref_deg = s_angle_ref_deg;
     s_dbg.ang_corr_dps = ang_corr / DEG_TO_RAD;
+    // 壁センサー(このtickの先頭で Sensor_ReadAll() が更新した値)。制御が無効の間も記録する
+    s_dbg.ad_l = (float)ad_l;
+    s_dbg.ad_fl = (float)ad_fl;
+    s_dbg.ad_fr = (float)ad_fr;
+    s_dbg.ad_r = (float)ad_r;
+    s_dbg.wall_corr_dps = wall_corr_dps;
 
     // 発動中は毎tick止め直す。メインが直前にSetEnabled(true)と競合して
     // STBYをHighにしていても、ここで必ずLowへ戻る。

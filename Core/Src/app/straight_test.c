@@ -29,11 +29,34 @@
 // 手を離してから走り出すまでの待ち[ms](手を離す時間)。
 #define STRAIGHT_TEST_START_DELAY_MS 1000
 
+// 1: 壁センサーの値を記録する(壁のある通路を走らせて、境界での値や区画の中での変わり方を見る)。
+//    列の上限があるので、FF・I 項・車輪の目標の代わりに壁センサーの4列を入れる。ファイル名は wall_run。
+// 0: 制御の調整用(FF・I 項・車輪の目標を記録する)。ファイル名は trapezoid。
+#define STRAIGHT_TEST_LOG_WALL 1
+
 static void SetupLogger(void) {
     const ControlDebug *d = App_GetControlDebug();
 
     Logger_Init();
     Logger_SetDirName("straight");
+#if STRAIGHT_TEST_LOG_WALL
+    Logger_SetFileName("wall_run");
+    Logger_AddField("target", &d->target_mm_s);
+    Logger_AddField("pos_ref", &d->pos_ref);
+    Logger_AddField("dist", &d->dist_mm);
+    Logger_AddField("vl", &d->vl);
+    Logger_AddField("vr", &d->vr);
+    Logger_AddField("gyro_z", &d->gyro_z_dps);
+    Logger_AddField("angle_ref", &d->angle_ref_deg);
+    Logger_AddField("angle", &d->angle_deg);
+    Logger_AddField("ang_corr", &d->ang_corr_dps);
+    Logger_AddField("wall_corr", &d->wall_corr_dps);
+    Logger_AddField("ad_l", &d->ad_l);
+    Logger_AddField("ad_fl", &d->ad_fl);
+    Logger_AddField("ad_fr", &d->ad_fr);
+    Logger_AddField("ad_r", &d->ad_r);
+    Logger_AddField("vbat", &d->vbat);
+#else
     Logger_SetFileName("trapezoid");
     Logger_AddField("target", &d->target_mm_s);
     Logger_AddField("pos_ref", &d->pos_ref); // 目標の距離(dist と同じ基準)
@@ -52,6 +75,7 @@ static void SetupLogger(void) {
     Logger_AddField("i_l", &d->i_l);
     Logger_AddField("i_r", &d->i_r);
     Logger_AddField("vbat", &d->vbat);
+#endif
     Logger_SetDuration(STRAIGHT_TEST_LOG_MS);
 }
 
@@ -108,6 +132,8 @@ void StraightTest_Run(void) {
            ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", ANGULAR_KP, ANGLE_KP);
     printf("POSITION: %s POSITION_KP=%.2f\r\n",
            POSITION_CONTROL_ENABLE ? "ON" : "OFF", POSITION_KP);
+    printf("WALL: %s WALL_KP=%.2f REF L=%d R=%d\r\n",
+           WALL_CONTROL_ENABLE ? "ON" : "OFF", WALL_KP, WALL_REF_L, WALL_REF_R);
     printf("FF L: fric=%.3f gain=%.5f acc=%.6f / R: fric=%.3f gain=%.5f acc=%.6f [V]\r\n",
            VELOCITY_FF_FRIC_L, VELOCITY_FF_GAIN_L, VELOCITY_FF_ACC_L,
            VELOCITY_FF_FRIC_R, VELOCITY_FF_GAIN_R, VELOCITY_FF_ACC_R);

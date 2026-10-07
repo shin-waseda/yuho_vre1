@@ -9,10 +9,11 @@
 #include "robot_state.h"
 
 // 実行するモード(メニューの末端)。メニューの階層と並び順は mode_ui.c の表で決める。
-//   TEST: SENSOR / VEL_PID / STRAIGHT / PIVOT / LED_TEST / PARTY
+//   TEST: SENSOR / SENSOR_LOG / VEL_PID / STRAIGHT / PIVOT / LED_TEST / PARTY
 //   SD  : DUMP / DUMP_ALL
 typedef enum {
     MODE_SENSOR = 0,    // センサー・ジャイロ・エンコーダの値を表示し続ける
+    MODE_SENSOR_LOG,    // 壁センサーの値を数秒ぶん記録する(止まった状態)
     MODE_VEL_PID,
     MODE_STRAIGHT_TEST,
     MODE_PIVOT_TEST,

@@ -93,6 +93,8 @@ typedef struct {
     float angle_deg;        // ジャイロの積分角(起動からの累積)
     float angle_ref_deg;    // 目標の向き(angle_deg と同じ基準。止まってもリセットしない)
     float ang_corr_dps;     // 角速度ループの補正量(目標角速度に足した分)
+    float ad_l, ad_fl, ad_fr, ad_r; // 壁センサーの値(IR 点灯 − 消灯の差。ad_* を float にしたもの)
+    float wall_corr_dps;    // 壁の制御が目標の向きを動かした速さ[dps](使える壁がなければ0)
 } ControlDebug;
 
 const ControlDebug *App_GetControlDebug(void);
