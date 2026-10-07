@@ -113,19 +113,32 @@ static bool Exists(const char *path) {
     return f_stat(path, &fno) == FR_OK;
 }
 
+// dir/prefix_NNNN の番号が、ログの拡張子(.csv / .bin)のどれかで、dir か sent/dir に使われているか
+static bool NumberUsed(const char *dir, const char *prefix, uint32_t i) {
+    static const char *const kExts[] = { "csv", "bin" };
+    char path[SDCARD_PATH_MAX];
+    char sent_path[SDCARD_PATH_MAX + sizeof(SDCARD_SENT_DIR)];
+    for (uint32_t e = 0; e < sizeof(kExts) / sizeof(kExts[0]); e++) {
+        snprintf(path, sizeof(path), "%s/%s_%04lu.%s", dir, prefix, (unsigned long)i, kExts[e]);
+        snprintf(sent_path, sizeof(sent_path), "%s/%s", SDCARD_SENT_DIR, path);
+        if (Exists(path) || Exists(sent_path)) return true;
+    }
+    return false;
+}
+
 bool SDCard_OpenNewSequential(const char *dir, const char *prefix, const char *ext,
                               char *path_out, uint32_t path_len) {
     if (!s_mounted || s_file_open) return false;
     if (!EnsureDir(dir)) return false;
 
     char path[SDCARD_PATH_MAX];
-    char sent_path[SDCARD_PATH_MAX + sizeof(SDCARD_SENT_DIR)];
     // 1から順に、まだ使っていない番号を探す。送信済み(sent/へ移動済み)の番号も
     // 使用済みとみなす(でないと送信後に同じ名前が再び作られ、移動・PC保存で衝突する)。
+    // 拡張子が違っても(.csv と .bin)同じ番号は使わない(PC で .bin から .csv を作ったときに、
+    // 古い同じ番号の .csv とぶつからないように)。
     for (uint32_t i = 1; i <= 9999; i++) {
+        if (NumberUsed(dir, prefix, i)) continue;
         snprintf(path, sizeof(path), "%s/%s_%04lu.%s", dir, prefix, (unsigned long)i, ext);
-        snprintf(sent_path, sizeof(sent_path), "%s/%s", SDCARD_SENT_DIR, path);
-        if (Exists(sent_path)) continue;
 
         FRESULT res = f_open(&s_file, path, FA_CREATE_NEW | FA_WRITE);
         if (res == FR_EXIST) continue;
@@ -194,6 +207,163 @@ bool SDCard_Sync(void) {
         return false;
     }
     return true;
+}
+
+// ============================================================
+// 待たない書き込み(走りながらログを流すため)
+// ファイルを先に reserve バイトまで伸ばして領域を確保し、高速シークのクラスタの対応表(cltbl)から
+// ファイルの中の位置 → カードのセクタ番号を自分で計算して、HAL_SD_WriteBlocks_DMA を始めるだけで戻る。
+// FatFs を通さないので、f_write のように DMA の終わりやカードの書き込み(PROGRAMMING)を待たない。
+// 終わったかは SDCard_StreamPoll() で見に行く。確保した領域が途中で途切れていても、
+// 途切れ目で DMA を分けて書く。
+// ============================================================
+
+#define STREAM_CLMT_ITEMS 64 // クラスタの対応表の大きさ(途切れ 31 か所まで)
+
+typedef enum {
+    STREAM_IDLE,     // 書いていない
+    STREAM_WAIT,     // カードが待機(TRANSFER)に戻るのを待ってから、次の DMA を始める
+    STREAM_DMA,      // DMA で送っている
+    STREAM_ERROR,
+} StreamState;
+
+static DWORD s_clmt[STREAM_CLMT_ITEMS];
+static bool s_stream_open = false;
+static uint32_t s_stream_reserve = 0;
+static StreamState s_stream_state = STREAM_IDLE;
+static const uint8_t *s_stream_buf = NULL; // これから送るデータ
+static uint32_t s_stream_off = 0;          // そのファイルの中の位置[バイト]
+static uint32_t s_stream_left = 0;         // 残り[バイト]
+static uint32_t s_stream_run = 0;          // 今の DMA で送っているセクタ数
+
+// ファイルの中の位置 off(セクタ境界)の、カードのセクタ番号と、そこから連続しているセクタ数
+static bool OffsetToSector(uint32_t off, uint32_t *sector, uint32_t *contig) {
+    FATFS *fs = s_file.obj.fs;
+    uint32_t clsz = (uint32_t)fs->csize * 512u;
+    uint32_t cl = off / clsz;            // 何番目のクラスタか
+    uint32_t in_cl = (off % clsz) / 512u; // クラスタの中の何番目のセクタか
+    const DWORD *t = &s_clmt[1];         // (クラスタ数, 始まりのクラスタ) の組の並び。0 で終わり
+    while (t[0] != 0) {
+        if (cl < t[0]) {
+            uint32_t clst = t[1] + cl;
+            *sector = fs->database + (clst - 2u) * fs->csize + in_cl;
+            *contig = (t[0] - cl) * fs->csize - in_cl;
+            return true;
+        }
+        cl -= t[0];
+        t += 2;
+    }
+    return false;
+}
+
+// 残りのうち、連続している所まで DMA を始める
+static void StreamStartRun(void) {
+    uint32_t sector, contig;
+    if (!OffsetToSector(s_stream_off, &sector, &contig)) {
+        s_stream_state = STREAM_ERROR;
+        return;
+    }
+    uint32_t n = s_stream_left / 512u;
+    if (n > contig) n = contig;
+    if (HAL_SD_WriteBlocks_DMA(&hsd, (uint8_t *)s_stream_buf, sector, n) != HAL_OK) {
+        printf("SD: stream DMA start failed\r\n");
+        PrintHalDiag();
+        s_stream_state = STREAM_ERROR;
+        return;
+    }
+    s_stream_run = n;
+    s_stream_state = STREAM_DMA;
+}
+
+bool SDCard_StreamOpen(const char *dir, const char *prefix, const char *ext, uint32_t reserve,
+                       char *path_out, uint32_t path_len) {
+    if (s_stream_open) return false;
+    if (!SDCard_OpenNewSequential(dir, prefix, ext, path_out, path_len)) return false;
+
+    // 先に伸ばして領域を確保する(書き込みで開いたファイルは、終わりより先へ f_lseek すると伸びる)
+    FRESULT res = f_lseek(&s_file, reserve);
+    if (res != FR_OK || f_size(&s_file) != reserve || f_sync(&s_file) != FR_OK) {
+        printf("SD: stream reserve failed (FRESULT=%d)\r\n", (int)res);
+        SDCard_Close();
+        return false;
+    }
+    // クラスタの対応表を作る
+    s_clmt[0] = STREAM_CLMT_ITEMS;
+    s_file.cltbl = s_clmt;
+    res = f_lseek(&s_file, CREATE_LINKMAP);
+    if (res != FR_OK) {
+        printf("SD: stream link map failed (FRESULT=%d, file too fragmented?)\r\n", (int)res);
+        s_file.cltbl = NULL;
+        SDCard_Close();
+        return false;
+    }
+    s_stream_open = true;
+    s_stream_reserve = reserve;
+    s_stream_state = STREAM_IDLE;
+    return true;
+}
+
+bool SDCard_StreamWrite(uint32_t offset, const void *data, uint32_t len) {
+    if (!s_stream_open || s_stream_state != STREAM_IDLE) return false;
+    if ((offset % 512u) != 0 || (len % 512u) != 0 || len == 0) return false;
+    if (offset + len > s_stream_reserve) return false;
+    s_stream_buf = (const uint8_t *)data;
+    s_stream_off = offset;
+    s_stream_left = len;
+    s_stream_state = STREAM_WAIT; // カードが待機に戻ったら始める(次の Poll で)
+    return true;
+}
+
+int SDCard_StreamPoll(void) {
+    switch (s_stream_state) {
+        case STREAM_DMA:
+            if (HAL_SD_GetState(&hsd) != HAL_SD_STATE_READY) return 1; // まだ送っている
+            if (HAL_SD_GetError(&hsd) != HAL_SD_ERROR_NONE) {
+                printf("SD: stream DMA failed\r\n");
+                PrintHalDiag();
+                s_stream_state = STREAM_ERROR;
+                return -1;
+            }
+            s_stream_buf += s_stream_run * 512u;
+            s_stream_off += s_stream_run * 512u;
+            s_stream_left -= s_stream_run * 512u;
+            s_stream_state = STREAM_WAIT; // カードが書き終わる(PROGRAMMING → TRANSFER)のを待つ
+            return 1;
+        case STREAM_WAIT:
+            if (HAL_SD_GetCardState(&hsd) != HAL_SD_CARD_TRANSFER) return 1; // カードが書いている
+            if (s_stream_left == 0) {
+                s_stream_state = STREAM_IDLE;
+                return 0;
+            }
+            StreamStartRun();
+            return (s_stream_state == STREAM_ERROR) ? -1 : 1;
+        case STREAM_IDLE:
+            return 0;
+        case STREAM_ERROR:
+        default:
+            return -1;
+    }
+}
+
+bool SDCard_StreamClose(uint32_t final_size) {
+    if (!s_stream_open) return false;
+    // 書き終わるまで待つ(止まっているときに呼ぶ想定)
+    uint32_t t0 = HAL_GetTick();
+    while (SDCard_StreamPoll() == 1) {
+        if (HAL_GetTick() - t0 > 2000u) {
+            s_stream_state = STREAM_ERROR;
+            break;
+        }
+    }
+    bool ok = (s_stream_state == STREAM_IDLE);
+    s_stream_open = false;
+
+    // 書いた所までに縮めて閉じる(高速シークの表は外してから)
+    s_file.cltbl = NULL;
+    if (final_size > s_stream_reserve) final_size = s_stream_reserve;
+    if (f_lseek(&s_file, final_size) != FR_OK || f_truncate(&s_file) != FR_OK) ok = false;
+    bool closed = SDCard_Close();
+    return ok && closed;
 }
 
 bool SDCard_Close(void) {

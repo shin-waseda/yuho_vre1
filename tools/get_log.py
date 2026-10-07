@@ -26,8 +26,8 @@ Logger の形式 (divergence_v3 と同じ):
     python tools/get_log.py --plot-file logs/vel_pid/step_20261003_120000.csv  # 保存済みCSVを表示
     python tools/get_log.py --bin2csv logs/search/search_0008.bin  # 保存済みのバイナリログをCSVにする
 
-SD の .bin (探索など、走りながら追記したバイナリログ。形式は parse_ylog) は、受け取ると
-隣に同じ名前の .csv も作る。
+SD のログはすべて .bin (バイナリ。形式は parse_ylog) で、受け取ると隣に同じ名前の .csv も作る。
+(古い機体のプログラムが書いた .csv は、そのまま保存する)
 
 ログ以外の行 (printf の出力) はそのまま画面に表示する。
 UART を他のターミナルソフトで開いていると受信できないので、閉じてから使うこと。
@@ -36,6 +36,7 @@ UART を他のターミナルソフトで開いていると受信できないの
 import argparse
 import csv
 import datetime
+import io
 import re
 import struct
 import sys
@@ -159,27 +160,72 @@ def save_file(out_root: Path, path: str, data: bytes):
     return dest
 
 
-YLOG_MAGIC = b"YLOG1"
+YLOG_HEADER_BYTES = 512
+YBLK_MAGIC = 0x4B4C4259  # "YBLK"
 
 
 def parse_ylog(data: bytes):
-    """探索などの追記用のバイナリログ (logger.c の LOG_BIN_MAGIC) を (names, rows) にする。
-    形式: "YLOG1\\n<列数>\\n<列名,...>\\n" + float32 (little endian) x 列数 x 行数。
-    最後の行が途中で切れていれば (書いている途中で電源が切れたなど) 捨てる。"""
-    lines = data.split(b"\n", 3)
-    if len(lines) < 4 or lines[0] != YLOG_MAGIC:
-        raise ValueError("not a YLOG1 file")
-    count = int(lines[1])
-    # 列名の行は、データの書き始めをセクタの区切りにそろえるため後ろが空白で埋めてある
-    names = lines[2].decode("ascii").strip().split(",")
-    if len(names) != count:
-        raise ValueError(f"header says {count} columns but has {len(names)} names")
-    body = lines[3]
-    row_bytes = 4 * count
-    n_rows = len(body) // row_bytes
-    values = struct.unpack_from(f"<{n_rows * count}f", body)
-    rows = [values[r * count:(r + 1) * count] for r in range(n_rows)]
-    return names, rows
+    """SD のバイナリログ (logger.c の説明) を (names, rows) にする。
+    YLOG1: "YLOG1\\n<列数>\\n<列名,...><空白>\\n" + float32 (little endian) x 列数 x 行数。
+           最後の行が途中で切れていれば (書いている途中で電源が切れたなど) 捨てる。
+    YLOG2: "YLOG2\\n<列数>\\n<列名,...>\\n<ブロックのバイト数><空白>\\n" (先頭は512バイト) +
+           ブロック x 個数。ブロックは [uint32 magic "YBLK", 通し番号, 行数, 列数] + float32 x 列数 x 行数。
+           走りながら流したもの。通し番号が飛んだ・ブロックが壊れていたら、そこで止める。"""
+    magic = data[:5]
+    if magic == b"YLOG1":
+        lines = data.split(b"\n", 3)
+        if len(lines) < 4:
+            raise ValueError("broken YLOG1 header")
+        count = int(lines[1])
+        # 列名の行は、データの書き始めをセクタの区切りにそろえるため後ろが空白で埋めてある
+        names = lines[2].decode("ascii").strip().split(",")
+        if len(names) != count:
+            raise ValueError(f"header says {count} columns but has {len(names)} names")
+        body = lines[3]
+        n_rows = len(body) // (4 * count)
+        values = struct.unpack_from(f"<{n_rows * count}f", body)
+        return names, [values[r * count:(r + 1) * count] for r in range(n_rows)]
+
+    if magic == b"YLOG2":
+        lines = data[:YLOG_HEADER_BYTES].split(b"\n")
+        count = int(lines[1])
+        names = lines[2].decode("ascii").strip().split(",")
+        block_bytes = int(lines[3].strip())
+        if len(names) != count:
+            raise ValueError(f"header says {count} columns but has {len(names)} names")
+        rows = []
+        pos = YLOG_HEADER_BYTES
+        seq = 0
+        while pos + 16 <= len(data):
+            blk_magic, blk_seq, n_rows, n_cols = struct.unpack_from("<4I", data, pos)
+            if blk_magic != YBLK_MAGIC or blk_seq != seq or n_cols != count:
+                break  # 書かれていない所 (または壊れたブロック)
+            values = struct.unpack_from(f"<{n_rows * count}f", data, pos + 16)
+            rows.extend(values[r * count:(r + 1) * count] for r in range(n_rows))
+            pos += block_bytes
+            seq += 1
+        return names, rows
+
+    raise ValueError("not a YLOG1/YLOG2 file")
+
+
+def ylog_summary(bin_path: Path) -> str:
+    """バイナリログの行数と、time_s の飛び (行が抜けた所) を短くまとめる (流す方式の確かめ用)。"""
+    names, rows = parse_ylog(bin_path.read_bytes())
+    if TIME_COLUMN not in names or len(rows) < 2:
+        return f"{len(rows)} rows"
+    ti = names.index(TIME_COLUMN)
+    t = [r[ti] for r in rows]
+    steps = sorted(b - a for a, b in zip(t, t[1:]))
+    step = steps[len(steps) // 2]  # ふつうの間隔 (中央値)
+    gaps = [(a, b - a) for a, b in zip(t, t[1:]) if b - a > 1.5 * step]
+    text = f"{len(rows)} rows, {t[-1] - t[0]:.2f} s, step {step * 1000:.1f} ms"
+    if gaps:
+        lost = sum(g for _, g in gaps) - step * len(gaps)
+        text += f", {len(gaps)} gaps (lost {lost:.3f} s, first at {gaps[0][0]:.3f} s)"
+    else:
+        text += ", no gaps"
+    return text
 
 
 def write_csv(path: Path, names, rows):
@@ -190,11 +236,75 @@ def write_csv(path: Path, names, rows):
             writer.writerow([f"{v:.6g}" for v in row])
 
 
+LOG_EVENT_HEADER = Path(__file__).resolve().parent.parent / "Core" / "Inc" / "app" / "log_event.h"
+EVENT_SLOTS = ["ev_a", "ev_b", "ev_c", "ev_d", "ev_e"]
+
+
+def load_event_table(header: Path = LOG_EVENT_HEADER):
+    """機体の app/log_event.h から {番号: (名前, [(列, 中身の名前), ...])} を作る。
+    「LOG_EV_名前 = 番号, // a:名前 b:名前 ...」の行を読む。"""
+    table = {}
+    if not header.exists():
+        return table
+    pat = re.compile(r"LOG_EV_(\w+)\s*=\s*(\d+)\s*,\s*(?://(.*))?")
+    for line in header.read_text(encoding="utf-8").splitlines():
+        m = pat.search(line)
+        if not m:
+            continue
+        name, code, comment = m.group(1), int(m.group(2)), m.group(3) or ""
+        labels = []
+        for tok in comment.split():
+            if len(tok) > 2 and tok[1] == ":" and tok[0] in "abcde":
+                labels.append(("ev_" + tok[0], tok[2:]))
+        table[code] = (name, labels)
+    return table
+
+
+def event_texts(names, rows):
+    """"ev" 列があれば、行ごとのイベントを "名前 中身=値 ..." の文字列にしたリストを返す(なければ None)。"""
+    if "ev" not in names:
+        return None
+    table = load_event_table()
+    idx = {n: i for i, n in enumerate(names)}
+    texts = []
+    for row in rows:
+        code = int(round(row[idx["ev"]]))
+        if code == 0:
+            texts.append("")
+            continue
+        name, labels = table.get(code, (f"EV{code}", [(s, s) for s in EVENT_SLOTS]))
+        parts = [name]
+        for slot, label in labels:
+            if slot in idx:
+                parts.append(f"{label}={row[idx[slot]]:.6g}")
+        texts.append(" ".join(parts))
+    return texts
+
+
 def ylog_to_csv(bin_path: Path) -> Path:
-    """.bin の隣に同じ名前の .csv を作る (あれば上書き)。"""
+    """.bin の隣に同じ名前の .csv を作る。同じ名前で中身の違う .csv (古いプログラムが書いた
+    同じ番号のログなど) があれば上書きせず _dup1, _dup2 ... を付ける。同じ中身ならそのまま。"""
     names, rows = parse_ylog(bin_path.read_bytes())
+    ev_texts = event_texts(names, rows) # イベントの列があれば、読める文字の列を足す
+    buf = io.StringIO(newline="")
+    writer = csv.writer(buf)
+    writer.writerow(names + (["ev_text"] if ev_texts is not None else []))
+    for i, row in enumerate(rows):
+        cells = [f"{v:.6g}" for v in row]
+        if ev_texts is not None:
+            cells.append(ev_texts[i])
+        writer.writerow(cells)
+    text = buf.getvalue().encode("utf-8")
+
     csv_path = bin_path.with_suffix(".csv")
-    write_csv(csv_path, names, rows)
+    stem = csv_path.stem
+    i = 0
+    while csv_path.exists():
+        if csv_path.read_bytes() == text:
+            return csv_path  # 同じ .bin から作ったもの
+        i += 1
+        csv_path = bin_path.with_name(f"{stem}_dup{i}.csv")
+    csv_path.write_bytes(text)
     return csv_path
 
 
@@ -281,7 +391,7 @@ def run_receiver(args):
                     # 追記用のバイナリログは、読めるように隣に CSV も作る
                     try:
                         csv_path = ylog_to_csv(dest)
-                        print(f"[converted] {csv_path}")
+                        print(f"[converted] {csv_path} ({ylog_summary(dest)})")
                         dest = csv_path
                     except (ValueError, struct.error) as e:
                         print(f"[warn] {dest}: could not convert to CSV ({e})", file=sys.stderr)
@@ -318,7 +428,7 @@ def main():
 
     if args.bin2csv:
         for p in args.bin2csv:
-            print(f"[converted] {ylog_to_csv(p)}")
+            print(f"[converted] {ylog_to_csv(p)} ({ylog_summary(p)})")
         return
     if args.plot_file:
         plot_csv(args.plot_file)

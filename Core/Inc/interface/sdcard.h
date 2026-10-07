@@ -35,6 +35,21 @@ bool SDCard_Read(void *buf, uint32_t len, uint32_t *got_out);
 // 書いた内容をカードへ確定させる(開いたまま)。途中で電源が切れても、ここまでは残る。
 bool SDCard_Sync(void);
 
+// ---- 待たない書き込み(走りながらログを流す用) ----
+// SDCard_StreamOpen: dir/prefix_NNNN.ext を新しく作り、reserve バイトまで先に伸ばして領域を確保する
+//   (確保に時間がかかることがある。走る前に呼ぶ)。
+// SDCard_StreamWrite: ファイルの offset から len バイトを書き始めて、すぐ戻る(offset と len は 512 の倍数)。
+//   data は書き終わるまで変えないこと(4バイト境界にそろえる)。前の書き込みが終わっていなければ false。
+// SDCard_StreamPoll: 進める。0 = 書き終わった(次を書ける)、1 = 書いている、-1 = 失敗。何度呼んでもよい。
+//   DMA の終わりとカードの書き込みの終わりを見に行くだけで、待たない。
+// SDCard_StreamClose: 書き終わるのを待ち(止まっているとき用)、final_size バイトに縮めて閉じる。
+// 流している間は、他の SD の関数(f_write など)を呼ばないこと。
+bool SDCard_StreamOpen(const char *dir, const char *prefix, const char *ext, uint32_t reserve,
+                       char *path_out, uint32_t path_len);
+bool SDCard_StreamWrite(uint32_t offset, const void *data, uint32_t len);
+int SDCard_StreamPoll(void);
+bool SDCard_StreamClose(uint32_t final_size);
+
 bool SDCard_Close(void);
 
 // base("" ならルート)直下と、その1段下のフォルダにあるログ(.csv と .bin)のパスを、
