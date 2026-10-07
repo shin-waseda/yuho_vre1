@@ -26,7 +26,7 @@ static bool SideUsable(WallSideState *s, uint16_t value, uint16_t threshold, flo
     return value > threshold && dist_mm >= s->hold_until_mm;
 }
 
-float WallControl_Update(WallControl *wc, WallSensorValues v, float dist_mm,
+float WallControl_Update(WallControl *wc, WallSensorValues v, float dist_mm, float speed_mm_s,
                          bool *used_left, bool *used_right) {
     if (!wc->started) {
         SideStart(&wc->left, v.l, dist_mm);
@@ -52,8 +52,12 @@ float WallControl_Update(WallControl *wc, WallSensorValues v, float dist_mm,
         return 0.0f;
     }
 
+    // ゲインは速いほど弱く(遅いときに強くなりすぎないよう、速さは WALL_KP_MIN_V_MM_S で下を抑える)
+    float speed = (speed_mm_s > WALL_KP_MIN_V_MM_S) ? speed_mm_s : WALL_KP_MIN_V_MM_S;
+    float kp = WALL_KP_DEG * (WALL_KP_REF_V_MM_S / speed);
+
     // 左に寄っている(err > 0)なら右へ向ける(時計回り = 負)
-    float offset = -WALL_KP_DEG * err;
+    float offset = -kp * err;
     if (offset > WALL_OFFSET_MAX_DEG) offset = WALL_OFFSET_MAX_DEG;
     if (offset < -WALL_OFFSET_MAX_DEG) offset = -WALL_OFFSET_MAX_DEG;
     return offset;

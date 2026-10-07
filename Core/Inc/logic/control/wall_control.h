@@ -22,11 +22,13 @@ typedef struct {
 // 直進を始めるとき(または直進でなくなったとき)に呼ぶ。切れ目の検出の履歴を捨てる。
 void WallControl_Reset(WallControl *wc);
 
-// 1tick ぶん進める。v: 壁センサーの値、dist_mm: 進んだ距離(増えていく値)。
+// 1tick ぶん進める。v: 壁センサーの値、dist_mm: 進んだ距離(増えていく値)、speed_mm_s: 今の並進の速さ。
 // 戻り値: 迷路の軸の向きに足す向きのオフセットの目標[deg](反時計回り正)。横のずれに比例し、
 // ±WALL_OFFSET_MAX_DEG で頭打ち。使える壁がなければ 0(迷路の軸の向きに戻す)。
+// ゲインは速いほど弱くする(WALL_KP_DEG × WALL_KP_REF_V_MM_S / speed)。横に戻る速さは
+// 「並進の速さ × オフセット」なので、こうすると真ん中に戻るまでの時間が速さによらず同じになる。
 // used_left/used_right(NULL可): その tick で左右の壁を使ったか(ログ用)。
-float WallControl_Update(WallControl *wc, WallSensorValues v, float dist_mm,
+float WallControl_Update(WallControl *wc, WallSensorValues v, float dist_mm, float speed_mm_s,
                          bool *used_left, bool *used_right);
 
 #endif

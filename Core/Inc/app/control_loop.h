@@ -27,11 +27,20 @@ void App_StartStraight(float distance_mm, float v_max, float v_end, float accel)
 // 実際の開始は次のtick。完了はApp_IsMotionDone()で見る。制御が有効でないと進まない。
 void App_StartPivot(float angle_deg, float omega_max_dps, float alpha_dps2);
 
+// スラローム(並進しながら曲がる)。今の並進の目標速度をそのまま保ち、角速度だけを台形で動かして
+// angle_deg 回る(正=反時計回り)。走っている最中(直進のプロファイルが終わって等速のとき)に呼ぶこと。
+// 実際の開始は次のtick。完了(回り終わった)はApp_IsMotionDone()で見る。並進の速さは回った後も保つ。
+void App_StartSlalom(float angle_deg, float omega_max_dps, float alpha_dps2);
+
 bool App_IsMotionDone(void);
 
 // 目標の距離[mm](制御を有効にした時点を0とし、目標の並進速度を毎tick積分した値)。
 // 超信地旋回の間は変わらない。探索で区画の境界・真ん中に着いたかを見るのに使う。
 float App_GetTargetDistance(void);
+
+// 直進中に見つけた最後の壁切れ(横の壁がなくなった瞬間)。side(NULL可): 0 左 / 1 右、
+// pos_ref_mm(NULL可): その瞬間の目標の距離。戻り値は見つけた数(増えたら新しい壁切れ)。
+uint32_t App_GetWallEdge(uint8_t *side, float *pos_ref_mm);
 
 // 位置の制御(前後の位置を保つ)を効かせるかどうか。起動時は true。
 // false の間は目標の距離を今の距離に合わせ続けるので、true に戻しても補正は跳ばない。

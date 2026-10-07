@@ -1,6 +1,7 @@
 #include "app/control_loop.h"
 
 #include <math.h>
+#include <stddef.h>
 #include "main.h" // HAL_GetTick / HAL_Delay(App_RecalibrateGyroZ の待ち)
 #include "interface/encoder.h"
 #include "interface/motor.h"
@@ -11,6 +12,8 @@
 #include "logic/control/velocity_profile.h"
 #include "logic/control/wall_control.h"
 #include "app/failsafe.h"
+#include "app/logger.h"
+#include "app/log_event.h"
 
 #define DEG_TO_RAD (3.14159265f / 180.0f)
 
@@ -48,11 +51,13 @@ static float s_target_omega_dps = 0.0f;
 static float s_target_alpha_dps2 = 0.0f;
 static MotorPWM s_pwm = { 0, 0 };
 
-// 走行プロファイル(直進 or 超信地旋回の一方)。ISRだけが進める。
-// 超信地旋回は、角度[deg]を「距離」、角速度[dps]を「速度」として同じ台形を使う。
+// 走行プロファイル(直進・超信地旋回・スラロームのどれか1つ)。ISRだけが進める。
+// 超信地旋回とスラロームは、角度[deg]を「距離」、角速度[dps]を「速度」として同じ台形を使う。
+// スラロームは並進の目標速度をそのまま保ち、角速度だけを台形で動かす。
 typedef enum {
     MOTION_STRAIGHT,
     MOTION_PIVOT,
+    MOTION_SLALOM,
 } MotionType;
 
 static VelocityProfile s_profile;
@@ -110,6 +115,7 @@ void App_SetTargetVelocity(float mm_s) {
     s_target_omega_dps = 0.0f;
     s_target_alpha_dps2 = 0.0f;
     s_target_mm_s = mm_s;
+    Logger_Event(LOG_EV_SET_VELOCITY, mm_s, 0.0f, 0.0f, 0.0f, 0.0f);
 }
 
 void App_StartStraight(float distance_mm, float v_max, float v_end, float accel) {
@@ -121,6 +127,7 @@ void App_StartStraight(float distance_mm, float v_max, float v_end, float accel)
     s_pending.sign = (distance_mm >= 0.0f) ? 1.0f : -1.0f;
     s_motion_done = false;
     s_start_pending = true; // 最後に立てる
+    Logger_Event(LOG_EV_STRAIGHT, distance_mm, v_max, v_end, accel, 0.0f);
 }
 
 void App_StartPivot(float angle_deg, float omega_max_dps, float alpha_dps2) {
@@ -132,6 +139,19 @@ void App_StartPivot(float angle_deg, float omega_max_dps, float alpha_dps2) {
     s_pending.sign = (angle_deg >= 0.0f) ? 1.0f : -1.0f;
     s_motion_done = false;
     s_start_pending = true; // 最後に立てる
+    Logger_Event(LOG_EV_PIVOT, angle_deg, omega_max_dps, alpha_dps2, 0.0f, 0.0f);
+}
+
+void App_StartSlalom(float angle_deg, float omega_max_dps, float alpha_dps2) {
+    s_pending.type = MOTION_SLALOM;
+    s_pending.distance = fabsf(angle_deg);
+    s_pending.v_max = omega_max_dps;
+    s_pending.v_end = 0.0f;
+    s_pending.accel = alpha_dps2;
+    s_pending.sign = (angle_deg >= 0.0f) ? 1.0f : -1.0f;
+    s_motion_done = false;
+    s_start_pending = true; // 最後に立てる
+    Logger_Event(LOG_EV_SLALOM, angle_deg, omega_max_dps, alpha_dps2, s_target_mm_s, 0.0f);
 }
 
 bool App_IsMotionDone(void) {
@@ -140,6 +160,52 @@ bool App_IsMotionDone(void) {
 
 float App_GetTargetDistance(void) {
     return s_pos_ref_mm;
+}
+
+// ---- 壁切れ ----
+typedef struct {
+    bool above;          // しきい値より上(壁あり)
+    float above_from;    // 壁ありになった目標の距離
+} EdgeTrack;
+
+static EdgeTrack s_edge_l = { false, 0.0f };
+static EdgeTrack s_edge_r = { false, 0.0f };
+static volatile uint32_t s_edge_seq = 0;     // 見つけた壁切れの数(メインが新しいものか見分ける)
+static volatile uint8_t s_edge_side = 0;     // 0: 左, 1: 右
+static volatile float s_edge_pos_ref = 0.0f; // 壁切れの瞬間の目標の距離
+
+// ISR から呼ぶ。直進していないときは追わない(見つけ直しになる)。
+static void UpdateWallEdge(EdgeTrack *t, uint16_t value, uint16_t th, uint8_t side, bool moving) {
+    if (!moving) {
+        t->above = false;
+        return;
+    }
+    if (value > th) {
+        if (!t->above) {
+            t->above = true;
+            t->above_from = s_pos_ref_mm;
+        }
+        return;
+    }
+    if (t->above) {
+        t->above = false;
+        if (s_pos_ref_mm - t->above_from >= WALL_EDGE_MIN_WALL_MM) {
+            s_edge_side = side;
+            s_edge_pos_ref = s_pos_ref_mm;
+            s_edge_seq++; // 最後に進める(メインはこれが変わったら読む)
+            Logger_Event(LOG_EV_WALL_EDGE, (float)side, s_pos_ref_mm, s_dist_mm, 0.0f, 0.0f);
+        }
+    }
+}
+
+uint32_t App_GetWallEdge(uint8_t *side, float *pos_ref_mm) {
+    uint32_t seq;
+    do { // ISR が途中で書き換えたら読み直す
+        seq = s_edge_seq;
+        if (side != NULL) *side = s_edge_side;
+        if (pos_ref_mm != NULL) *pos_ref_mm = s_edge_pos_ref;
+    } while (seq != s_edge_seq);
+    return seq;
 }
 
 void App_SetPositionHold(bool en) {
@@ -151,6 +217,7 @@ void App_SetWallPush(bool en) {
 }
 
 void App_SetWallControl(bool en) {
+    if (en != s_wall_ctrl_on) Logger_Event(LOG_EV_WALL_CTRL, en ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     s_wall_ctrl_on = en;
 }
 
@@ -167,9 +234,11 @@ static void UpdateProfile(void) {
             if (v_start < 0.0f) v_start = 0.0f;
             s_target_omega_dps = 0.0f;
             s_target_alpha_dps2 = 0.0f;
-        } else {
+        } else if (s_profile_type == MOTION_PIVOT) {
             s_target_mm_s = 0.0f;        // 超信地旋回はその場で回る
             s_target_acc = 0.0f;
+        } else {
+            s_target_acc = 0.0f;         // スラロームは今の並進の速さのまま曲がる
         }
         VelocityProfile_Start(&s_profile, s_pending.distance, v_start,
                               s_pending.v_max, s_pending.v_end, s_pending.accel);
@@ -190,8 +259,9 @@ static void UpdateProfile(void) {
         s_profile_active = false;
         s_target_acc = 0.0f;
         s_target_alpha_dps2 = 0.0f;
-        if (s_profile_type == MOTION_PIVOT) s_target_omega_dps = 0.0f;
+        if (s_profile_type != MOTION_STRAIGHT) s_target_omega_dps = 0.0f;
         s_motion_done = true;
+        Logger_Event(LOG_EV_MOTION_DONE, (float)s_profile_type, 0.0f, 0.0f, 0.0f, 0.0f);
     }
 }
 
@@ -207,6 +277,7 @@ void App_ControlLoop_SetEnabled(bool en) {
         Motor_Stop();
         Motor_Disable();
     }
+    Logger_Event(LOG_EV_CTRL_ENABLE, en ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
 }
 
 bool App_ControlLoop_IsEnabled(void) {
@@ -354,14 +425,31 @@ void App_ControlTick(void) {
     // 直進を始めるたびに切れ目の検出の履歴を捨てる。
     float wall_offset_target = 0.0f;
     bool wall_straight = control_active && (s_target_mm_s > 0.0f) && (s_target_omega_dps == 0.0f);
+    bool use_l = false, use_r = false;
     if (WALL_CONTROL_ENABLE && s_wall_ctrl_on && wall_straight) {
         if (!s_wall_active) WallControl_Reset(&s_wall);
         WallSensorValues wv = { .l = ad_l, .fl = ad_fl, .fr = ad_fr, .r = ad_r };
-        wall_offset_target = WallControl_Update(&s_wall, wv, s_dist_mm, NULL, NULL);
+        wall_offset_target = WallControl_Update(&s_wall, wv, s_dist_mm, s_target_mm_s, &use_l, &use_r);
         s_wall_active = true;
     } else {
         s_wall_active = false;
     }
+    // 左右どちらの壁を使ったかが変わったらイベントに残す(壁の切れ目・柱で使わなくなった所が分かる)
+    static bool s_prev_use_l = false, s_prev_use_r = false;
+    if (use_l != s_prev_use_l || use_r != s_prev_use_r) {
+        Logger_Event(LOG_EV_WALL_USE, use_l ? 1.0f : 0.0f, use_r ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+        s_prev_use_l = use_l;
+        s_prev_use_r = use_r;
+    }
+
+    // ---- 壁切れ(横の壁がなくなった瞬間)を見つける ----
+    // 直進中に、L か R が壁ありのしきい値より上から下へ切れた瞬間の目標の距離を残す(探索・最短走行が
+    // 進む方向の位置の補正に使う)。柱の横で一瞬だけ跳ねた値に引っかからないよう、その前に
+    // WALL_EDGE_MIN_WALL_MM 以上続けて壁があったときだけ数える。
+    bool moving_straight = control_active && (s_target_mm_s > 0.0f) && (s_target_omega_dps == 0.0f);
+    UpdateWallEdge(&s_edge_l, ad_l, WALL_TH_L, 0u, moving_straight);
+    UpdateWallEdge(&s_edge_r, ad_r, WALL_TH_R, 1u, moving_straight);
+
     if (control_active && !s_wall_push) {
         float step = WALL_OFFSET_RATE_DPS * CONTROL_DT_S;
         float d = wall_offset_target - s_wall_offset_deg;

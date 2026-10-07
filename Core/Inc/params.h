@@ -223,12 +223,29 @@
 #define WALL_CONTROL_ENABLE  1     // 0にすると壁の制御なし(比較試験用)
 #define WALL_REF_L           312   // 真ん中にいるときの L(走行のログのスタート直後)
 #define WALL_REF_R           282   // 真ん中にいるときの R
-#define WALL_KP_DEG          0.03f // [deg / センサーの値](仮の値。誤差100で3°)
+#define WALL_KP_DEG          0.03f // [deg / センサーの値](WALL_KP_REF_V_MM_S のときの値。仮。誤差100で3°)
+// ゲインは速いほど弱くする: WALL_KP_DEG × WALL_KP_REF_V_MM_S / 速さ。
+// 横に戻る速さは「速さ × オフセット」なので、こうすると真ん中に戻るまでの時間が速さによらず同じになる。
+#define WALL_KP_REF_V_MM_S   500.0f // WALL_KP_DEG を合わせた速さ(探索の速さ)
+#define WALL_KP_MIN_V_MM_S   100.0f // これより遅いときは、この速さとして計算する(遅いときに強くなりすぎないよう)
 #define WALL_OFFSET_MAX_DEG  5.0f  // オフセットの上限[deg]
 #define WALL_OFFSET_RATE_DPS 90.0f // オフセットを変える速さの上限[dps](壁が切れたときなどに向きが跳ばないように)
 #define WALL_EDGE_STEP_MM    2.0f  // 値の変化を比べる間隔[mm](5mm では切れ目を見つけるまでに最大5mmぶん補正が漏れた)
 #define WALL_EDGE_DIFF       15    // これを超えて変わったら、壁の切れ目・柱とみなす(2mm あたり)
 #define WALL_EDGE_HOLD_MM    40.0f // 切れ目を見つけてから、その側を使わない距離[mm]
+
+// ============================================================
+// 壁切れ補正(進む方向の位置の補正。探索の1区画の直進と、最短走行の直進で使う)
+// 直進中に横の壁がなくなった瞬間(L か R が WALL_TH_L/R を上から下へ切った瞬間)は、機体が区画の境界を
+// WALL_EDGE_POS_MM 過ぎた所にいるはずなので、そこからずれていた分だけ、次の境界(目標の距離の基準)をずらす。
+// 走行のログ(2026-10-07)では、壁が切れるのは境界を約 75〜82mm 過ぎた所だった(値は 34 列のログで合わせる)。
+// ============================================================
+
+#define WALL_EDGE_CORR_ENABLE  1      // 0 にすると補正しない(壁切れのイベントだけ残す)
+#define WALL_EDGE_POS_MM       78.0f  // 壁が切れるときの、境界からの距離[mm](仮)
+#define WALL_EDGE_WINDOW_MM    30.0f  // 予想の位置からこれ以上ずれた壁切れは使わない(読み違え・別の壁)
+#define WALL_EDGE_MAX_CORR_MM  20.0f  // 1回に直す量の上限[mm]
+#define WALL_EDGE_MIN_WALL_MM  30.0f  // 切れる前に、これ以上続けて壁があったときだけ数える(柱の横で跳ねる値を除く)
 
 // ============================================================
 // フェイルセーフ
@@ -299,17 +316,67 @@
 #define SEARCH_SETPOS_SETTLE_MS    100    // 押し当てた後、モーターを止めて待つ時間
 #define SEARCH_SETPOS_FRONT_MM     40.0f  // 壁に当たった所から真ん中までの距離(探索のログで、真ん中から壁まで 39〜40mm 下がった)
 
-// 探索中のログ。RAM に貯めて、時間で区切って止まったときに SD のファイルへ追記する。
-// 列数 15 で 1 回に約 4 秒ぶん貯められる。前の追記から「貯められる時間 − FLUSH_MARGIN_MS」を過ぎたら、
-// 次に止まったとき(曲がる・尻当て)に追記する。直進が続いていれば、次の境界で真ん中に止まって追記する。
+// 探索・最短走行のログ。走りながら SD へ流し続ける(logger の Logger_Stream*。止まらずに記録できる)。
+// 24KB のブロック2つを交互に使う。15列・5ms ごとなら、1ブロックは約 2 秒ぶんで、SD が待たせても
+// 2 秒までは行を捨てずに済む(SD の書き込みは最大 0.6 秒ほど待たされたことがある)。
 #define SEARCH_LOG_DECIMATION      5      // 5 tick(5ms)に1回記録する
-#define SEARCH_LOG_FLUSH_MARGIN_MS 1000   // 追記しに止まるまでにかかる時間の余裕(境界から真ん中まで + 1区画)
-#define SEARCH_LOG_SAVED_LIGHT_MS  500    // 追記できたら直結の LED を全部点ける時間(追記するたびにこの分だけ待つ)
+#define SEARCH_LOG_SAVED_LIGHT_MS  500    // 走り終わってファイルを閉じられたら、直結の LED を全部点ける時間
 
 // 最短走行(app/search_run の FastRun)。続く直進をまとめてこの速さで走り、曲がるときは真ん中で
 // 止まって超信地旋回する(旋回は探索と同じ SEARCH_TURN_*)。
 #define FAST_V_MM_S             800.0f  // 直進の最高速度(STRAIGHT で 800mm/s は確かめた)
 #define FAST_ACCEL_MM_S2        2000.0f // 加速度・減速度(探索で安定した値)
+
+// 走る前に選べる速さ(モードを決めた直後に、右タイヤを回して選びボタンで決める。電源を切るまでそのまま)。
+// 最初に表示するのは、上の SEARCH_V_MM_S / FAST_V_MM_S / PIVOT の試験の値に一番近いもの。項目は 15 個まで。
+// 探索・STRAIGHT の試験・SLALOM の試験(小回り)の直進の速さ。小回りは曲がるときもこの速さで、
+// 角速度は速さに比例、角加速度は速さの2乗に比例させる(SLALOM_* は SLALOM_V_MM_S のときの値。
+// 曲がる形・前後のオフセット・前壁補正の位置は速さによらず同じになり、横加速度は速さの2乗で増える)。
+#define SPEED_SELECT_SEARCH_V_MM_S   { 300.0f, 400.0f, 500.0f, 600.0f }
+// 最短走行の直進の最高速度(曲がるときの速さは SLALOM_* / FAST_LARGE* のまま)
+#define SPEED_SELECT_FAST_V_MM_S     { 600.0f, 800.0f, 1000.0f, 1200.0f }
+// PIVOT の試験の最高角速度(角加速度は試験の値のまま)
+#define SPEED_SELECT_PIVOT_OMEGA_DPS { 180.0f, 360.0f, 540.0f }
+
+// 最短走行の大回り(SMALL は探索と同じ SLALOM_* の小回り)。前後のオフセットは logic/control/slalom が
+// 計算する(*_ADJ はそこからの調整分)。どれも仮の値で、まず横加速度を小回りより小さめにしてある。
+// 大回り 90°: 区画の中心 → 斜め隣の区画の中心。600mm/s・230dps・3000dps² でオフセット約 7mm、横加速度約 0.25G。
+#define FAST_LARGE90_V_MM_S       600.0f
+#define FAST_LARGE90_OMEGA_DPS    230.0f
+#define FAST_LARGE90_ALPHA_DPS2   3000.0f
+#define FAST_LARGE90_PRE_ADJ_MM   0.0f
+#define FAST_LARGE90_POST_ADJ_MM  0.0f
+// 大回り 180°: 区画の中心 → 隣の列の区画の中心(柱を回る U ターン)。横にちょうど1区画移るよう、
+// 最高角速度は起動時に計算で決める(500mm/s・3000dps² で約 330dps、横加速度約 0.3G の見込み)。
+#define FAST_LARGE180_V_MM_S      500.0f
+#define FAST_LARGE180_ALPHA_DPS2  3000.0f
+#define FAST_LARGE180_PRE_ADJ_MM  0.0f
+#define FAST_LARGE180_POST_ADJ_MM 0.0f
+
+// ============================================================
+// スラローム(小回り 90°、探索用)
+// 並進の速さを保ったまま、角速度を台形(角加速 → 一定 → 角減速)で動かして 90° 曲がる。
+// 曲がる前後の直進(オフセット)は、区画の境界の真ん中から曲がり始め、隣の境界の真ん中で
+// 曲がり終わるように logic/control/slalom が計算する(PRE/POST_ADJ はそこからの調整分)。
+// スリップアングルの補正はまだ入れていない(ログで曲がった後のずれを見てから決める)。
+// 500mm/s・450dps・8000dps² で、オフセットは前後とも約 12mm、横加速度は約 0.4G(計算値)。
+// ============================================================
+
+#define SLALOM_V_MM_S          SEARCH_V_MM_S // 曲がるときの並進の速さ(探索の直進と同じ。探索では止まらずに曲がるため)
+#define SLALOM_OMEGA_DPS       450.0f  // 最高角速度
+#define SLALOM_ALPHA_DPS2      8000.0f // 角加速度
+#define SLALOM_PRE_ADJ_MM      0.0f    // 前のオフセットの調整分(+ で長く)
+#define SLALOM_POST_ADJ_MM     0.0f    // 後ろのオフセットの調整分(+ で長く)
+
+// スラロームの前壁補正(探索の小回り)。曲がる区画の奥に壁があるとき、距離で決めた曲がり始めの位置の
+// 前後 SLALOM_FRONT_WINDOW_MM の間で、FL + FR が SLALOM_FRONT_REF_SUM に届いた瞬間に曲がり始める
+// (届かなければ、範囲の終わりで曲がり始める)。
+// REF_SUM は「正しい曲がり始めの位置(入口の境界 + 前のオフセット)で見える FL + FR」。境界に止めて測った値は
+// FL 240 + FR 127 = 367(2026-10-07、前に壁あり)で、それより 12mm 前なので少し大きいはず(仮に 400)。
+// 走行のログの LOG_EV_FRONT_TRIG(ずれと値)を見て合わせる。
+#define SLALOM_FRONT_ENABLE    1
+#define SLALOM_FRONT_REF_SUM   400     // (仮)
+#define SLALOM_FRONT_WINDOW_MM 15.0f
 
 // 試しの迷路で探索するときのゴール。1 にすると MAZE_GOALS の代わりにこちらを使う。
 // (5×7 の迷路で、スタートの右隣の1区画をゴールにして試す)
