@@ -60,6 +60,22 @@ void Logger_Dump(void);
 // 保存したパスをpath_out(NULL可)へ書く。SD未マウント・失敗時はfalse。
 bool Logger_SaveCSV(char *path_out, uint32_t path_len);
 
+// ---- 長い走行を1つのファイルへ追記していく(探索など。RAM に収まらない長さ用) ----
+// 使い方: Logger_BeginFile() → Logger_Start() → (止まるたびに) Logger_FlushFile() → Logger_EndFile()
+// 追記している間は、時刻だけ進めて記録を休む(その間の記録は抜ける)。
+// バッファが一杯になっても止まらず、次の追記まで時刻を進め続ける(その間の記録も抜ける)。
+// 書く形式はバイナリ(<dir>/<file>_NNNN.bin、中身は logger.c の LOG_BIN_MAGIC の説明)。数値を文字に
+// しないので CSV より速い。SD_DUMP で PC へ送ると、tools/get_log.py が同じ名前の .csv も作る。
+// 開いている間は他のファイルを開けない。
+
+// 新しいファイルを作り、1行目(列名)を書いて開いたままにする。記録中は呼ばないこと。
+bool Logger_BeginFile(char *path_out, uint32_t path_len);
+// ここまでの記録をファイルへ追記してバッファを空にし、記録を続ける(ブロッキング)。
+// 機体が止まっているときに呼ぶ想定(数百 ms かかることがある)。
+bool Logger_FlushFile(void);
+// 記録を止め、残りを追記してファイルを閉じる。
+bool Logger_EndFile(void);
+
 bool Logger_IsRecording(void);
 bool Logger_IsFull(void);
 uint32_t Logger_SampleCount(void);

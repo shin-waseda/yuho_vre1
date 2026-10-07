@@ -47,7 +47,9 @@ MEMORY
 {
   CCMRAM    (xrw)    : ORIGIN = 0x10000000,   LENGTH = 64K
   RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 128K
-  FLASH    (rx)    : ORIGIN = 0x8000000,   LENGTH = 1024K
+  /* 最後のセクタ(セクタ11、0x080E0000〜の128KB)は迷路の地図の保存に使う(interface/flash.c)ので、
+     プログラムが入り込まないよう 1024K - 128K にしている */
+  FLASH    (rx)    : ORIGIN = 0x8000000,   LENGTH = 896K
 }
 
 /* Sections */

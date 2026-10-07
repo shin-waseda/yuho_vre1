@@ -185,6 +185,17 @@ bool SDCard_Read(void *buf, uint32_t len, uint32_t *got_out) {
     return true;
 }
 
+bool SDCard_Sync(void) {
+    if (!s_file_open) return false;
+    FRESULT res = f_sync(&s_file);
+    if (res != FR_OK) {
+        printf("SD: sync failed (FRESULT=%d)\r\n", (int)res);
+        PrintHalDiag();
+        return false;
+    }
+    return true;
+}
+
 bool SDCard_Close(void) {
     if (!s_file_open) return false;
     s_file_open = false;
@@ -197,12 +208,23 @@ bool SDCard_Close(void) {
     return true;
 }
 
-static bool IsCsv(const char *name) {
+// 拡張子(".xyz" の3文字)が ext と同じか(大文字・小文字は区別しない)
+static bool HasExt(const char *name, const char *ext) {
     size_t n = strlen(name);
     if (n < 5) return false;
     const char *e = name + n - 4;
-    return e[0] == '.' && (e[1] == 'c' || e[1] == 'C') && (e[2] == 's' || e[2] == 'S')
-        && (e[3] == 'v' || e[3] == 'V');
+    if (e[0] != '.') return false;
+    for (int i = 0; i < 3; i++) {
+        char c = e[1 + i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c != ext[i]) return false;
+    }
+    return true;
+}
+
+// 送る対象のログ(CSV と、探索などの追記用のバイナリ .bin)
+static bool IsCsv(const char *name) {
+    return HasExt(name, "csv") || HasExt(name, "bin");
 }
 
 // 一覧の対象外にするフォルダ(送信済み・隠し・Windowsが作るもの)

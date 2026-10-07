@@ -11,6 +11,7 @@
 #include "app/pivot_test.h"
 #include "app/party_mode.h"
 #include "app/sensor_log.h"
+#include "app/search_run.h"
 #include "app/failsafe.h"
 #include "app/logger.h"
 #include "interface/sdcard.h"
@@ -24,6 +25,9 @@ static const char *ModeName(RobotMode mode) {
         case MODE_PIVOT_TEST:    return "PIVOT";
         case MODE_LED_TEST:      return "LED_TEST";
         case MODE_PARTY:         return "PARTY";
+        case MODE_SEARCH:        return "SEARCH";
+        case MODE_SEARCH_ADACHI: return "SEARCH_ADACHI";
+        case MODE_FAST_RUN:      return "FAST_RUN";
         case MODE_SD_DUMP:       return "SD_DUMP";
         case MODE_SD_DUMP_ALL:   return "SD_DUMP_ALL";
         default:                 return "UNKNOWN";
@@ -34,6 +38,9 @@ static const char *ModeName(RobotMode mode) {
 // 一番上の階層の各項目が、その中のモードの一覧を持つ。並び順がエンコーダで送る順になる。
 static const RobotMode s_test_modes[] = {
     MODE_SENSOR, MODE_SENSOR_LOG, MODE_VEL_PID, MODE_STRAIGHT_TEST, MODE_PIVOT_TEST, MODE_LED_TEST, MODE_PARTY,
+};
+static const RobotMode s_run_modes[] = {
+    MODE_SEARCH, MODE_SEARCH_ADACHI, MODE_FAST_RUN,
 };
 static const RobotMode s_sd_modes[] = {
     MODE_SD_DUMP, MODE_SD_DUMP_ALL,
@@ -48,6 +55,7 @@ typedef struct {
 #define MENU_COUNT_OF(a) ((uint8_t)(sizeof(a) / sizeof((a)[0])))
 
 static const ModeMenu s_menus[] = {
+    { "RUN",  s_run_modes,  MENU_COUNT_OF(s_run_modes) },
     { "TEST", s_test_modes, MENU_COUNT_OF(s_test_modes) },
     { "SD",   s_sd_modes,   MENU_COUNT_OF(s_sd_modes) },
 };
@@ -141,6 +149,7 @@ void ModeUI_WaitHandStart(void) {
 _Static_assert(MENU_COUNT_OF(s_menus) <= LED_SHIFT_COUNT, "too many top menus for shift LED display");
 _Static_assert(MENU_COUNT_OF(s_test_modes) <= LED_SHIFT_COUNT, "too many TEST modes for shift LED display");
 _Static_assert(MENU_COUNT_OF(s_sd_modes) <= LED_SHIFT_COUNT, "too many SD modes for shift LED display");
+_Static_assert(MENU_COUNT_OF(s_run_modes) <= LED_SHIFT_COUNT, "too many RUN modes for shift LED display");
 
 // 階層ごとの、今選んでいる項目の番号をLEDで示す。番号0は全点灯、番号m(≥1)はLED m, m+1 (1始まり)の2個点灯。
 // 例: 0番目→全点灯 / 1番目→LED1,2
@@ -223,7 +232,8 @@ static uint8_t SelectIndex(const ModeMenu *menu, uint8_t count) {
 
 RobotMode ModeUI_Select(void) {
     const ModeMenu *menu = &s_menus[SelectIndex(NULL, MENU_TOP_COUNT)];
-    RobotMode mode = menu->modes[SelectIndex(menu, menu->count)];
+    // 中のモードが1つだけなら、もう一度選ばせずにそれに決める
+    RobotMode mode = (menu->count == 1) ? menu->modes[0] : menu->modes[SelectIndex(menu, menu->count)];
     printf("MODE: %s / %s\r\n", menu->name, ModeName(mode));
     return mode;
 }
@@ -244,6 +254,15 @@ void ModeUI_Run(RobotMode mode) {
             break;
         case MODE_STRAIGHT_TEST:
             StraightTest_Run();
+            break;
+        case MODE_SEARCH:
+            SearchRun_Run(SEARCH_ALGO_DIJKSTRA);
+            break;
+        case MODE_SEARCH_ADACHI:
+            SearchRun_Run(SEARCH_ALGO_ADACHI);
+            break;
+        case MODE_FAST_RUN:
+            FastRun_Run();
             break;
         case MODE_PARTY:
             PartyMode_Run();

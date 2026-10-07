@@ -32,9 +32,12 @@ bool SDCard_OpenRead(const char *path, uint32_t *size_out);
 // 最大len バイト読む。読めたバイト数をgot_out(NULL可)へ。終端ならgot=0でtrue。
 bool SDCard_Read(void *buf, uint32_t len, uint32_t *got_out);
 
+// 書いた内容をカードへ確定させる(開いたまま)。途中で電源が切れても、ここまでは残る。
+bool SDCard_Sync(void);
+
 bool SDCard_Close(void);
 
-// base("" ならルート)直下と、その1段下のフォルダにあるCSVのパスを、
+// base("" ならルート)直下と、その1段下のフォルダにあるログ(.csv と .bin)のパスを、
 // 見つけた順に先頭からskip個読み飛ばして、最大max個集める。sent/・隠しフォルダは除く。
 // パスは base を含む形(例: base="sent" なら "sent/straight/xxx.csv")。
 // 集めた数を返す(baseがなければ0、失敗時は-1)。max未満なら最後まで読んだ。

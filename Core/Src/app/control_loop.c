@@ -19,8 +19,13 @@ static VelocityPID s_vpid;
 static WheelVelocity s_actual;
 
 // 角度・角速度のループ(外側)。ISRからのみ触る。
-// 目標の向き[deg]。制御が無効の間は今の向きに合わせておき、有効にした時点の向きを基準に
+// 目標の向き[deg] = 迷路の軸の向き + 壁の制御のオフセット。
+// 迷路の軸の向きは、制御が無効の間は今の向きに合わせておき、有効にした時点の向きを基準に
 // プロファイルの角速度を積分して進める。止まってもリセットしない。
+// 壁の制御のオフセットは、壁に対する横のずれに比例した向きの差。ずれが 0 に戻ればオフセットも 0 に
+// 戻るので、壁で向きを直しても迷路の軸からの向きのずれが残らない。
+static float s_angle_axis_deg = 0.0f;
+static float s_wall_offset_deg = 0.0f;
 static float s_angle_ref_deg = 0.0f;
 
 // 位置のループ(外側、並進方向)。ISRからのみ触る。
@@ -28,9 +33,12 @@ static float s_angle_ref_deg = 0.0f;
 static float s_pos_ref_mm = 0.0f;
 static float s_dist_mm = 0.0f;
 static volatile bool s_position_hold = true; // メインが書き、ISRが読む
+// 尻当てで壁に押し当てている間は、向きと位置の補正を止める(メインが書き、ISRが読む)
+static volatile bool s_wall_push = false;
 
 // 壁の制御(直進中に、壁センサーで目標の向きを動かす)。ISRからのみ触る。
 static WallControl s_wall;
+static volatile bool s_wall_ctrl_on = true; // メインが書き、ISRが読む(探索の半区画・尻当てでは止める)
 static bool s_wall_active = false; // 前のtickで壁の制御を動かしていたか
 
 // 目標(並進・回転)。プロファイル実行中はISRが毎tick書き換える。
@@ -49,7 +57,7 @@ typedef enum {
 
 static VelocityProfile s_profile;
 static MotionType s_profile_type = MOTION_STRAIGHT;
-static float s_profile_sign = 1.0f; // 超信地旋回の向き(+1: 反時計回り)
+static float s_profile_sign = 1.0f; // 直進: +1 前進 / -1 後退、超信地旋回: +1 反時計回り
 static volatile bool s_profile_active = false;
 static volatile bool s_motion_done = true;
 
@@ -61,7 +69,7 @@ typedef struct {
     float v_max;    // [mm/s] or [dps]
     float v_end;    // [mm/s](超信地旋回は0)
     float accel;    // [mm/s^2] or [dps^2]
-    float sign;     // 超信地旋回の向き
+    float sign;     // 直進: +1 前進 / -1 後退、超信地旋回: +1 反時計回り
 } MotionCommand;
 static MotionCommand s_pending;
 static volatile bool s_start_pending = false;
@@ -69,6 +77,8 @@ static volatile bool s_start_pending = false;
 static GyroData s_gyro_raw = { 0, 0, 0 };
 static float s_gyro_z_dps = 0.0f;
 static float s_gyro_angle_deg = 0.0f; // ジャイロの積分角(起動からの累積、反時計回り正)
+// メインが立て、ISRが積分角を0にしてから下ろす(ISRの足し込みとぶつからないよう、0にするのはISR)
+static volatile bool s_gyro_angle_reset_req = false;
 static GyroOffset s_gyro_offset = { 0.0f, 0.0f, 0.0f };
 
 // ジャイロ Z のゼロ点の測り直し。メインが合計と回数を0にしてから残りtick数を書き、
@@ -104,11 +114,11 @@ void App_SetTargetVelocity(float mm_s) {
 
 void App_StartStraight(float distance_mm, float v_max, float v_end, float accel) {
     s_pending.type = MOTION_STRAIGHT;
-    s_pending.distance = distance_mm;
+    s_pending.distance = fabsf(distance_mm);
     s_pending.v_max = v_max;
     s_pending.v_end = v_end;
     s_pending.accel = accel;
-    s_pending.sign = 1.0f;
+    s_pending.sign = (distance_mm >= 0.0f) ? 1.0f : -1.0f;
     s_motion_done = false;
     s_start_pending = true; // 最後に立てる
 }
@@ -128,8 +138,20 @@ bool App_IsMotionDone(void) {
     return s_motion_done && !s_start_pending;
 }
 
+float App_GetTargetDistance(void) {
+    return s_pos_ref_mm;
+}
+
 void App_SetPositionHold(bool en) {
     s_position_hold = en;
+}
+
+void App_SetWallPush(bool en) {
+    s_wall_push = en;
+}
+
+void App_SetWallControl(bool en) {
+    s_wall_ctrl_on = en;
 }
 
 // ISRの先頭で呼ぶ。走行指令を取り込み、プロファイルを1tick進めて目標を更新する。
@@ -140,7 +162,9 @@ static void UpdateProfile(void) {
         s_profile_sign = s_pending.sign;
         float v_start = 0.0f;
         if (s_profile_type == MOTION_STRAIGHT) {
-            v_start = s_target_mm_s;     // 走りながら次の直進へつなげられるように
+            // 走りながら次の直進へつなげられるように(同じ向きに動いているときだけ今の速さから)
+            v_start = s_profile_sign * s_target_mm_s;
+            if (v_start < 0.0f) v_start = 0.0f;
             s_target_omega_dps = 0.0f;
             s_target_alpha_dps2 = 0.0f;
         } else {
@@ -156,8 +180,8 @@ static void UpdateProfile(void) {
 
     VelocityProfile_Step(&s_profile, CONTROL_DT_S);
     if (s_profile_type == MOTION_STRAIGHT) {
-        s_target_mm_s = s_profile.v;
-        s_target_acc = s_profile.a;
+        s_target_mm_s = s_profile_sign * s_profile.v;
+        s_target_acc = s_profile_sign * s_profile.a;
     } else {
         s_target_omega_dps = s_profile_sign * s_profile.v;
         s_target_alpha_dps2 = s_profile_sign * s_profile.a;
@@ -211,6 +235,17 @@ float App_GetGyroZ_dps(void) {
 
 float App_GetGyroAngle_deg(void) {
     return s_gyro_angle_deg;
+}
+
+void App_ResetGyroAngle(void) {
+    s_gyro_angle_reset_req = true;
+    uint32_t t0 = HAL_GetTick();
+    while (s_gyro_angle_reset_req) {
+        if (HAL_GetTick() - t0 > 10u) { // 割り込みが動いていない
+            s_gyro_angle_reset_req = false;
+            break;
+        }
+    }
 }
 
 float App_RecalibrateGyroZ(uint32_t ms) {
@@ -282,6 +317,10 @@ void App_ControlTick(void) {
         }
     }
     s_gyro_z_dps = GYRO_Z_SIGN * ((float)s_gyro_raw.z - s_gyro_offset.z) / GYRO_SENSITIVITY_LSB_PER_DPS;
+    if (s_gyro_angle_reset_req) {
+        s_gyro_angle_deg = 0.0f;
+        s_gyro_angle_reset_req = false;
+    }
     s_gyro_angle_deg += s_gyro_z_dps * CONTROL_DT_S;
 
     UpdateProfile();
@@ -293,36 +332,50 @@ void App_ControlTick(void) {
     // ---- 目標の距離と進んだ距離 ----
     // 制御が無効の間はどちらも0にしておくので、有効にした時点が基準になる。
     if (control_active) {
-        s_angle_ref_deg += s_target_omega_dps * CONTROL_DT_S;
+        s_angle_axis_deg += s_target_omega_dps * CONTROL_DT_S;
         s_pos_ref_mm += s_target_mm_s * CONTROL_DT_S;
         s_dist_mm += 0.5f * (s_actual.left_mm_s + s_actual.right_mm_s) * CONTROL_DT_S;
-        if (!s_position_hold) s_pos_ref_mm = s_dist_mm; // 位置を保たない間は、今の距離に合わせておく
+        if (!s_position_hold || s_wall_push) s_pos_ref_mm = s_dist_mm; // 位置を保たない間は、今の距離に合わせておく
+        if (s_wall_push) { // 壁に押し当てている間は、壁にそろう向きに任せる
+            s_angle_axis_deg = s_gyro_angle_deg;
+            s_wall_offset_deg = 0.0f;
+        }
     } else {
-        s_angle_ref_deg = s_gyro_angle_deg;
+        s_angle_axis_deg = s_gyro_angle_deg;
+        s_wall_offset_deg = 0.0f;
         s_pos_ref_mm = 0.0f;
         s_dist_mm = 0.0f;
     }
 
     // ---- 壁の制御 ----
-    // 直進中(並進の目標あり、旋回の目標なし)だけ、壁センサーのずれに応じて目標の向きを動かす。
-    // 止まっている間と超信地旋回中は使わない。直進を始めるたびに切れ目の検出の履歴を捨てる。
-    float wall_corr_dps = 0.0f;
+    // 直進中(並進の目標あり、旋回の目標なし)だけ、壁センサーのずれに比例した向きのオフセットを求める。
+    // 使える壁がないとき・壁の制御を使わない場面では、オフセットの目標は 0(迷路の軸の向きへ戻る)。
+    // オフセットは WALL_OFFSET_RATE_DPS の速さまでしか変えない(壁が切れたときなどに向きが跳ばないように)。
+    // 直進を始めるたびに切れ目の検出の履歴を捨てる。
+    float wall_offset_target = 0.0f;
     bool wall_straight = control_active && (s_target_mm_s > 0.0f) && (s_target_omega_dps == 0.0f);
-    if (WALL_CONTROL_ENABLE && wall_straight) {
+    if (WALL_CONTROL_ENABLE && s_wall_ctrl_on && wall_straight) {
         if (!s_wall_active) WallControl_Reset(&s_wall);
         WallSensorValues wv = { .l = ad_l, .fl = ad_fl, .fr = ad_fr, .r = ad_r };
-        wall_corr_dps = WallControl_Update(&s_wall, wv, s_dist_mm, NULL, NULL);
-        s_angle_ref_deg += wall_corr_dps * CONTROL_DT_S;
+        wall_offset_target = WallControl_Update(&s_wall, wv, s_dist_mm, NULL, NULL);
         s_wall_active = true;
     } else {
         s_wall_active = false;
     }
+    if (control_active && !s_wall_push) {
+        float step = WALL_OFFSET_RATE_DPS * CONTROL_DT_S;
+        float d = wall_offset_target - s_wall_offset_deg;
+        if (d > step) d = step;
+        if (d < -step) d = -step;
+        s_wall_offset_deg += d;
+    }
+    s_angle_ref_deg = s_angle_axis_deg + s_wall_offset_deg;
 
     // ---- 位置のループ(外側、並進方向) ----
     // v_cmd = v_ref + POSITION_KP×(s_ref − s)。出力は車輪速度の目標になる。
     float pos_corr = 0.0f;
     // 角度と同じく、止まっていても常に効かせる(止まっている間も位置を保つ)
-    if (POSITION_CONTROL_ENABLE && s_position_hold && control_active) {
+    if (POSITION_CONTROL_ENABLE && s_position_hold && !s_wall_push && control_active) {
         pos_corr = POSITION_KP * (s_pos_ref_mm - s_dist_mm);
         if (pos_corr > POSITION_CORR_LIMIT_MM_S) pos_corr = POSITION_CORR_LIMIT_MM_S;
         if (pos_corr < -POSITION_CORR_LIMIT_MM_S) pos_corr = -POSITION_CORR_LIMIT_MM_S;
@@ -335,7 +388,7 @@ void App_ControlTick(void) {
     float angle_err_deg = s_angle_ref_deg - s_gyro_angle_deg;
     float ang_corr = 0.0f;
     // 制御が有効な間は、止まっていても常に効かせる(止まっている間も向きを保つ)
-    if (ANGULAR_CONTROL_ENABLE && control_active) {
+    if (ANGULAR_CONTROL_ENABLE && !s_wall_push && control_active) {
         ang_corr = ANGLE_KP * angle_err_deg * DEG_TO_RAD + ANGULAR_KP * (omega_ref - omega_meas);
         if (ang_corr > ANGULAR_CORR_LIMIT_RAD_S) ang_corr = ANGULAR_CORR_LIMIT_RAD_S;
         if (ang_corr < -ANGULAR_CORR_LIMIT_RAD_S) ang_corr = -ANGULAR_CORR_LIMIT_RAD_S;
@@ -400,7 +453,7 @@ void App_ControlTick(void) {
     s_dbg.ad_fl = (float)ad_fl;
     s_dbg.ad_fr = (float)ad_fr;
     s_dbg.ad_r = (float)ad_r;
-    s_dbg.wall_corr_dps = wall_corr_dps;
+    s_dbg.wall_offset_deg = s_wall_offset_deg;
 
     // 発動中は毎tick止め直す。メインが直前にSetEnabled(true)と競合して
     // STBYをHighにしていても、ここで必ずLowへ戻る。

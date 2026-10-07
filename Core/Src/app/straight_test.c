@@ -50,7 +50,7 @@ static void SetupLogger(void) {
     Logger_AddField("angle_ref", &d->angle_ref_deg);
     Logger_AddField("angle", &d->angle_deg);
     Logger_AddField("ang_corr", &d->ang_corr_dps);
-    Logger_AddField("wall_corr", &d->wall_corr_dps);
+    Logger_AddField("wall_ofs", &d->wall_offset_deg);
     Logger_AddField("ad_l", &d->ad_l);
     Logger_AddField("ad_fl", &d->ad_fl);
     Logger_AddField("ad_fr", &d->ad_fr);
@@ -132,8 +132,8 @@ void StraightTest_Run(void) {
            ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", ANGULAR_KP, ANGLE_KP);
     printf("POSITION: %s POSITION_KP=%.2f\r\n",
            POSITION_CONTROL_ENABLE ? "ON" : "OFF", POSITION_KP);
-    printf("WALL: %s WALL_KP=%.2f REF L=%d R=%d\r\n",
-           WALL_CONTROL_ENABLE ? "ON" : "OFF", WALL_KP, WALL_REF_L, WALL_REF_R);
+    printf("WALL: %s WALL_KP_DEG=%.3f max %.1f deg REF L=%d R=%d\r\n",
+           WALL_CONTROL_ENABLE ? "ON" : "OFF", WALL_KP_DEG, WALL_OFFSET_MAX_DEG, WALL_REF_L, WALL_REF_R);
     printf("FF L: fric=%.3f gain=%.5f acc=%.6f / R: fric=%.3f gain=%.5f acc=%.6f [V]\r\n",
            VELOCITY_FF_FRIC_L, VELOCITY_FF_GAIN_L, VELOCITY_FF_ACC_L,
            VELOCITY_FF_FRIC_R, VELOCITY_FF_GAIN_R, VELOCITY_FF_ACC_R);

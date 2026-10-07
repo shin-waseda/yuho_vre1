@@ -9,6 +9,7 @@
 #include "robot_state.h"
 
 // 実行するモード(メニューの末端)。メニューの階層と並び順は mode_ui.c の表で決める。
+//   RUN : SEARCH(Dijkstra) / SEARCH_ADACHI / FAST_RUN
 //   TEST: SENSOR / SENSOR_LOG / VEL_PID / STRAIGHT / PIVOT / LED_TEST / PARTY
 //   SD  : DUMP / DUMP_ALL
 typedef enum {
@@ -21,6 +22,9 @@ typedef enum {
     MODE_PARTY,         // 宴会芸(床を回されても同じ方向を向き続ける)
     MODE_SD_DUMP,
     MODE_SD_DUMP_ALL,
+    MODE_SEARCH,        // 探索走行(Dijkstra)
+    MODE_SEARCH_ADACHI, // 探索走行(足立法)
+    MODE_FAST_RUN,      // 最短走行(探索で flash に残した地図を使う)
     MODE_COUNT
 } RobotMode;
 
@@ -29,8 +33,9 @@ typedef enum {
 // の点灯本数に線形に割り当てる。しきい値未満は全消灯。
 void ModeUI_ShowBattery(float vbat, uint32_t hold_ms);
 
-// 起動時に一度呼ぶブロッキング処理。まず一番上の階層(TEST / SD)を選び、
+// 起動時に一度呼ぶブロッキング処理。まず一番上の階層(RUN / TEST / SD)を選び、
 // 次にその中のモードを選ぶ(上の階層には戻らない。戻るにはリセット)。
+// 中のモードが1つだけの階層は、選んだ時点でそのモードに決まる。
 // どちらも右エンコーダの回転(MODE_SELECT_PULSES_PER_STEPごと)で送り、
 // ボタン押下で確定する。選択されたモードを返す。
 RobotMode ModeUI_Select(void);

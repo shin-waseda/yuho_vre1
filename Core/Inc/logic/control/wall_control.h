@@ -23,7 +23,8 @@ typedef struct {
 void WallControl_Reset(WallControl *wc);
 
 // 1tick ぶん進める。v: 壁センサーの値、dist_mm: 進んだ距離(増えていく値)。
-// 戻り値: 目標の向きを動かす速さ[dps](反時計回り正)。使える壁がなければ 0。
+// 戻り値: 迷路の軸の向きに足す向きのオフセットの目標[deg](反時計回り正)。横のずれに比例し、
+// ±WALL_OFFSET_MAX_DEG で頭打ち。使える壁がなければ 0(迷路の軸の向きに戻す)。
 // used_left/used_right(NULL可): その tick で左右の壁を使ったか(ログ用)。
 float WallControl_Update(WallControl *wc, WallSensorValues v, float dist_mm,
                          bool *used_left, bool *used_right);

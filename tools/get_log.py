@@ -24,6 +24,10 @@ Logger の形式 (divergence_v3 と同じ):
     python tools/get_log.py COM5            # 受信して logs/<dir>/<file>_<日時>.csv に保存し続ける
     python tools/get_log.py COM5 --plot     # 受信するたびにグラフも表示
     python tools/get_log.py --plot-file logs/vel_pid/step_20261003_120000.csv  # 保存済みCSVを表示
+    python tools/get_log.py --bin2csv logs/search/search_0008.bin  # 保存済みのバイナリログをCSVにする
+
+SD の .bin (探索など、走りながら追記したバイナリログ。形式は parse_ylog) は、受け取ると
+隣に同じ名前の .csv も作る。
 
 ログ以外の行 (printf の出力) はそのまま画面に表示する。
 UART を他のターミナルソフトで開いていると受信できないので、閉じてから使うこと。
@@ -155,6 +159,45 @@ def save_file(out_root: Path, path: str, data: bytes):
     return dest
 
 
+YLOG_MAGIC = b"YLOG1"
+
+
+def parse_ylog(data: bytes):
+    """探索などの追記用のバイナリログ (logger.c の LOG_BIN_MAGIC) を (names, rows) にする。
+    形式: "YLOG1\\n<列数>\\n<列名,...>\\n" + float32 (little endian) x 列数 x 行数。
+    最後の行が途中で切れていれば (書いている途中で電源が切れたなど) 捨てる。"""
+    lines = data.split(b"\n", 3)
+    if len(lines) < 4 or lines[0] != YLOG_MAGIC:
+        raise ValueError("not a YLOG1 file")
+    count = int(lines[1])
+    # 列名の行は、データの書き始めをセクタの区切りにそろえるため後ろが空白で埋めてある
+    names = lines[2].decode("ascii").strip().split(",")
+    if len(names) != count:
+        raise ValueError(f"header says {count} columns but has {len(names)} names")
+    body = lines[3]
+    row_bytes = 4 * count
+    n_rows = len(body) // row_bytes
+    values = struct.unpack_from(f"<{n_rows * count}f", body)
+    rows = [values[r * count:(r + 1) * count] for r in range(n_rows)]
+    return names, rows
+
+
+def write_csv(path: Path, names, rows):
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(names)
+        for row in rows:
+            writer.writerow([f"{v:.6g}" for v in row])
+
+
+def ylog_to_csv(bin_path: Path) -> Path:
+    """.bin の隣に同じ名前の .csv を作る (あれば上書き)。"""
+    names, rows = parse_ylog(bin_path.read_bytes())
+    csv_path = bin_path.with_suffix(".csv")
+    write_csv(csv_path, names, rows)
+    return csv_path
+
+
 def save_csv(out_root: Path, dir_name, file_name, timestamp, names, rows) -> Path:
     out_dir = out_root / safe_name(dir_name, ".")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -234,6 +277,14 @@ def run_receiver(args):
                     print(f"[skip] {path} (already received, same content)")
                     continue
                 print(f"[saved] {dest} ({len(data)} bytes)")
+                if dest.suffix.lower() == ".bin":
+                    # 追記用のバイナリログは、読めるように隣に CSV も作る
+                    try:
+                        csv_path = ylog_to_csv(dest)
+                        print(f"[converted] {csv_path}")
+                        dest = csv_path
+                    except (ValueError, struct.error) as e:
+                        print(f"[warn] {dest}: could not convert to CSV ({e})", file=sys.stderr)
                 if args.plot and dest.suffix.lower() == ".csv":
                     plot_csv(dest)
                 continue
@@ -261,13 +312,19 @@ def main():
     parser.add_argument("--plot", action="store_true", help="show a plot after each received log")
     parser.add_argument("--once", action="store_true", help="exit after receiving one log")
     parser.add_argument("--plot-file", type=Path, help="plot an existing CSV and exit")
+    parser.add_argument("--bin2csv", type=Path, nargs="+", metavar="BIN",
+                        help="convert saved binary logs (.bin, e.g. search) to CSV next to them and exit")
     args = parser.parse_args()
 
+    if args.bin2csv:
+        for p in args.bin2csv:
+            print(f"[converted] {ylog_to_csv(p)}")
+        return
     if args.plot_file:
         plot_csv(args.plot_file)
         return
     if not args.port:
-        parser.error("port is required unless --plot-file is given")
+        parser.error("port is required unless --plot-file or --bin2csv is given")
     try:
         run_receiver(args)
     except KeyboardInterrupt:

@@ -52,9 +52,9 @@ float WallControl_Update(WallControl *wc, WallSensorValues v, float dist_mm,
         return 0.0f;
     }
 
-    // 左に寄っている(err > 0)なら右へ(時計回り = 負)
-    float corr = -WALL_KP * err;
-    if (corr > WALL_CORR_LIMIT_DPS) corr = WALL_CORR_LIMIT_DPS;
-    if (corr < -WALL_CORR_LIMIT_DPS) corr = -WALL_CORR_LIMIT_DPS;
-    return corr;
+    // 左に寄っている(err > 0)なら右へ向ける(時計回り = 負)
+    float offset = -WALL_KP_DEG * err;
+    if (offset > WALL_OFFSET_MAX_DEG) offset = WALL_OFFSET_MAX_DEG;
+    if (offset < -WALL_OFFSET_MAX_DEG) offset = -WALL_OFFSET_MAX_DEG;
+    return offset;
 }
