@@ -553,3 +553,5 @@ python tools/turn_sim.py                         # スラロームのシミュ�
   画面の操作でも 500 が出るので，GitHub 側でこのリポジトリへの書き込みが失敗している状態と考えている(未確認)．
   時間をおいて push し直したら成功した(bbfbcf7..1e54424 → origin/feature/maze)．GitHub 側の一時的な不具合だったと考えている．
   試しに作った feature/slalom は手元にだけある(リモートには作られていない)．
+- **開発日記を push した**: 日記の追記をコミットして(f193907)，origin/feature/maze へ push した．
+  日記は書き足したらコミットして push する．
