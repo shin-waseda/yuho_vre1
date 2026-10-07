@@ -8,7 +8,7 @@
 
 // 旋回条件(未調整の控えめな初期値)
 #define PIVOT_TEST_ANGLE_DEG   90.0f
-#define PIVOT_TEST_OMEGA_DPS   180.0f   // 最高角速度[deg/s]
+#define PIVOT_TEST_OMEGA_DPS   180.0f   // 最高角速度[deg/s](選ぶときに最初に出す値)
 #define PIVOT_TEST_ALPHA_DPS2  1800.0f  // 角加速度[deg/s^2]
 
 #define PIVOT_TEST_PRE_MS      200   // 回り出す前に止まったまま記録する時間
@@ -16,12 +16,17 @@
 #define PIVOT_TEST_POST_MS     500   // 戻った後も記録する時間
 #define PIVOT_TEST_TIMEOUT_MS  3000  // 1回の旋回がこれを過ぎても終わらなければ打ち切る
 
-// 1回の旋回時間の見積もり[ms](台形: 角度/ω + ω/α)
-#define PIVOT_TEST_TURN_MS \
-    ((uint32_t)((PIVOT_TEST_ANGLE_DEG / PIVOT_TEST_OMEGA_DPS \
-                 + PIVOT_TEST_OMEGA_DPS / PIVOT_TEST_ALPHA_DPS2) * 1000.0f))
-#define PIVOT_TEST_LOG_MS \
-    (PIVOT_TEST_PRE_MS + 2u * PIVOT_TEST_TURN_MS + PIVOT_TEST_HOLD_MS + PIVOT_TEST_POST_MS + 500u)
+// 最高角速度は走る前に選ぶ(SPEED_SELECT_PIVOT_OMEGA_DPS。PIVOT_TEST_OMEGA_DPS に一番近いものから始める)
+static float s_omega_dps = PIVOT_TEST_OMEGA_DPS;
+static const float kOmegas[] = SPEED_SELECT_PIVOT_OMEGA_DPS;
+
+// 1回の旋回時間の見積もり[ms](台形: 角度/ω + ω/α。三角形になるときは長めに出る)
+static uint32_t TurnMs(void) {
+    return (uint32_t)((PIVOT_TEST_ANGLE_DEG / s_omega_dps + s_omega_dps / PIVOT_TEST_ALPHA_DPS2) * 1000.0f);
+}
+static uint32_t LogMs(void) {
+    return PIVOT_TEST_PRE_MS + 2u * TurnMs() + PIVOT_TEST_HOLD_MS + PIVOT_TEST_POST_MS + 500u;
+}
 
 // 手を離してから回り出すまでの待ち[ms](手を離す時間)。
 #define PIVOT_TEST_START_DELAY_MS 1000
@@ -51,7 +56,7 @@ static void SetupLogger(void) {
     Logger_AddField("i_l", &d->i_l);
     Logger_AddField("i_r", &d->i_r);
     Logger_AddField("vbat", &d->vbat);
-    Logger_SetDuration(PIVOT_TEST_LOG_MS);
+    Logger_SetDuration(LogMs());
 }
 
 // FailSafe発動時はFailSafe_Halt()へ入る(戻らない)。
@@ -68,7 +73,7 @@ static void DelayWatching(uint32_t ms) {
 
 // 旋回して、終わるまで待つ。タイムアウトならfalse。
 static bool TurnAndWait(float angle_deg) {
-    App_StartPivot(angle_deg, PIVOT_TEST_OMEGA_DPS, PIVOT_TEST_ALPHA_DPS2);
+    App_StartPivot(angle_deg, s_omega_dps, PIVOT_TEST_ALPHA_DPS2);
     uint32_t t0 = HAL_GetTick();
     while (!App_IsMotionDone()) {
         if (FailSafe_IsTripped()) {
@@ -109,8 +114,11 @@ static void RunOnce(void) {
 }
 
 void PivotTest_Run(void) {
+    // 最高角速度を選ぶ(記録の長さもこれで決まるので、ログの設定より前に選ぶ)
+    s_omega_dps = ModeUI_SelectValue("OMEGA", "dps", kOmegas, (uint8_t)(sizeof(kOmegas) / sizeof(kOmegas[0])),
+                                     PIVOT_TEST_OMEGA_DPS);
     printf("PIVOT TEST: +%.0f deg then -%.0f deg, omega=%.0f dps, alpha=%.0f dps^2\r\n",
-           PIVOT_TEST_ANGLE_DEG, PIVOT_TEST_ANGLE_DEG, PIVOT_TEST_OMEGA_DPS, PIVOT_TEST_ALPHA_DPS2);
+           PIVOT_TEST_ANGLE_DEG, PIVOT_TEST_ANGLE_DEG, s_omega_dps, PIVOT_TEST_ALPHA_DPS2);
     printf("ANGULAR: %s ANGULAR_KP=%.2f ANGLE_KP=%.2f, GYRO_Z_SIGN=%.0f\r\n",
            ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", ANGULAR_KP, ANGLE_KP, GYRO_Z_SIGN);
     printf("POSITION: %s POSITION_KP=%.2f\r\n",
