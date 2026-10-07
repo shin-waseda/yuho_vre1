@@ -541,3 +541,15 @@ python tools/turn_sim.py                         # スラロームのシミュ�
   どのコミットもビルドと実機での確認をしていないので，コミットの本文に「未確認」と書いた．
   ファイル単位で分けたので，途中のコミットだけを取り出すとビルドできない可能性がある(全部そろった状態で使う)．
   `.settings/stm32cubeide.project.prefs` と `Debug/yuho.bin` は，今のソースと合っているか分からないので入れなかった．
+
+- **push に失敗した**: 6つのコミット(752f795〜1e54424)を push しようとしたが，GitHub が
+  `remote rejected (Internal Server Error)` で拒否した．最初のコミット1つだけでも同じだった．
+  送るファイルは最大 48KB と小さく，GitHub の状態表示は正常だった．原因は未確認(GitHub 側の一時的な不具合か，
+  リポジトリの設定かは分からない)．コミットは手元の feature/maze に残っている．時間をおいて push し直す．
+  新しいブランチ feature/slalom(feature/maze と同じ位置)を作って push しても，同じ Internal Server Error だった
+  (Request ID C16F:1ED705:1E1A95:2A33EC:6AC679D1)．ブランチ名の問題ではなく，この時点の GitHub への push 全体が失敗している．
+  ユーザーが GitHub の画面でプルリクを許可しようとしたら error 500 だった．GitHub の API で見ると，
+  プルリクは1つもなく，ブランチの保護もルールセットもなかった(リモートの feature/maze は bbfbcf7 のまま)．
+  画面の操作でも 500 が出るので，GitHub 側でこのリポジトリへの書き込みが失敗している状態と考えている(未確認)．
+  時間をおいて push し直したら成功した(bbfbcf7..1e54424 → origin/feature/maze)．GitHub 側の一時的な不具合だったと考えている．
+  試しに作った feature/slalom は手元にだけある(リモートには作られていない)．
