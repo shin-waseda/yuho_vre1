@@ -1243,6 +1243,7 @@ if magic == b"YLOG2":
 ```
 python tools/get_log.py COM5                     # SD_DUMP / ロガーの送信を受け取る(.bin の隣に .csv も作る)
 python tools/get_log.py --bin2csv logs/search/search_0006.bin
+python tools/sd_import.py                        # PC に挿した SD カードから logs/ に取り込み、.csv も作る
 python tools/log_viewer.py                       # 起動してログを選ぶ
 python tools/turn_sim.py                         # スラロームのシミュレーションとログの照合
 ```
@@ -1263,6 +1264,7 @@ plot_log                   % ログを時系列のグラフにする(複数の�
 | ツール | 役割 |
 |---|---|
 | `tools/get_log.py` | UART で受け取る(SD_DUMP，ロガー)．`.bin` → `.csv`(`ev_text` 付き)．同じ名前の古い CSV は上書きせず `_dupN` を付ける |
+| `tools/sd_import.py` | PC に挿した SD カードのログ(`<dir>/` と `sent/<dir>/`)を `logs/<dir>/` に取り込み，`.bin` の隣に `.csv` を作る．取り込み済みは飛ばす．SD は読むだけ |
 | `tools/log_viewer.py` | ログを見る GUI(時系列，イベントの一覧，迷路の上の軌道，壁，再生) |
 | `tools/turn_sim.py` | スラロームのシミュレータ(機体と同じ計算，スリップ，ログとの照合，ADJ の提案) |
 | `tools/yuho_common.py` | 上の2つで共通: params.h の読み込み，台形とスラロームの Python 版，ログの読み込み，軌道の作成 |
@@ -1576,3 +1578,15 @@ plot_log                   % ログを時系列のグラフにする(複数の�
     曲がった後の最初の壁切れで，1回分の前後の遅れと，壁切れの偏り(`WALL_EDGE_POS_MM`)を直接測る．
   - 10 章の変更: 「前壁補正」 前: 「FL+FR 420(2026-10-08 にログから合わせた)，±15mm」
     → 後: 「FL+FR 400(2026-10-08 に一度 420 にしたが，壁切れの偏りと混ざっていたので戻した)，±15mm」．
+
+- **SD カードからログを取り込むスクリプトを作った**(`tools/sd_import.py`)．ユーザーは機体から UART で吸い出さず，SD カードを
+  PC に挿して D ドライブからコピーし，`--bin2csv` で CSV にしていた．この手間をなくすため．
+  - **動き**: 取り外しできるドライブ(Windows の `GetDriveTypeW` が REMOVABLE)のうち，ログ(`<dir>/<名前>_NNNN.bin|csv`)が
+    あるものを探す(ドライブを引数で決めることもできる．`--wait` で挿されるまで待つ)．`<dir>/` と `sent/<dir>/` を
+    `logs/<dir>/` に置き(get_log.py で受け取ったときと同じ場所)，`.bin` の隣に `.csv`(`ev_text` 付き)を作る．
+    保存と変換は `get_log.save_file` / `ylog_to_csv` をそのまま使うので，同じ中身は飛ばし，同じ名前で中身が違えば `_dupN` を付ける．
+    SD のファイルは消さない・動かさない．
+  - **確かめたこと**(PC，SD の形に並べたフォルダで): 取り込みと CSV 作り，2回目はすべて飛ばす，同じ名前で中身が違うと `_dup1`，
+    CSV だけ消したときは作り直す，`--dry-run` の表示．本物の SD カードではまだ(このときは D:，E: にログがなかった)．
+  - まとめの章の変更: 7.3 節 前: get_log.py，log_viewer.py，turn_sim.py のコマンド → 後: `sd_import.py` の行を足した．
+    8 章の表 前: (sd_import.py なし) → 後: `tools/sd_import.py` の行を足した．
