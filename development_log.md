@@ -1247,6 +1247,15 @@ python tools/log_viewer.py                       # 起動してログを選ぶ
 python tools/turn_sim.py                         # スラロームのシミュレーションとログの照合
 ```
 
+MATLAB 版(`tools/matlab/`．受信は上の `get_log.py` のまま．使い方は `tools/matlab/README.md`):
+
+```matlab
+addpath('tools/matlab')    % yuho/ で
+turn_sim                   % スラロームのシミュレータ(K と C の合わせは格子の後 fminsearch で詰める)
+log_viewer                 % ログを見る GUI
+plot_log                   % ログを時系列のグラフにする(複数のファイルを重ねられる)
+```
+
 ---
 
 ## 8. PC ツール
@@ -1259,6 +1268,7 @@ python tools/turn_sim.py                         # スラロームのシミュ�
 | `tools/yuho_common.py` | 上の2つで共通: params.h の読み込み，台形とスラロームの Python 版，ログの読み込み，軌道の作成 |
 | `tools/maze_sim/` | 迷路の探索と最短経路のシミュレータ(C の logic 層を共有)，迷路図の取り込み |
 | `tools/turn_sim_classic2.py` | 元の pygame のスラロームのシミュレータ(残してある) |
+| `tools/matlab/` | MATLAB 版: `turn_sim.m`，`log_viewer.m`，`plot_log.m`(`--plot-file` の代わり)，共通の部品 `+yc/`(`yuho_common.py` に当たる) |
 
 ---
 
@@ -1443,3 +1453,24 @@ python tools/turn_sim.py                         # スラロームのシミュ�
   - 11 章の変更: 「スラロームの曲がり始めの遅れ」 前: 「境界の経路計算(実測 27〜28ms，500mm/s で約 14mm)の対策を決める．」
     → 後: 「境界の経路計算(実測 27〜28ms，500mm/s で約 14mm)．打ち切り＋バケツのキューと，コンパイルの最適化(-O2)を入れた
     (2026-10-08，未確認)．実機の `plan_ms` と `FRONT_TRIG` で確かめる．」
+
+- **ログの解析のツールを MATLAB にも作った**(`tools/matlab/`)．ユーザーが「Python の代わりに MATLAB を使えないか」と言い，
+  turn_sim の係数合わせ，CSV のグラフ，できれば log_viewer を移すことにした．
+  - **分け方**: UART の受信と保存(`get_log.py`)は Python のまま．テキストの中にバイナリが混ざる形式をすでに正しく扱えているので，
+    作り直す利点がない．MATLAB は保存された `.csv` / `.bin` を読むだけにした．
+  - **作ったもの**: `turn_sim.m`(スラロームのシミュレータと K，C の合わせ)，`log_viewer.m`(ログを見る GUI．Python 版と同じ機能)，
+    `plot_log.m`(`get_log.py --plot-file` の代わり．複数のファイルを重ねられる)，共通の部品 `+yc/`(`yuho_common.py` に当たる．
+    `.bin`(YLOG1 / YLOG2)の読み込み，`params.h` と `log_event.h` の読み込み，機体と同じ台形とスラロームの計算，`TurnLog` クラス)．
+  - **Python 版との違い**: K と C は，同じ格子で探した後に `fminsearch` で格子の目より細かく詰める(この PC の MATLAB には
+    Optimization Toolbox がないので，本体の関数を使った)．チェックを外せば Python 版と同じ格子だけの結果になる．
+    turn_sim はログのファイルを引数で渡して起動できるようにした．
+  - **確かめたこと**(PC，MATLAB R2026b Prerelease．この PC で実際に動く MATLAB はこれだけ．R2024b〜R2026a はフォルダだけ残っている):
+    同じログと `params.h` で Python 版と比べた．`params.h` の値(120 個)，`.bin` / `.csv` の読み込み(行数・列の和・イベントの文字)，
+    軌道の終わりの位置，s90 / l90 / l180 のオフセット・出口のずれ・柱との距離，横センサーの傾き(8.41 AD/mm，3 個)，
+    `logs/slalom` の5本で合わせた K，C，b，RMS(K = 0.0270，C = 0，b = +1.3 mm，RMS 2.27 mm．スリップなしなら 6.70 mm)が
+    浮動小数点の桁まで一致した．`fminsearch` で詰めても K = 0.02703，C = 0.0002 で，ほとんど変わらなかった．
+    GUI は MATLAB から作ってボタンの処理を呼び，画面を画像に保存して見た(turn_sim の合わせと l180，log_viewer のイベントへの移動・
+    再生・STEP で合わせ直す・迷路のクリック)．マウスとキーボードでの実際の操作(ホイールの拡大，← → キー，スペース)はまだ．
+  - 次: ユーザーが MATLAB で使ってみる．使い勝手で Python 版と違う所があれば直す．
+  - まとめの章の変更: 7.3 節 前: Python のコマンドだけ → 後: MATLAB 版の使い方(`turn_sim`，`log_viewer`，`plot_log`)を足した．
+    8 章の表 前: Python のツールと maze_sim だけ → 後: `tools/matlab/` の行を足した．
