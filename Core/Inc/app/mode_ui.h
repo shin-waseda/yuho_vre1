@@ -27,6 +27,10 @@ typedef enum {
     MODE_SEARCH,        // 探索走行(Dijkstra)
     MODE_SEARCH_ADACHI, // 探索走行(足立法)
     MODE_FAST_RUN,      // 最短走行(探索で flash に残した地図を使う)
+    MODE_LONG_LOG,      // 長い走行(探索と最短走行を速さを変えて続けて走り、ログを取る)
+    MODE_SLALOM_SWEEP,  // 小回りの連続の試験(速さを上げながら右で行って左で戻る)
+    MODE_STRAIGHT_SWEEP, // 直進の連続の試験(速さと加速度を上げながら行って戻る)
+    MODE_FAST_SWEEP,    // 最短走行の連続(速さ・加速度・小回りの速さを変えて続けて走り、毎回スタートへ戻る)
     MODE_COUNT
 } RobotMode;
 
@@ -44,8 +48,9 @@ void ModeUI_ShowBattery(float vbat, uint32_t hold_ms);
 RobotMode ModeUI_Select(void);
 
 // モードを決めた後に、走りの設定の値(速さなど)を values の中から選ぶ(ブロッキング)。
-// 操作と表示はモードの選択と同じ(右エンコーダで送り、ボタンで確定。n 番は LED n, n+1)。
-// def に一番近い値から始める。UART には name・値・unit を出す。選んだ値を返す。
+// 操作はモードの選択と同じ(右エンコーダで送り、ボタンで確定)。表示は棒グラフで、n 番は LED1〜n を点ける。
+// values は遅い順(小さい順)に並べること。1番から始める(def は count が 0 のときに返すだけ)。
+// UART には name・値・unit を出す。選んだ値を返す。
 float ModeUI_SelectValue(const char *name, const char *unit, const float *values, uint8_t count, float def);
 
 // ModeUI_Select で選ばれたモード(ログに残す用)。

@@ -49,12 +49,15 @@ void VelocityProfile_Step(VelocityProfile *p, float dt) {
         }
     } else if (p->v < p->v_max) {
         a_cmd = p->accel;  // 加速
+    } else if (p->v > p->v_max) {
+        a_cmd = -p->accel; // 上限より速く始めた(走りながら遅い指令に切り替えた): すぐ上限まで減速する
     } else {
         a_cmd = 0.0f;      // 等速
     }
 
     float v_next = p->v + a_cmd * dt;
     if (a_cmd > 0.0f && v_next > p->v_max) v_next = p->v_max;
+    if (a_cmd < 0.0f && !p->decelerating && v_next < p->v_max) v_next = p->v_max;
     if (a_cmd < 0.0f && v_next < p->v_end) v_next = p->v_end;
     if (v_next < 0.0f) v_next = 0.0f;
 

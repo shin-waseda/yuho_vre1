@@ -48,6 +48,7 @@ static void CheckFailSafe(void) {
     if (FailSafe_IsTripped()) {
         Logger_Stop();
         App_ControlLoop_SetEnabled(false);
+        ModeUI_SaveLogToSD(); // 止まったときの様子も残す(どこが限界だったかを後で見るため)
         FailSafe_Halt();
     }
 }
@@ -99,9 +100,9 @@ typedef struct {
 } TestTurn;
 
 #define TEST_TURN_COUNT 3
-// 小回り(s90)の速さ。走る前に選ぶ(探索と同じ SPEED_SELECT_SEARCH_V_MM_S)。大回りは FAST_LARGE* のまま
+// 小回り(s90)の速さ。走る前に選ぶ(SPEED_SELECT_SLALOM_TEST_V_MM_S。探索より上まで選べる)。大回りは FAST_LARGE* のまま
 static float s_s90_v = SLALOM_V_MM_S;
-static const float kSpeeds[] = SPEED_SELECT_SEARCH_V_MM_S;
+static const float kSpeeds[] = SPEED_SELECT_SLALOM_TEST_V_MM_S;
 static TestTurn s_turns[TEST_TURN_COUNT];
 
 static void ComputeTurns(void) {
@@ -110,10 +111,9 @@ static void ComputeTurns(void) {
 
     SlalomParams s90 = { SLALOM_V_MM_S, SLALOM_OMEGA_DPS, SLALOM_ALPHA_DPS2, 90.0f };
     Slalom_ScaleToSpeed(&s90, s_s90_v); // 選んだ速さでも同じ形で曲がる(探索と同じ)
-    sh = Slalom_ComputeShape(&s90);
-    Slalom_Turn90Offsets(&sh, HALF_SECTION_MM, &pre, &post);
+    SlalomOffsets so = Slalom_SmallTurnOffsets(&s90); // 前後のオフセットは探索・最短走行と同じモデルで計算する
     s_turns[0] = (TestTurn){ "s90", s90.v_mm_s, s90.omega_dps, s90.alpha_dps2, 90.0f,
-                             pre + SLALOM_PRE_ADJ_MM, post + SLALOM_POST_ADJ_MM,
+                             so.pre_mm, so.post_mm,
                              HALF_SECTION_MM + SECTION_MM, SECTION_MM + HALF_SECTION_MM };
 
     SlalomParams l90 = { FAST_LARGE90_V_MM_S, FAST_LARGE90_OMEGA_DPS, FAST_LARGE90_ALPHA_DPS2, 90.0f };
@@ -234,4 +234,99 @@ void SlalomTest_Run(void) {
             Logger_Dump();
         }
     }
+}
+
+// ---- 小回りの連続の試験(速さを上げながら、右で行って左で戻る)----
+// A(西と南に壁)から北向きに出て右の試験 → B(東と南に壁)の真ん中で東向きに止まる → 180° 回る →
+// 左の試験 → A の真ん中で南向きに止まる → 180° 回る、をくり返す(置き直さずに右と左のログが同じ数ずつ取れる)。
+// 1つの速さで SLALOM_SWEEP_REPEAT 往復し、選んだ始めの速さから終わりの速さまで、選べる速さの順に上げていく。
+// 打ち切った・電池が下がったときは、その時の速さの番号を LED の棒グラフで点滅させて止まる。
+
+// 区画の真ん中で 180° 回る(探索の超信地旋回と同じ速さ)。打ち切ったら false
+static bool TurnAround(void) {
+    App_SetPositionHold(true);
+    App_SetWallPush(false);
+    App_SetWallControl(false);
+    App_SetTargetVelocity(0.0f);
+    App_ControlLoop_SetEnabled(true);
+    DelayWatching(100);
+    App_StartPivot(180.0f, SEARCH_TURN_OMEGA_DPS, SEARCH_TURN_ALPHA_DPS2);
+    bool ok = WaitMotionDone();
+    DelayWatching(100);
+    App_ControlLoop_SetEnabled(false);
+    return ok;
+}
+
+// 選んでいた速さの番号(1〜)を棒グラフで点滅させ続ける(戻らない)
+static void SweepHalt(const char *why, uint8_t speed_no) {
+    App_ControlLoop_SetEnabled(false);
+    printf("SLALOM SWEEP stopped (%s) at speed #%u\r\n", why, speed_no);
+    while (1) {
+        LED_SetShiftPattern((uint16_t)((1u << speed_no) - 1u));
+        for (int i = 0; i < 50; i++) {
+            if (FailSafe_IsTripped()) FailSafe_Halt();
+            HAL_Delay(10);
+        }
+        LED_SetShiftPattern(0x0000u);
+        HAL_Delay(300);
+    }
+}
+
+void SlalomSweep_Run(void) {
+    const uint8_t count = (uint8_t)(sizeof(kSpeeds) / sizeof(kSpeeds[0]));
+    float v_from = ModeUI_SelectValue("FROM(s90)", "mm/s", kSpeeds, count, kSpeeds[0]);
+    float v_to = ModeUI_SelectValue("TO(s90)", "mm/s", kSpeeds, count, kSpeeds[count - 1u]);
+    uint8_t i_from = 0, i_to = 0;
+    for (uint8_t i = 0; i < count; i++) {
+        if (kSpeeds[i] == v_from) i_from = i;
+        if (kSpeeds[i] == v_to) i_to = i;
+    }
+    if (i_to < i_from) i_to = i_from;
+    printf("SLALOM SWEEP: s90 %.0f -> %.0f mm/s, %u round trips each (wall control off)\r\n",
+           kSpeeds[i_from], kSpeeds[i_to], SLALOM_SWEEP_REPEAT);
+    printf("put in cell A (walls west and south) facing north. B (2 east, 2 north) needs walls east and south. hand: START\r\n");
+    if (FailSafe_IsTripped()) FailSafe_Halt();
+
+    SetupLogger();
+    LED_SetShiftPattern(0x0000u);
+    while (ModeUI_WaitHandStartOrClick()) {
+        // 最初の1回だけ手かざしで始める(クリックは無視する)
+    }
+    HAL_Delay(SLALOM_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+
+    bool first = true;
+    for (uint8_t si = i_from; si <= i_to; si++) {
+        s_s90_v = kSpeeds[si];
+        ComputeTurns();
+        for (uint8_t rep = 0; rep < SLALOM_SWEEP_REPEAT; rep++) {
+            for (uint8_t dir = 0; dir < 2u; dir++) { // 0: 右(A → B)、1: 左(B → A)
+                bool right = (dir == 0u);
+                if (!first) {
+                    DelayWatching(SLALOM_SWEEP_PAUSE_MS);
+                    if (!TurnAround()) SweepHalt("turn around timeout", (uint8_t)(si + 1u));
+                }
+                first = false;
+                float vbat = FailSafe_GetFilteredVoltage();
+                printf("---- s90 %s %.0f mm/s (round %u/%u): vbat %.2f V\r\n", right ? "R" : "L", s_s90_v,
+                       rep + 1u, SLALOM_SWEEP_REPEAT, vbat);
+                if (vbat < LONG_LOG_MIN_VBAT_V) SweepHalt("low battery", (uint8_t)(si + 1u));
+
+                Logger_SetFileName(right ? "s90r" : "s90l");
+                printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
+                App_ResetGyroAngle();
+                bool ok = RunOnce(&s_turns[0], right);
+                if (!ok) {
+                    App_SetTargetVelocity(0.0f);
+                    DelayWatching(300);
+                    Logger_Stop();
+                    App_ControlLoop_SetEnabled(false);
+                }
+                SdSaveResult saved = ModeUI_SaveLogToSD();
+                if (!ok) SweepHalt("timeout", (uint8_t)(si + 1u));
+                if (saved == SD_SAVE_FAILED) SweepHalt("SD save failed", (uint8_t)(si + 1u));
+            }
+        }
+    }
+    printf("SLALOM SWEEP: all done\r\n");
+    SweepHalt("all done", (uint8_t)(i_to + 1u));
 }

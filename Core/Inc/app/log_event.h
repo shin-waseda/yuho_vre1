@@ -42,6 +42,10 @@ typedef enum {
     LOG_EV_MAP_SAVED = 43,    // a:ok
     LOG_EV_ROUTE = 44,        // a:cost b:est_s c:count d:type
     LOG_EV_MAP_CELLS = 45,    // a:index b:w0 c:w1 d:w2 e:w3
+    LOG_EV_LONG_RUN = 46,     // a:index b:part c:step d:v e:v_turn
+    LOG_EV_FAST_PARAMS = 47,  // a:v b:accel c:small_v d:type
+    LOG_EV_SEARCH_PARAMS = 48, // a:v b:turn_v
+    LOG_EV_KNOWN_RUN = 49,    // a:cells b:commands c:large d:end_x e:end_y
     // ---- 異常 ----
     LOG_EV_FAILSAFE = 50,     // a:cause b:value
     LOG_EV_TIMEOUT = 51,      // a:where
@@ -58,6 +62,12 @@ typedef enum {
 //   (CSV は有効数字6桁なので、1つの値は 16bit まで)
 // LOG_EV_SETPOS の phase: 0 始め, 1 終わり。LOG_EV_MOTION_DONE の motion: 0 直進, 1 超信地旋回, 2 スラローム。
 // LOG_EV_RUN_TYPE の kind: 0 探索の曲がり方(0 PIVOT, 1 SMALL), 1 最短走行(0 PIVOT, 1 SMALL, 2 LARGE)。
+//   2 最短走行の後の帰り道(長い走行のモード。type は 1)。
+// LOG_EV_LONG_RUN: 長い走行のモードで、何番目(1〜)・段・段の中の番号・速さ(探索: 直進とスラローム、最短走行: 直進と小回り)。
+// LOG_EV_FAST_PARAMS: 最短走行で選んだ直進の速さ・加速度・小回りの速さ・走り方(RUN_TYPE と同じ)。走り始めに入れる。
+// LOG_EV_SEARCH_PARAMS: 探索(と帰り道)の直進の速さ・スラロームの速さ。走り始めに入れる。
+// LOG_EV_KNOWN_RUN: 探索で既知の区間をまとめて走り始めた。区画の数、指令の数(STOP を含む)、大回りを使ったか、終わりの区画。
+//   続けて LOG_EV_RUN_CMD(指令ごと)が入る。
 // LOG_EV_TIMEOUT の where: 0 探索, 1 最短走行。LOG_EV_PHASE の phase: SearchPhase(search_planner.h)。
 // LOG_EV_WALL_EDGE の side: 0 左, 1 右。pos_ref は壁切れの瞬間の目標の距離。
 // LOG_EV_EDGE_CORR: 壁切れで目標の距離の基準をずらした量 corr[mm](+ なら次の境界を先へ)。

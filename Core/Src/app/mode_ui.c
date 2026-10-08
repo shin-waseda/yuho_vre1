@@ -35,6 +35,10 @@ static const char *ModeName(RobotMode mode) {
         case MODE_SD_DUMP:       return "SD_DUMP";
         case MODE_SD_DUMP_ALL:   return "SD_DUMP_ALL";
         case MODE_STREAM_TEST:   return "STREAM_TEST";
+        case MODE_LONG_LOG:      return "LONG_LOG";
+        case MODE_SLALOM_SWEEP:  return "SLALOM_SWEEP";
+        case MODE_STRAIGHT_SWEEP: return "STRAIGHT_SWEEP";
+        case MODE_FAST_SWEEP:    return "FAST_SWEEP";
         default:                 return "UNKNOWN";
     }
 }
@@ -43,9 +47,10 @@ static const char *ModeName(RobotMode mode) {
 // 一番上の階層の各項目が、その中のモードの一覧を持つ。並び順がエンコーダで送る順になる。
 static const RobotMode s_test_modes[] = {
     MODE_SENSOR, MODE_SENSOR_LOG, MODE_VEL_PID, MODE_STRAIGHT_TEST, MODE_PIVOT_TEST, MODE_SLALOM_TEST, MODE_LED_TEST, MODE_PARTY,
+    MODE_LONG_LOG, MODE_SLALOM_SWEEP, MODE_STRAIGHT_SWEEP,
 };
 static const RobotMode s_run_modes[] = {
-    MODE_SEARCH, MODE_SEARCH_ADACHI, MODE_FAST_RUN,
+    MODE_SEARCH, MODE_SEARCH_ADACHI, MODE_FAST_RUN, MODE_FAST_SWEEP,
 };
 static const RobotMode s_sd_modes[] = {
     MODE_SD_DUMP, MODE_SD_DUMP_ALL, MODE_STREAM_TEST,
@@ -189,6 +194,11 @@ static void ShowIndex(uint8_t index) {
     LED_SetShiftPattern((uint16_t)(0x3u << index));
 }
 
+// 値(速さなど)を選んでいるときの表示: 番号n なら LED1〜n を点ける棒グラフ(1番が一番遅い値)。
+static void ShowValueIndex(uint8_t index) {
+    LED_SetShiftPattern((uint16_t)((1u << (index + 1u)) - 1u));
+}
+
 // U6のはんだ不良対策で、確実に光るLED1〜7(D23〜D17)だけを使う。
 // 基板修理後はLED_SHIFT_COUNTに戻してよい。
 #define MODE_UI_BAR_LED_COUNT 7
@@ -220,6 +230,8 @@ static const char *s_show_unit = "";
 static void ShowItem(uint8_t i) {
     if (s_show_values != NULL) {
         printf("%s %d: %.0f %s\r\n", s_show_name, (int)i + 1, s_show_values[i], s_show_unit);
+        ShowValueIndex(i);
+        return;
     } else if (s_show_menu == NULL) {
         printf("MENU %d: %s\r\n", (int)i + 1, s_menus[i].name);
     } else {
@@ -229,11 +241,13 @@ static void ShowItem(uint8_t i) {
 }
 
 // 右エンコーダの回転で 0〜count-1 を送り(start から始める)、ボタンで確定した番号を返す。
+// 回転はカウンタの値を直接読み、ここで差を取る(Encoder_GetDeltaR は使わない)。モードを決めた後は
+// 1kHz の制御の割り込みが Encoder_GetDeltaR で差分を持っていくので、それを使うと回しても動かなかった。
 static uint8_t SelectIndex(uint8_t count, uint8_t start) {
     uint8_t index = start;
     float accumulated = 0.0f;
 
-    (void)Encoder_GetDeltaR(); // 前の階層で決定するまでに回った分を捨てる
+    uint16_t last = Encoder_GetCountR(); // ここから数える(前の階層で決定するまでに回った分は数えない)
     ShowItem(index);
 
     while (1) {
@@ -244,7 +258,9 @@ static uint8_t SelectIndex(uint8_t count, uint8_t start) {
             }
         }
 
-        int16_t delta_r = Encoder_GetDeltaR();
+        uint16_t now = Encoder_GetCountR();
+        int16_t delta_r = (int16_t)(now - last); // 16bit の折り返しを使った差
+        last = now;
         accumulated += (float)delta_r;
 
         while (accumulated >= MODE_SELECT_PULSES_PER_STEP) {
@@ -288,16 +304,11 @@ RobotMode ModeUI_Select(void) {
 float ModeUI_SelectValue(const char *name, const char *unit, const float *values, uint8_t count, float def) {
     if (count == 0u) return def;
     if (count > SELECT_MAX_ITEMS) count = SELECT_MAX_ITEMS;
-    // def に一番近い値から始める
-    uint8_t start = 0;
-    for (uint8_t i = 1; i < count; i++) {
-        if (fabsf(values[i] - def) < fabsf(values[start] - def)) start = i;
-    }
     printf("select %s (turn right wheel, press button to set)\r\n", name);
     s_show_values = values;
     s_show_name = name;
     s_show_unit = unit;
-    uint8_t i = SelectIndex(count, start);
+    uint8_t i = SelectIndex(count, 0); // 1番(一番遅い値)から始める
     s_show_values = NULL;
     LED_SetShiftPattern(0x0000u);
     printf("%s: %.0f %s\r\n", name, values[i], unit);
@@ -347,6 +358,18 @@ void ModeUI_Run(RobotMode mode) {
             break;
         case MODE_SLALOM_TEST:
             SlalomTest_Run();
+            break;
+        case MODE_LONG_LOG:
+            LongLogRun_Run();
+            break;
+        case MODE_SLALOM_SWEEP:
+            SlalomSweep_Run();
+            break;
+        case MODE_STRAIGHT_SWEEP:
+            StraightSweep_Run();
+            break;
+        case MODE_FAST_SWEEP:
+            FastSweep_Run();
             break;
         default:
             break;
