@@ -8,6 +8,7 @@
 #include "app/logger.h"
 #include "interface/sdcard.h"
 #include "interface/flash.h"
+#include "interface/fault_diag.h"
 #include "logic/wall_sense.h"
 #include "logic/maze/search_planner.h"
 #include "logic/maze/maze_print.h"
@@ -155,7 +156,7 @@ static bool WaitTargetDistance(float target_mm) {
 // ---- 壁切れ補正 ----
 // 直進中に新しい壁切れがあれば、その位置から、目標の距離の基準(境界の位置)のずれを求める。
 // boundary0 は、この直進で通る境界のうち最初のもの(目標の距離)。壁切れは、どれかの境界を
-// WALL_EDGE_POS_MM 過ぎた所で起きるはずなので、一番近い境界からのずれを補正の量にする。
+// WALL_EDGE_POS_L/R_MM 過ぎた所で起きるはずなので、一番近い境界からのずれを補正の量にする。
 // 補正したら true を返し、*corr にその量を書く(+ なら機体は思っていたより後ろにいる → 先の基準を先へ)。
 typedef struct {
     uint32_t seq;     // 見た壁切れの数(App_GetWallEdge)
@@ -173,10 +174,12 @@ static bool EdgeCorr_Check(EdgeCorr *ec, float *corr) {
     uint32_t seq = App_GetWallEdge(&side, &pos);
     if (seq == ec->seq) return false;
     ec->seq = seq;
+    // 壁が切れる位置は左右で違う(side: 0 左, 1 右)
+    float edge_mm = (side == 1u) ? WALL_EDGE_POS_R_MM : WALL_EDGE_POS_L_MM;
     // 一番近い境界(boundary0 + 1区画 × k)を選ぶ
-    float k = floorf((pos - WALL_EDGE_POS_MM - ec->boundary0) / SECTION_MM + 0.5f);
+    float k = floorf((pos - edge_mm - ec->boundary0) / SECTION_MM + 0.5f);
     if (k < 0.0f) k = 0.0f;
-    float expected = ec->boundary0 + k * SECTION_MM + WALL_EDGE_POS_MM;
+    float expected = ec->boundary0 + k * SECTION_MM + edge_mm;
     float c = pos - expected;
     if (c > WALL_EDGE_WINDOW_MM || c < -WALL_EDGE_WINDOW_MM) return false; // 予想から外れすぎ(使わない)
     if (c > WALL_EDGE_MAX_CORR_MM) c = WALL_EDGE_MAX_CORR_MM;
@@ -188,11 +191,12 @@ static bool EdgeCorr_Check(EdgeCorr *ec, float *corr) {
     return true;
 }
 
-// 目標の距離が *target に届くまで待つ。途中の壁切れで *target を直す(探索の1区画の直進用。
+// 目標の距離が *target − before に届くまで待つ。途中の壁切れで *target を直す(探索の1区画の直進用。
 // 速さは一定のまま走っているので、プロファイルは直さず、待つ所だけを変える)。
-static bool WaitTargetDistanceEdge(float *target, EdgeCorr *ec) {
+// before は壁を境界の手前で読むための分(SEARCH_WALL_READ_BEFORE_MM)。
+static bool WaitTargetDistanceEdge(float *target, EdgeCorr *ec, float before) {
     uint32_t t0 = HAL_GetTick();
-    while (App_GetTargetDistance() < *target) {
+    while (App_GetTargetDistance() < *target - before) {
         CheckFailSafe();
         PollLog();
         float c;
@@ -324,8 +328,9 @@ static WallObservation ReadWalls(WallSensorValues *sv) {
     return obs;
 }
 
-// 次の境界まで進み、着いたら壁を読む(真ん中からなら半区画加速 = BlueEyes の half_sectionA、
-// 境界からなら1区画 = one_sectionU)。
+// 次の境界へ向かい、境界の SEARCH_WALL_READ_BEFORE_MM 手前で壁を読む(真ん中からなら半区画加速 =
+// BlueEyes の half_sectionA、境界からなら1区画 = one_sectionU)。読んだ後も機体は同じ速さで境界へ進み続け、
+// その間に次の動きを決める(dp->ref_mm は境界の位置のまま)。
 static bool GoToNextBoundary(DrivePos *dp, uint8_t cells, WallObservation *obs, WallSensorValues *sv) {
     // 壁の制御は境界から境界までの1区画だけ(真ん中からの半区画加速では使わない)
     App_SetWallControl(!dp->at_center);
@@ -338,9 +343,9 @@ static bool GoToNextBoundary(DrivePos *dp, uint8_t cells, WallObservation *obs, 
         // 境界から境界へ走る間は、壁切れで次の境界の位置を直す
         EdgeCorr ec;
         EdgeCorr_Begin(&ec, boundary0);
-        if (!WaitTargetDistanceEdge(&dp->ref_mm, &ec)) return false;
+        if (!WaitTargetDistanceEdge(&dp->ref_mm, &ec, SEARCH_WALL_READ_BEFORE_MM)) return false;
     } else {
-        if (!WaitTargetDistance(dp->ref_mm)) return false;
+        if (!WaitTargetDistance(dp->ref_mm - SEARCH_WALL_READ_BEFORE_MM)) return false;
     }
     *obs = ReadWalls(sv);
     dp->at_center = false;
@@ -348,8 +353,8 @@ static bool GoToNextBoundary(DrivePos *dp, uint8_t cells, WallObservation *obs, 
 }
 
 // ---- スラローム(小回り 90°)----
-// 境界で壁を読んで「曲がる」と決まったら、止まらずに 前のオフセット → 曲がる → 後ろのオフセット で
-// 隣の区画の境界へ進み、着いたら壁を読む。オフセットは SearchRun_Run の最初に計算する。
+// 境界の手前で壁を読んで「曲がる」と決まったら、止まらずに 前のオフセット → 曲がる → 後ろのオフセット で
+// 隣の区画の境界へ進み、その手前で壁を読む(SEARCH_WALL_READ_BEFORE_MM)。オフセットは SearchRun_Run の最初に計算する。
 static float s_slalom_pre_mm = 0.0f;
 static float s_slalom_post_mm = 0.0f;
 static bool s_search_slalom = true; // 探索で曲がるとき、スラローム(true)か超信地旋回(false)か。走る前に選ぶ
@@ -416,7 +421,8 @@ static bool SlalomTurn(DrivePos *dp, bool right, WallObservation *obs, WallSenso
     // 曲がっている間の道のりも目標の距離に足されているので、曲がり終わった所から後ろのオフセットぶん進む
     dp->ref_mm = App_GetTargetDistance() + s_slalom_post_mm;
     StartStraightTo(dp->ref_mm, s_search_v);
-    if (!WaitTargetDistance(dp->ref_mm)) return false;
+    // 次の境界の SEARCH_WALL_READ_BEFORE_MM 手前で壁を読む(GoToNextBoundary と同じ。dp->ref_mm は境界の位置のまま)
+    if (!WaitTargetDistance(dp->ref_mm - SEARCH_WALL_READ_BEFORE_MM)) return false;
     *obs = ReadWalls(sv);
     dp->at_center = false;
     return true;
@@ -469,6 +475,20 @@ bool MazeRun_StartSequence(void) {
     return StartSequence(&dp);
 }
 
+// 32bit の値の上位・下位 16bit(イベントの値は CSV で有効数字6桁なので分けて入れる)
+static float Hi16(uint32_t v) { return (float)(v >> 16); }
+static float Lo16(uint32_t v) { return (float)(v & 0xFFFFu); }
+
+// 今の起動のリセットの原因と、その前の HardFault の記録をログに残す(止まった原因を後から調べるため)
+static void LogBootInfo(void) {
+    const FaultDiagInfo *b = FaultDiag_GetBootInfo();
+    Ev(LOG_EV_BOOT, (float)b->reset_flags, b->had_fault ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+    if (b->had_fault) {
+        Ev(LOG_EV_FAULT_PC, Hi16(b->pc), Lo16(b->pc), Hi16(b->lr), Lo16(b->lr), 0.0f);
+        Ev(LOG_EV_FAULT_REG, Hi16(b->cfsr), Lo16(b->cfsr), Hi16(b->hfsr), Hi16(b->bfar), Lo16(b->bfar));
+    }
+}
+
 // 走り出す前の準備(探索・最短走行で共通): 制御を有効にし、記録を始め、start_sequence で真ん中に合わせる。
 static bool StartRun(DrivePos *dp) {
     App_SetPositionHold(true);
@@ -482,6 +502,7 @@ static bool StartRun(DrivePos *dp) {
     }
     Ev(LOG_EV_HAND_START, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     Ev(LOG_EV_GYRO_RECAL, s_gyro_offset, 0.0f, 0.0f, 0.0f, 0.0f);
+    LogBootInfo();
     App_SetTargetVelocity(0.0f);
     App_ControlLoop_SetEnabled(true);
 
