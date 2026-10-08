@@ -1891,3 +1891,34 @@ plot_log                   % ログを時系列のグラフにする(複数の�
   止まったらモードを選び直して続きを取る．
 - 電池は試験ごとに満充電に近いものに替えると条件がそろう(長い走行・連続の試験は 7.5V 未満で止まる)．
 - 5 の最短走行は SEARCH で作った地図を使う．SEARCH は探索の SPEED / SLALOM を選んでから走る(速さを選ぶ画面は1番から始まる)．
+
+**モードの選び方**(起動後．右のタイヤを回して選び，ボタンで決める．タイヤ 1/4 周で1つ進む．端では輪のようにつながる)
+
+1. 一番上の階層: 1 RUN，2 TEST，3 SD(LED n と n+1 が点く)．
+2. その中のモード(LED n と n+1 が点く):
+   - RUN: 1 SEARCH，2 SEARCH_ADACHI，3 FAST_RUN
+   - TEST: 1 SENSOR，2 SENSOR_LOG，3 VEL_PID，4 STRAIGHT，5 PIVOT，6 SLALOM，7 LED_TEST，8 PARTY，
+     **9 LONG_LOG，10 SLALOM_SWEEP，11 STRAIGHT_SWEEP**
+   - SD: 1 SD_DUMP，2 SD_DUMP_ALL，3 STREAM_TEST
+   - **注意**: 確実に光るのは LED1〜7(U6 のはんだ不良)なので，TEST の 9〜11 番は LED が光って見えないかもしれない．
+     1番から**逆に回す**と，1つ戻して 11 STRAIGHT_SWEEP，2つ戻して 10 SLALOM_SWEEP，3つ戻して 9 LONG_LOG になる(UART がつながっていれば番号と名前も出る)．
+3. 走りの設定の値(速さなど): **1番(一番遅い値)から始まり，n 番なら LED1〜n を点ける棒グラフ**．値は遅い順．
+   8 番目以降は LED8 より上を使うので見えないかもしれない．そのときも逆に回すと最後の値に行ける(1つ戻すと一番速い値)．
+
+**各モードで選ぶもの**(この順に出る．最後に手かざしで始める)
+
+| モード | 選ぶもの(値の並び．n 番目) |
+|---|---|
+| SEARCH | SPEED: 300 / 400 / 500 / 600 / 800 / 1000 / 1200 / 1500 → SLALOM: 300 / 400 / 500 / 600 → 曲がり方(クリックで PIVOT / SMALL．LED1 / LED2) |
+| FAST_RUN | SPEED: 600 / 800 / 1000 / 1200 / 1400 / 1500 → ACCEL: 2000 / 3000 / 4000 / 5000 / 6000 / 8000 / 10000 → SMALL TURN: 300 / 400 / 500 / 600 → 走り方(クリックで PIVOT / SMALL / LARGE．LED1 / 2 / 3) |
+| STRAIGHT_SWEEP | SPEED FROM → SPEED TO(300 / 400 / 500 / 600 / 800 / 1000 / 1200 / 1400 / 1500)→ ACCEL FROM → ACCEL TO(2000〜10000 の 7 つ) |
+| SLALOM_SWEEP | FROM → TO(300 / 400 / 500 / 600 / 700 / 800 / 900) |
+| LONG_LOG | PART(1〜6)→ STEP(段の中の番号) |
+| STRAIGHT(1回ずつ) | SPEED(STRAIGHT_SWEEP と同じ)→ ACCEL |
+| SLALOM(1回ずつ) | SPEED(s90)(SLALOM_SWEEP と同じ)→ 旋回(クリックで s90r / s90l / l90r / l90l / l180r / l180l) |
+
+明日の順番で使う選び方の例:
+- 1: RUN(1)→ SEARCH(1)→ SPEED 2番(400)→ SLALOM 1番(300)→ SMALL(クリック不要．既定)→ 手かざし
+- 2: TEST(2)→ STRAIGHT_SWEEP(11．1つ戻す)→ SPEED FROM 4番(600)→ SPEED TO 9番(1500．1つ戻す)→ ACCEL FROM 1番 → ACCEL TO 1番(2000)→ 手かざし
+- 3: TEST(2)→ STRAIGHT_SWEEP(11)→ SPEED FROM 6番(1000)→ SPEED TO 6番(1000)→ ACCEL FROM 2番(3000)→ ACCEL TO 7番(10000)→ 手かざし
+- 4: TEST(2)→ SLALOM_SWEEP(10．2つ戻す)→ FROM 1番(300)→ TO 5番(700)→ A に北向きで置いて手かざし
