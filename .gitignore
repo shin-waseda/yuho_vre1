@@ -21,3 +21,16 @@ st-link_gdbserver_log.txt
 .DS_Store
 Thumbs.db
 *.bak
+
+# local logs and reference material
+logs/
+error.md
+divergens.md
+
+# PC build output of tools/maze_sim
+tools/maze_sim/build/
+__pycache__/
+tools/maze_sim/mazes/
+maze_sim.md
+tools/maze_sim/maze_prefs.json
+tools/maze_sim/maze_file/

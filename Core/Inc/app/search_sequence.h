@@ -9,6 +9,6 @@
 #include "interface/sensor.h"
 #include "interface/flash.h"
 #include "logic/wall_sense.h"
-#include "logic/maze"
+#include "logic/maze/search_planner.h" // wall_map / dijkstra / step_map / command も含む
 
 #endif

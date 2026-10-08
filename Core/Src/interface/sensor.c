@@ -1,8 +1,7 @@
 #include "main.h"
+#include "adc.h" // hadc1 の宣言
+#include "tim.h" // htim6 の宣言
 #include "interface/sensor.h"
-
-extern ADC_HandleTypeDef hadc1;
-extern TIM_HandleTypeDef htim6;
 
 volatile uint16_t ad_r, ad_fr, ad_fl, ad_l, vabt;
 
@@ -73,4 +72,12 @@ void Sensor_ReadAll(void) {
   ad_fr = (fr_on > fr_off) ? (fr_on - fr_off) : 0;
   ad_fl = (fl_on > fl_off) ? (fl_on - fl_off) : 0;
   ad_l  = (l_on  > l_off ) ? (l_on  - l_off ) : 0;
+}
+
+uint16_t Sensor_ReadBatteryRawBlocking(void) {
+  adc_next(); // rank1: CH1
+  adc_next(); // rank2: CH0
+  adc_next(); // rank3: CH2
+  adc_next(); // rank4: CH3
+  return adc_next(); // rank5: CH10 → 次はwrapしてrank1に戻る
 }

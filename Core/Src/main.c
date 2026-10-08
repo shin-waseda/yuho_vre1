@@ -19,7 +19,8 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "adc.h"
-#include "sdio.h"
+#include "dma.h"
+#include "fatfs.h"
 #include "spi.h"
 #include "tim.h"
 #include "usart.h"
@@ -29,6 +30,13 @@
 /* USER CODE BEGIN Includes */
 #include "interface/gyro.h"
 #include "interface/motor.h"
+#include "interface/battery.h"
+#include "interface/encoder.h"
+#include "interface/sdcard.h"
+#include "interface/fault_diag.h"
+#include "app/control_loop.h"
+#include "app/failsafe.h"
+#include "app/mode_ui.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -80,7 +88,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  FaultDiag_ReadAtBoot(); // リセットの原因と、前回の HardFault の記録を読む(表示は UART の初期化の後)
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -92,8 +100,8 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_ADC1_Init();
-//  MX_SDIO_SD_Init();
   MX_SPI2_Init();
   MX_TIM2_Init();
   MX_TIM3_Init();
@@ -101,10 +109,12 @@ int main(void)
   MX_TIM8_Init();
   MX_USART1_UART_Init();
   MX_TIM6_Init();
+  MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
   setbuf(stdout, NULL);
 
   printf("Hello, World!\r\n");
+  FaultDiag_Print(); // HardFault の後に起動したなら、LED の点滅(約2秒)でも知らせる
   HAL_Delay(100);
 
   ICM_Init();
@@ -112,57 +122,62 @@ int main(void)
   uint8_t whoami = ICM_Read(ICM_WHO_AM_I);
   printf("WHO_AM_I: 0x%02X\r\n", whoami);
 
+  // ジャイロのゼロ点補正(約1.1秒)。この間は機体を動かさないこと。
+  // App_ControlLoop_Init()がこの結果を取り込むので、必ずそれより前に行う。
+  printf("Gyro calibrating... keep still\r\n");
+  ICM_CalibrateBlocking(1000);
+  GyroOffset goff = ICM_GetOffset();
+  printf("Gyro offset X:%.1f Y:%.1f Z:%.1f\r\n", goff.x, goff.y, goff.z);
+
   Motor_Init();
 
 HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);  // ENC_L
 HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);  // ENC_R
 
+  App_ControlLoop_Init(); // 制御ループは無効状態で起動する。各モード内でApp_ControlLoop_SetEnabled(true)する
 
+  // 起動時の電圧チェック(表示だけ)。TIM6割り込み開始前なのでADCを直接読む。
+  // ここではフェイルセーフを発動させない。USB や ST-LINK の給電で先に起動してから
+  // バッテリーの電源が入ると、この1回の測定だけ低く出てしまうため。
+  // 電圧低下の判定は、TIM6割り込みの FailSafe_Update() が常に行っている(0.5秒続いたら発動)。
+  float vbat = Battery_MeasureVoltageBlocking(16);
+  printf("VBAT: %.2f V\r\n", vbat);
+  if (vbat < FAILSAFE_LOW_VOLTAGE_V) {
+    printf("WARNING: low battery at startup (< %.2f V)\r\n", FAILSAFE_LOW_VOLTAGE_V);
+  }
+  ModeUI_ShowBattery(vbat, 1500);
+
+  // SDカードのマウント。失敗しても起動は続け、ログのSD保存だけ無効になる。
+  // (カードがないとHALの初期化のタイムアウト待ちで数秒かかることがある)
+  if (SDCard_Mount()) {
+    printf("SD: mounted\r\n");
+  } else {
+    printf("SD: not available (logs are UART only)\r\n");
+  }
+
+  // モード選択(右エンコーダの回転+ボタン確定)は、1kHz制御ループが
+  // Encoder_GetDeltaR()を消費し始める前(=HAL_TIM_Base_Start_ITより前)に
+  // 済ませる。でないとエンコーダの差分を奪い合ってしまう。
+  RobotMode mode = ModeUI_Select();
+
+  // モード選択中などに溜まったエンコーダの差分を捨ててから制御ループを始める。
+  // (しないと最初のtickで左右の差分が一気に入り、オドメトリの向きが跳ぶ)
+  Encoder_SyncDelta();
   HAL_TIM_Base_Start_IT(&htim6);
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
+  ModeUI_Run(mode); // 今あるモードはどれも戻らない
+
   while (1)
   {
-//    HAL_GPIO_WritePin(LED_1_GPIO_Port, LED_1_Pin, GPIO_PIN_SET);
-//    HAL_GPIO_WritePin(LED_2_GPIO_Port, LED_2_Pin, GPIO_PIN_SET);
-//    HAL_GPIO_WritePin(LED_3_GPIO_Port, LED_3_Pin, GPIO_PIN_SET);
-//    HAL_GPIO_WritePin(LED_4_GPIO_Port, LED_4_Pin, GPIO_PIN_SET);
-//	  HAL_GPIO_WritePin(LED_5_GPIO_Port, LED_5_Pin, GPIO_PIN_SET);
-//	  HAL_GPIO_WritePin(LED_6_GPIO_Port, LED_6_Pin, GPIO_PIN_SET);
-//	  HAL_Delay(500);
-//    HAL_GPIO_WritePin(LED_1_GPIO_Port, LED_1_Pin, GPIO_PIN_RESET);
-//    HAL_GPIO_WritePin(LED_2_GPIO_Port, LED_2_Pin, GPIO_PIN_RESET);
-//    HAL_GPIO_WritePin(LED_3_GPIO_Port, LED_3_Pin, GPIO_PIN_RESET);
-//    HAL_GPIO_WritePin(LED_4_GPIO_Port, LED_4_Pin, GPIO_PIN_RESET);
-//	  HAL_GPIO_WritePin(LED_5_GPIO_Port, LED_5_Pin, GPIO_PIN_RESET);
-//	  HAL_GPIO_WritePin(LED_6_GPIO_Port, LED_6_Pin, GPIO_PIN_RESET);
-//	  HAL_Delay(500);
-
-    Motor_Forward(200, 200);
-
-    GyroData g = ICM_ReadGyro();
-    printf("X: %6d  Y: %6d  Z: %6d\r\n", g.x, g.y, g.z);
-//
-    uint16_t enc_l = __HAL_TIM_GET_COUNTER(&htim4);
-    uint16_t enc_r = __HAL_TIM_GET_COUNTER(&htim8);
-    printf("ENC_L: %5u  ENC_R: %5u\r\n", enc_l, enc_r);
-
-
-
-    printf("R:%4d FR:%4d FL:%4d L:%4d\r\n",
-          ad_r, ad_fr, ad_fl, ad_l);
-//    printf("ON: r %d, fr %d, fl  %d,  l %d, \r\n OFF: r %d, fr %d, fl  %d,  l %d,\r\n", r_on, fr_on, fl_on, l_on, r_off, fr_off, fl_off, l_off);
-
-
-
-
-    HAL_Delay(100);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    if (FailSafe_IsTripped()) FailSafe_Halt();
   }
   /* USER CODE END 3 */
 }

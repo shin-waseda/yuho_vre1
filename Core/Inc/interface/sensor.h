@@ -10,4 +10,9 @@
 // TIM6周期割り込み(interface/timer.c)から1kHzで呼ばれる想定。
 void Sensor_ReadAll(void);
 
+// バッテリー電圧のADC生値を1回だけ取得する(IR LEDは操作しない)。
+// ADCのrankを1周させて戻すので、後のSensor_ReadAll()の前提は崩れない。
+// TIM6割り込み開始前(=Sensor_ReadAll()と同時に動かない時)専用。
+uint16_t Sensor_ReadBatteryRawBlocking(void);
+
 #endif
