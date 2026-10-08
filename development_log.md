@@ -1830,7 +1830,7 @@ plot_log                   % ログを時系列のグラフにする(複数の�
 | 3 | 直進の限界(加速度) | B: 直線の通路 | TEST → STRAIGHT_SWEEP．SPEED 1000〜1000，ACCEL 3000〜10000 | タイヤが滑り出す加速度，フェイルセーフで止まる所 | 5分 |
 | 4 | スラロームの限界 | C: L字の通路 | TEST → SLALOM_SWEEP．FROM 300，TO 700．様子を見て 800〜900 | K，C，一定の横のずれ(右と左)，横の限界 | 10分 |
 | ― | 解析(Claude) | ― | ログを渡す | モデルの係数の更新，最短走行に使う値(加速度，小回りの速さ)を決める | 15〜30分 |
-| 5 | 最短走行を速くする | A: 試しの迷路 | まず RUN → SEARCH を1回(地図を作る)．次に RUN → FAST_RUN で SPEED・ACCEL・SMALL TURN を限界の 8 割くらいから少しずつ上げる．SMALL と LARGE | 実際にどこまで速く走れるか | 残りの時間 |
+| 5 | 最短走行を速くする | A: 試しの迷路 | まず RUN → SEARCH を1回(地図を作る)．次に RUN → FAST_SWEEP で SPEED・ACCEL・SMALL の範囲と走り方を選び，1回の手かざしで全部の組み合わせを走る(毎回スタートへ自分で戻る)．限界の 8 割くらいから範囲を選ぶ | 実際にどこまで速く走れるか | 残りの時間 |
 | 6 | (時間があれば)長い走行 | A: 試しの迷路 | TEST → LONG_LOG．PART 2，STEP 1 から | 直進がスラロームより速い組み合わせ(減速の修正の確認)，最短の後の帰り道 | 長い |
 
 この順にした理由: 1 で 10-08 の変更が壊れていないかを最初に短く確かめる．直進の限界(2，3)はスラロームの試験の加速にも最短走行にも効き，
@@ -1896,7 +1896,7 @@ plot_log                   % ログを時系列のグラフにする(複数の�
 
 1. 一番上の階層: 1 RUN，2 TEST，3 SD(LED n と n+1 が点く)．
 2. その中のモード(LED n と n+1 が点く):
-   - RUN: 1 SEARCH，2 SEARCH_ADACHI，3 FAST_RUN
+   - RUN: 1 SEARCH，2 SEARCH_ADACHI，3 FAST_RUN，4 FAST_SWEEP
    - TEST: 1 SENSOR，2 SENSOR_LOG，3 VEL_PID，4 STRAIGHT，5 PIVOT，6 SLALOM，7 LED_TEST，8 PARTY，
      **9 LONG_LOG，10 SLALOM_SWEEP，11 STRAIGHT_SWEEP**
    - SD: 1 SD_DUMP，2 SD_DUMP_ALL，3 STREAM_TEST
@@ -1911,6 +1911,7 @@ plot_log                   % ログを時系列のグラフにする(複数の�
 |---|---|
 | SEARCH | SPEED: 300 / 400 / 500 / 600 / 800 / 1000 / 1200 / 1500 → SLALOM: 300 / 400 / 500 / 600 → 曲がり方(クリックで PIVOT / SMALL．LED1 / LED2) |
 | FAST_RUN | SPEED: 600 / 800 / 1000 / 1200 / 1400 / 1500 → ACCEL: 2000 / 3000 / 4000 / 5000 / 6000 / 8000 / 10000 → SMALL TURN: 300 / 400 / 500 / 600 → 走り方(クリックで PIVOT / SMALL / LARGE．LED1 / 2 / 3) |
+| FAST_SWEEP | SPEED FROM → SPEED TO(FAST_RUN と同じ 6 つ)→ ACCEL FROM → ACCEL TO(7 つ)→ SMALL FROM → SMALL TO(300 / 400 / 500 / 600)→ TYPE(1 SMALL / 2 LARGE / 3 両方)．小回りの速さ → 加速度 → 直進の速さ → 走り方 の順に入れ子で回す |
 | STRAIGHT_SWEEP | SPEED FROM → SPEED TO(300 / 400 / 500 / 600 / 800 / 1000 / 1200 / 1400 / 1500)→ ACCEL FROM → ACCEL TO(2000〜10000 の 7 つ) |
 | SLALOM_SWEEP | FROM → TO(300 / 400 / 500 / 600 / 700 / 800 / 900) |
 | LONG_LOG | PART(1〜6)→ STEP(段の中の番号) |
@@ -1922,3 +1923,16 @@ plot_log                   % ログを時系列のグラフにする(複数の�
 - 2: TEST(2)→ STRAIGHT_SWEEP(11．1つ戻す)→ SPEED FROM 4番(600)→ SPEED TO 9番(1500．1つ戻す)→ ACCEL FROM 1番 → ACCEL TO 1番(2000)→ 手かざし
 - 3: TEST(2)→ STRAIGHT_SWEEP(11)→ SPEED FROM 6番(1000)→ SPEED TO 6番(1000)→ ACCEL FROM 2番(3000)→ ACCEL TO 7番(10000)→ 手かざし
 - 4: TEST(2)→ SLALOM_SWEEP(10．2つ戻す)→ FROM 1番(300)→ TO 5番(700)→ A に北向きで置いて手かざし
+- 5(例: 直進 1000〜1200，加速度 3000〜4000，小回り 500，小回りだけ): RUN(1)→ FAST_SWEEP(4)→ SPEED FROM 3番(1000)→ SPEED TO 4番(1200)
+  → ACCEL FROM 2番(3000)→ ACCEL TO 3番(4000)→ SMALL FROM 3番(500)→ SMALL TO 3番(500)→ TYPE 1番(SMALL)→ スタートに北向きで置いて手かざし
+  (この例は 2 × 2 = 4 本．本数は UART に出る．範囲を広げると本数がかけ算で増えるので，電池の持ちに注意)
+
+- **最短走行の連続のモード(RUN → FAST_SWEEP)を作った**(ユーザーの依頼「いくつかのパラメータを試す際は，一度の手かざしでその行動パターンの
+  ログを取り切れるようにしたい」．未確認: ビルド・実機)．連続の試験の3つ(LONG_LOG，SLALOM_SWEEP，STRAIGHT_SWEEP)はすでにその形だったので，
+  そうなっていなかった最短走行に作った．
+  - 直進の速さ・加速度・小回りの速さの範囲(FROM / TO)と走り方(1 SMALL / 2 LARGE / 3 両方)を選び，1回の手かざしで全部の組み合わせを
+    `FAST_SWEEP_REPEAT`(1)回ずつ走る．1本ごとにゴールからスタートへ自分で戻る．置く所は RUN の4番(TEST の後ろだと LED が見えないため)．
+  - 長い走行の「最短走行を走って戻る」部分を `FastRunAndReturn` に分けて，両方で使う．
+  - どの値で走ったかが分かるよう，走り始めに `LOG_EV_FAST_PARAMS`(47: 直進の速さ・加速度・小回りの速さ・走り方)，
+    `LOG_EV_SEARCH_PARAMS`(48: 探索の直進の速さ・スラロームの速さ)を入れるようにした(ふつうの探索・最短走行でも入る)．
+  - 10-09 の予定の 5 番をこのモードを使う形に書き直し，モードの一覧と選び方の表・例に足した．
