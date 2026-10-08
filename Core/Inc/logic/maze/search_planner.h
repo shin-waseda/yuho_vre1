@@ -52,7 +52,8 @@ typedef struct {
     MazeCost cost_to_start; // 既定: MazeCost_Default() + known_cell = MAZE_COST_KNOWN_CELL_RETURN
 
     // 経路計算の結果。使うのはalgoで選んだ方だけなので、同じ場所に重ねて置く(2KB)。
-    // 最後に計算した結果が残る(表示用)。
+    // 最後に計算した結果が残る。ただし Dijkstra は今いるノードのコストが決まった所で計算を止めるので
+    // (Dijkstra_ComputeFrom)、それより遠いノードの値は入っていない(全部の値を表示するなら計算し直す)。
     union {
         MazeSolver solver; // SEARCH_ALGO_DIJKSTRA
         StepMap step;      // SEARCH_ALGO_ADACHI

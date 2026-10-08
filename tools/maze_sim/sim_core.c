@@ -180,3 +180,11 @@ bool SimCore_Execute(const WallMap *truth, MazePos *pos, Direction *heading, Act
     }
     return true;
 }
+
+void SimCore_PlannerValues(const SearchPlanner *sp, MazeSolver *out) {
+    if (sp->phase == SEARCH_PHASE_TO_GOAL) {
+        Dijkstra_Compute(out, sp->map, WALL_VIEW_SEARCH, &sp->cost_to_goal, sp->goals, sp->goal_count);
+    } else {
+        Dijkstra_Compute(out, sp->map, WALL_VIEW_SEARCH, &sp->cost_to_start, &sp->start, 1);
+    }
+}

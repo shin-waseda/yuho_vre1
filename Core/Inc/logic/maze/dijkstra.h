@@ -44,6 +44,12 @@ typedef struct {
 void Dijkstra_Compute(MazeSolver *s, const WallMap *map, WallView view, const MazeCost *cost,
                       const MazePos *goals, uint8_t goal_count);
 
+// Dijkstra_Compute と同じだが、fromに向きheadingでいるノードのコストが決まった所で止める(探索の1歩ごとの計算用)。
+// fromからのDijkstra_Cost / Dijkstra_NextDir / Dijkstra_BuildRoute は Dijkstra_Compute と同じ結果になる。
+// それより遠い(コストの大きい)ノードは計算されていないので、他のノードの値は使わないこと。
+void Dijkstra_ComputeFrom(MazeSolver *s, const WallMap *map, WallView view, const MazeCost *cost,
+                          const MazePos *goals, uint8_t goal_count, MazePos from, Direction heading);
+
 // pに向きheadingでいるときの、ゴールまでのコスト(行けなければMAZE_COST_INF)。
 uint16_t Dijkstra_Cost(const MazeSolver *s, MazePos p, Direction heading);
 

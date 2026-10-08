@@ -28,7 +28,9 @@ static bool NextDir(SearchPlanner *sp, const MazePos *targets, uint8_t count,
         StepMap_Compute(&sp->work.step, sp->map, WALL_VIEW_SEARCH, targets, count);
         return StepMap_NextDir(&sp->work.step, sp->map, WALL_VIEW_SEARCH, sp->pos, sp->heading, next);
     }
-    Dijkstra_Compute(&sp->work.solver, sp->map, WALL_VIEW_SEARCH, cost, targets, count);
+    // 今のノードのコストが決まったら止める(境界で計算する時間を短くするため。選ぶ向きは全部計算したときと同じ)
+    Dijkstra_ComputeFrom(&sp->work.solver, sp->map, WALL_VIEW_SEARCH, cost, targets, count,
+                         sp->pos, sp->heading);
     return Dijkstra_NextDir(&sp->work.solver, sp->pos, sp->heading, next);
 }
 

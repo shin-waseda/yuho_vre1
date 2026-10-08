@@ -7,6 +7,7 @@
 #include "logic/command.h"
 #include "logic/maze/maze_types.h"
 #include "logic/maze/wall_map.h"
+#include "logic/maze/search_planner.h"
 
 extern const MazePos kSimGoals[MAZE_GOAL_COUNT]; // params.h の MAZE_GOALS
 extern const MazePos kSimStart;                  // params.h の MAZE_START_X/Y
@@ -25,5 +26,10 @@ WallObservation SimCore_Sense(const WallMap *truth, MazePos p, Direction heading
 
 // 指令を本当の迷路で実行する(pos/headingを進める)。壁にぶつかったらfalse。
 bool SimCore_Execute(const WallMap *truth, MazePos *pos, Direction *heading, Action a);
+
+// プランナー(Dijkstra)が今の目的地へ向けて計算する値を、全部のノードについて out に計算する(区画の値の表示用)。
+// プランナーは今いるノードのコストが決まった所で計算を止めるので、表示にはこちらを使う。
+// 指令を返した SearchPlanner_Step の直後に呼べば、その計算と同じ目的地・コストになる。
+void SimCore_PlannerValues(const SearchPlanner *sp, MazeSolver *out);
 
 #endif

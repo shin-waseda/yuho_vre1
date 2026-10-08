@@ -197,7 +197,9 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
 
         if (verbose) {
             printf("\n#%d %s -> (%u,%u)\n", step, Action_Name(a.type), pos.x, pos.y);
-            MazePrint_Map(&s_map, algo == SEARCH_ALGO_DIJKSTRA ? &s_planner.work.solver : NULL,
+            // プランナーは途中で計算を止めるので、表示する値は全部を計算し直す(s_solver は後でまた計算する)
+            if (algo == SEARCH_ALGO_DIJKSTRA) SimCore_PlannerValues(&s_planner, &s_solver);
+            MazePrint_Map(&s_map, algo == SEARCH_ALGO_DIJKSTRA ? &s_solver : NULL,
                           &pos, heading, s_goals, s_goal_count);
         }
     }

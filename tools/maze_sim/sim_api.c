@@ -57,6 +57,7 @@ static int s_moves_back;
 static int s_status;
 static SearchAlgo s_algo;
 static bool s_has_values; // リセット後、プランナーが一度でも経路を計算したか(区画の値の表示用)
+static MazeSolver s_value_solver; // 区画の値の表示用(プランナーは途中で計算を止めるので、全部を計算し直す)
 
 static MazeCost CostFromArray(const uint16_t *c, MazeCost fallback) {
     if (c == NULL) return fallback;
@@ -134,6 +135,10 @@ SIM_EXPORT int sim_step(uint8_t *type, uint8_t *cells) {
     WallObservation obs = SimCore_Sense(&s_truth, s_pos, s_heading);
     Action a = SearchPlanner_Step(&s_planner, obs);
     s_has_values = true;
+    // 指令を返したときだけプランナーは経路を計算している(止まったときは前の値のまま)
+    if (s_algo == SEARCH_ALGO_DIJKSTRA && a.type != ACTION_STOP) {
+        SimCore_PlannerValues(&s_planner, &s_value_solver);
+    }
     *type = a.type;
     *cells = a.cells;
 
@@ -201,7 +206,7 @@ SIM_EXPORT uint16_t sim_cell_value(int x, int y) {
     }
     uint16_t best = MAZE_COST_INF;
     for (int d = 0; d < 4; d++) {
-        uint16_t c = Dijkstra_Cost(&s_planner.work.solver, p, (Direction)d);
+        uint16_t c = Dijkstra_Cost(&s_value_solver, p, (Direction)d);
         if (c < best) best = c;
     }
     return (best == MAZE_COST_INF) ? 0xFFFFu : best;
