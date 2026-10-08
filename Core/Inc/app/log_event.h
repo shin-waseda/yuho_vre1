@@ -14,6 +14,9 @@ typedef enum {
     LOG_EV_CLICK = 4,         //
     LOG_EV_GYRO_RECAL = 5,    // a:offset_lsb
     LOG_EV_CTRL_ENABLE = 6,   // a:on
+    LOG_EV_BOOT = 7,          // a:reset_flags b:fault
+    LOG_EV_FAULT_PC = 8,      // a:pc_hi b:pc_lo c:lr_hi d:lr_lo
+    LOG_EV_FAULT_REG = 9,     // a:cfsr_hi b:cfsr_lo c:hfsr_hi d:bfar_hi e:bfar_lo
     // ---- 制御の切り替え ----
     LOG_EV_WALL_CTRL = 10,    // a:on
     LOG_EV_WALL_USE = 11,     // a:left b:right
@@ -44,6 +47,9 @@ typedef enum {
     LOG_EV_TIMEOUT = 51,      // a:where
 } LogEventCode;
 
+// LOG_EV_BOOT: 今の起動のリセットの原因(FAULT_RESET_*、interface/fault_diag.h)と、その前に HardFault があったか(1/0)。
+//   走り始めに毎回入れる。fault が 1 なら LOG_EV_FAULT_PC / LOG_EV_FAULT_REG も入れる。
+//   32bit の値は上位(_hi)と下位(_lo)の 16bit に分けて入れる(CSV は有効数字6桁なので)。値 = hi × 65536 + lo。
 // LOG_EV_STEP の walls: bit0 前, bit1 右, bit2 左。action: ActionType(command.h)。
 // LOG_EV_RUN_CMD の run_type: RunType(run_path.h)。LOG_EV_ROUTE_CMD(最短走行の PIVOT)の action: ActionType。
 // LOG_EV_TURN_KIND の kind: 0 小回り90°(s90), 1 大回り90°(l90), 2 大回り180°(l180), 3 超信地旋回。

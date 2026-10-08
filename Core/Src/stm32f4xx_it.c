@@ -87,7 +87,13 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  // モーターを止め、止まった場所を残してリセットする(interface/fault_diag.c。戻らない)。
+  // CPU が積んだレジスタを探せるよう、今の SP と、入ったときの LR(EXC_RETURN)を渡す
+  // (C の関数の始めで LR は積まれることがあるが、LR の値そのものは変わらない)。
+  __asm volatile(
+      "mov r0, sp\n"
+      "mov r1, lr\n"
+      "b FaultDiag_HardFault\n");
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {

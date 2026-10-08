@@ -33,6 +33,7 @@
 #include "interface/battery.h"
 #include "interface/encoder.h"
 #include "interface/sdcard.h"
+#include "interface/fault_diag.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
 #include "app/mode_ui.h"
@@ -87,7 +88,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  FaultDiag_ReadAtBoot(); // リセットの原因と、前回の HardFault の記録を読む(表示は UART の初期化の後)
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -113,6 +114,7 @@ int main(void)
   setbuf(stdout, NULL);
 
   printf("Hello, World!\r\n");
+  FaultDiag_Print(); // HardFault の後に起動したなら、LED の点滅(約2秒)でも知らせる
   HAL_Delay(100);
 
   ICM_Init();
