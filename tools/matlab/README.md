@@ -31,6 +31,7 @@ plot_log({'logs/slalom/turn_0001.bin', 'logs/slalom/turn_0002.bin'}, {'omega_ref
 | `turn_sim.m` | スラロームのシミュレータ．機体と同じ前後のオフセット，スリップ角，出口のずれ，柱との距離，ADJ の提案．ログを重ねて K と C を合わせる |
 | `log_viewer.m` | ログを見る GUI．時系列(列の付け外し)，イベントの一覧と絞り込み，カーソル，再生，迷路の上の軌道と壁 |
 | `plot_log.m` | ログを段に分けたグラフにする(`get_log.py --plot-file` の代わり)．複数のファイルを重ねられる |
+| `study/` | プラントモデルとシステム同定の演習(`docs/system_identification_study.md` の6章)．`addpath tools/matlab/study` してから使う |
 | `+yc/` | 共通の部品(`yuho_common.py` に当たる)．`yc.load_log`，`yc.read_params`，`yc.simulate_turn`，`yc.TurnLog`，`yc.fit_slip` など |
 
 コマンドウィンドウから部品だけ使うこともできます．
