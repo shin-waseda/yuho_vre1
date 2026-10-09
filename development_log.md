@@ -2416,3 +2416,17 @@ n 番は LED n と n+1 が点く．確実に光るのは LED1〜7 なので，8�
 - **モードの選び方の一覧を `docs/mode_select.md` に書いた**(ユーザーの依頼)．操作，一番上の階層(ショートカット 4〜10)，RUN・TEST・SD の
   モードごとの選ぶもの・ログの場所，選べる値の表，最短走行の加減速度の表，FAST_BANDS の速度帯，止まったときの LED．
   コードを変えたら合わせて直す．
+
+- **RUN の中を SEARCH / FAST / TEST に組み替え，ゴールを (7,7)〜(8,8) にした**(ユーザーの依頼．ブランチ `feature/run-menu` を
+  `feature/fast-bands` から切った(コミット前の変更も持ち越した)．未確認: ビルド・実機)．
+  - RUN: 1 SEARCH，2 FAST，3 TEST．TEST はログ取りの走行(1 FAST_SWEEP，2 SEARCH_SPIN，3 FAST_BANDS，4 LONG_LOG)を値と同じ画面で選ぶ
+    (`mode_ui.c` の `RunTest_Run`．`MODE_RUN_TEST` を足した)．一番上の TEST(試験)とショートカットはそのまま．SEARCH_ADACHI はメニューから外した
+    (アルゴリズムは SEARCH の中で選ぶ)．
+  - SEARCH(`SearchMenu_Run`): MAP(1 初期化，2 flash の地図に重ねる)→ SCOPE(1 往復，2 片道，3 全面)→ ALGO(1 Dijkstra，2 足立法)→
+    SPEED → ACCEL → SLALOM → TURN(1 スラローム，2 超信地旋回)．片道はゴールの真ん中で止まって終わる(地図は flash に残す)．
+    全面探索はまだ作っていない(`RunSearch` に枠: 選ぶと走らずに止まり，地図は書かない)．探索の加速度 `s_search_accel` を足した
+    (今までは `SEARCH_ACCEL_MM_S2` 固定)．ログに `SEARCH_PARAMS` の加速度・曲がり方と，`LOG_EV_SEARCH_MODE`(54: 地図・行き先・アルゴリズム)を入れる．
+  - FAST(`FastRun_Run`): SPEED → ACCEL(最初に SPEED に合う値を出す．`ModeUI_SelectValueFrom` を足した)→ SMALL TURN →
+    TURN(1 SMALL，2 LARGE，3 PIVOT)．減速度は加速度と 5000 の小さい方．走り方をクリックで切り替えるのはやめた．
+  - ゴール: `SEARCH_USE_TEST_GOAL` を 0 にして `MAZE_GOALS`((7,7)，(8,7)，(7,8)，(8,8))を使う．
+  - `docs/mode_select.md` の RUN の所を直した．
