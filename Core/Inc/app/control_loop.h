@@ -21,6 +21,8 @@ void App_SetTargetVelocity(float mm_s);
 // 実際の開始は次のtick(ISRが取り込む)。完了はApp_IsMotionDone()で見る。
 // v_end=0なら止まる。制御が有効でないと進まない。
 void App_StartStraight(float distance_mm, float v_max, float v_end, float accel);
+// App_StartStraight と同じで、減速度だけ別にする(最短走行の直進。減速でタイヤが滑りやすいため)
+void App_StartStraightAD(float distance_mm, float v_max, float v_end, float accel, float decel);
 
 // 台形プロファイルで超信地旋回する(その場で回る。止まって終わる)。
 // angle_deg: 正=反時計回り(左)、負=時計回り(右)。

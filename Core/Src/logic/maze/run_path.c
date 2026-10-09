@@ -3,12 +3,14 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
+#include "logic/control/slalom.h"
 
 #define RUN_PI 3.14159265f
 
 RunProfile RunProfile_Default(void) {
     RunProfile p = { 0 };
     p.accel = RUN_ACCEL_MM_S2;
+    p.decel = RUN_ACCEL_MM_S2;
     p.vmax  = RUN_VMAX_MM_S;
     p.v_turn[RUN_SMALL90_R]  = RUN_V_SMALL90_MM_S;
     p.v_turn[RUN_SMALL90_L]  = RUN_V_SMALL90_MM_S;
@@ -22,6 +24,51 @@ RunProfile RunProfile_Default(void) {
         p.turn_post[t] = 0.0f;
     }
     return p;
+}
+
+static void SetTurn(RunTurnSpec turns[RUN_TYPE_COUNT], RunType r, RunType l, const SlalomParams *p,
+                    float pre, float post) {
+    RunTurnSpec t = { p->v_mm_s, p->omega_dps, p->alpha_dps2, p->angle_deg, pre, post };
+    turns[r] = t;
+    turns[l] = t;
+}
+
+RunProfile RunProfile_ForSpeeds(float vmax, float accel, float small_v, RunTurnSpec turns[RUN_TYPE_COUNT]) {
+    RunTurnSpec local[RUN_TYPE_COUNT];
+    if (turns == NULL) turns = local;
+    for (int t = 0; t < RUN_TYPE_COUNT; t++) {
+        RunTurnSpec zero = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+        turns[t] = zero;
+    }
+    float pre, post;
+
+    // 小回り: 探索と同じ形(SLALOM_*)を small_v にする。前後のオフセットはずれのモデルから
+    SlalomParams small = { SLALOM_V_MM_S, SLALOM_OMEGA_DPS, SLALOM_ALPHA_DPS2, 90.0f };
+    Slalom_ScaleToSpeed(&small, small_v);
+    SlalomOffsets so = Slalom_SmallTurnOffsets(&small);
+    SetTurn(turns, RUN_SMALL90_R, RUN_SMALL90_L, &small, so.pre_mm, so.post_mm);
+
+    SlalomParams l90 = { FAST_LARGE90_V_MM_S, FAST_LARGE90_OMEGA_DPS, FAST_LARGE90_ALPHA_DPS2, 90.0f };
+    SlalomShape sh = Slalom_ComputeShape(&l90);
+    Slalom_Turn90Offsets(&sh, SECTION_MM, &pre, &post);
+    SetTurn(turns, RUN_LARGE90_R, RUN_LARGE90_L, &l90, pre + FAST_LARGE90_PRE_ADJ_MM, post + FAST_LARGE90_POST_ADJ_MM);
+
+    SlalomParams l180 = { FAST_LARGE180_V_MM_S, 0.0f, FAST_LARGE180_ALPHA_DPS2, 180.0f };
+    Slalom_SolveOmegaForSide(&l180, SECTION_MM); // 横にちょうど1区画移る角速度
+    sh = Slalom_ComputeShape(&l180);
+    Slalom_Turn180Offsets(&sh, SECTION_MM, &pre, &post);
+    SetTurn(turns, RUN_LARGE180_R, RUN_LARGE180_L, &l180, pre + FAST_LARGE180_PRE_ADJ_MM, post + FAST_LARGE180_POST_ADJ_MM);
+
+    RunProfile prof = RunProfile_Default();
+    prof.accel = accel;
+    prof.decel = (accel < FAST_DECEL_MAX_MM_S2) ? accel : FAST_DECEL_MAX_MM_S2; // 減速は滑りやすいので上限まで
+    prof.vmax = vmax;
+    for (int t = RUN_SMALL90_R; t <= RUN_LARGE180_L; t++) {
+        prof.v_turn[t] = turns[t].v_mm_s;
+        prof.turn_pre[t] = turns[t].pre_mm;
+        prof.turn_post[t] = turns[t].post_mm;
+    }
+    return prof;
 }
 
 float RunProfile_CurveTime(const RunProfile *prof, RunType type) {
@@ -122,22 +169,24 @@ bool RunList_Push(RunList *list, RunCommand cmd) {
 bool RunProfile_StraightTime(const RunProfile *prof, float dist, float v_in, float v_out,
                              float *time) {
     const float a = prof->accel;
+    const float d = prof->decel;
     if (dist <= 0.0f) return false;
-    // 速度を変えるのに要る距離が足りなければ無理
-    if (fabsf(v_out * v_out - v_in * v_in) > 2.0f * a * dist) return false;
+    // 速度を変えるのに要る距離が足りなければ無理(上げるなら加速度、下げるなら減速度で)
+    if (v_out > v_in && v_out * v_out - v_in * v_in > 2.0f * a * dist) return false;
+    if (v_out < v_in && v_in * v_in - v_out * v_out > 2.0f * d * dist) return false;
 
-    // 加速して減速する三角形の頂点の速度。vmaxを超えるなら台形にする。
-    float v_peak = sqrtf((2.0f * a * dist + v_in * v_in + v_out * v_out) * 0.5f);
+    // 加速して減速する三角形の頂点の速度(dist = (vp² − v_in²)/2a + (vp² − v_out²)/2d)。vmaxを超えるなら台形にする。
+    float v_peak = sqrtf((2.0f * dist + v_in * v_in / a + v_out * v_out / d) / (1.0f / a + 1.0f / d));
     if (v_peak > prof->vmax) v_peak = prof->vmax;
     if (v_peak < v_in)  v_peak = v_in;  // v_in・v_outがvmaxを超えている場合
     if (v_peak < v_out) v_peak = v_out;
 
     float d_acc    = (v_peak * v_peak - v_in * v_in) / (2.0f * a);
-    float d_dec    = (v_peak * v_peak - v_out * v_out) / (2.0f * a);
+    float d_dec    = (v_peak * v_peak - v_out * v_out) / (2.0f * d);
     float d_cruise = dist - d_acc - d_dec;
     if (d_cruise < 0.0f) d_cruise = 0.0f; // 丸め誤差
 
-    *time = (v_peak - v_in) / a + (v_peak - v_out) / a + d_cruise / v_peak;
+    *time = (v_peak - v_in) / a + (v_peak - v_out) / d + d_cruise / v_peak;
     return true;
 }
 
@@ -411,4 +460,25 @@ void RunList_Print(const RunList *list) {
             printf("%3u: %s\r\n", (unsigned)i, RunType_Name((RunType)c->type));
         }
     }
+}
+
+bool RunPath_FromKnownRun(const Direction *moves, uint16_t m, const RunProfile *prof, bool use_large, RunList *out) {
+    static CommandList route;
+    CommandList_Clear(&route);
+    bool ok = CommandList_Push(&route, Action_Move(0), true) && // P → C0
+              CommandList_Push(&route, Action_Move(0), true);   // C0 → C1
+    for (uint16_t k = 1; k <= m && ok; k++) {
+        ok = CommandList_Push(&route, Action_Move((int)moves[k] - (int)moves[k - 1u]), true);
+    }
+    Action stop = { ACTION_STOP, 0 };
+    if (!ok || !CommandList_Push(&route, stop, false)) return false;
+    if (!RunPath_FromRoute(&route, prof, use_large, out)) return false;
+    int last = -1;
+    for (int i = 0; i < (int)out->count; i++) {
+        if (out->items[i].type == RUN_STOP) break;
+        last = i;
+    }
+    if (last < 0 || out->items[last].type != RUN_STRAIGHT || out->items[last].halves < 2u) return false;
+    out->items[last].halves--;
+    return true;
 }

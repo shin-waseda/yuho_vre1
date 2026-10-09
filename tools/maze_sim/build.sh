@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 ROOT=../..
 mkdir -p build
 
-LOGIC="$ROOT/Core/Src/logic/command.c $ROOT/Core/Src/logic/maze/*.c"
+LOGIC="$ROOT/Core/Src/logic/command.c $ROOT/Core/Src/logic/maze/*.c $ROOT/Core/Src/logic/control/slalom.c $ROOT/Core/Src/logic/control/velocity_profile.c"
 CFLAGS="-std=c11 -Wall -Wextra -O2 -I$ROOT/Core/Inc"
 
 case "$(uname -s)" in

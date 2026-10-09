@@ -344,11 +344,29 @@
 // 最短走行の連続(RUN の FAST_SWEEP。app/search_run の FastSweep_Run)。走行の間の待ち・電池の閾値・帰り道の速さは LONG_LOG_* と同じ
 #define FAST_SWEEP_REPEAT       1       // 組み合わせごとに走る回数
 
+// 速度帯の最短走行(RUN の FAST_BANDS。app/search_run の FastBands_Run)。遅い順に並べる(選ぶときの番号 = 並び順)。
+// { 直進の最高速度, 加速度, 減速度 [mm/s, mm/s²], 小回りの速さ [mm/s], 走り方(1 SMALL, 2 LARGE) }。大回りの速さは FAST_LARGE* のまま。
+// 2026-10-09 のログ: 小回りは 600mm/s まで横のずれが小さい、減速は 6000 まで(8000 以上は滑っている可能性)、
+// 1500mm/s・加速度 10000 の LARGE は 3つ目の大回りで壁に当たった
+#define FAST_BANDS { \
+    {  800.0f, 3000.0f, 3000.0f, 400.0f, 1u }, \
+    { 1000.0f, 4000.0f, 4000.0f, 500.0f, 1u }, \
+    { 1200.0f, 5000.0f, 5000.0f, 600.0f, 1u }, \
+    { 1200.0f, 5000.0f, 5000.0f, 600.0f, 2u }, \
+    { 1400.0f, 6000.0f, 5000.0f, 600.0f, 2u }, \
+    { 1500.0f, 8000.0f, 5000.0f, 600.0f, 2u }, \
+}
+#define FAST_BAND_REPEAT        1       // 速度帯ごとに走る回数
+
 // 尻当て(BlueEyes の set_position と同じ使い方)。後ろの壁に押し当てて向きと位置をそろえ、
 // 真ん中まで進む。スタート(start_sequence)、途中の180°、ゴールと終わりの180°で使う。
 #define SEARCH_SETPOS_BACK_V_MM_S  100.0f // 後ろへ下がる速さ
 #define SEARCH_SETPOS_BACK_MS      1200   // 下がる時間(真ん中から壁まで約40mm を下がり、残りは押し当てる。800 では短かった)
 #define SEARCH_SETPOS_SETTLE_MS    100    // 押し当てた後、モーターを止めて待つ時間
+// 押し当てている間の、車輪速度の PID の出力の上限[V](FF は別)。下がる間(−100mm/s)は PWM 200 前後(約 0.4V)で足りる。
+// 上限なしでは壁で止まった後に 5V 近くまで上がり、電池が 6.8V まで下がった。弱すぎて壁にそろわなければ上げる
+// (1.5V(PWM 約 1050)では押す力が足りなかった(2026-10-09、ユーザー)。3.0V で PWM 約 1800 の見込み)
+#define SEARCH_SETPOS_PUSH_PID_MAX_V 3.0f
 #define SEARCH_SETPOS_FRONT_MM     40.0f  // 壁に当たった所から真ん中までの距離(探索のログで、真ん中から壁まで 39〜40mm 下がった)
 
 // 探索・最短走行のログ。走りながら SD へ流し続ける(logger の Logger_Stream*。止まらずに記録できる)。
@@ -361,6 +379,10 @@
 // 止まって超信地旋回する(旋回は探索と同じ SEARCH_TURN_*)。
 #define FAST_V_MM_S             800.0f  // 直進の最高速度(STRAIGHT で 800mm/s は確かめた)
 #define FAST_ACCEL_MM_S2        2000.0f // 加速度・減速度(探索で安定した値)
+// 最短走行の直進(と探索の既知の区間)の減速度の上限。選んだ加速度がこれより大きければ、減速だけこの値にする。
+// 2026-10-09 の加速度の連続(1000mm/s): 加速は 10000 でも速度の誤差 77mm/s 以下だったが、減速は 8000 以上で
+// 誤差 ±100〜190mm/s・左右の差 116〜140mm/s(滑っている可能性)。6000 は ±60、5000 は −56/+38
+#define FAST_DECEL_MAX_MM_S2    5000.0f
 #define FAST_SMALL_V_MM_S       SLALOM_V_MM_S // 小回りの速さ(走る前に SPEED_SELECT_FAST_SMALL_V_MM_S から選ぶ)
 
 // 走る前に選べる速さ(モードを決めた直後に、右タイヤを回して選びボタンで決める。電源を切るまでそのまま)。
@@ -374,11 +396,20 @@
 // 1.5m/s を保つ所まで見るなら STRAIGHT_TEST_SECTIONS(straight_test.c)を 8(1440mm)くらいにする
 #define SPEED_SELECT_STRAIGHT_V_MM_S { 300.0f, 400.0f, 500.0f, 600.0f, 800.0f, 1000.0f, 1200.0f, 1400.0f, 1500.0f }
 // 探索の小回り(スラローム)の速さ(直進の速さの次に選ぶ。境界ではいつもこの速さで走り、区画の中で直進の速さまで加速する)
-#define SPEED_SELECT_SEARCH_TURN_V_MM_S { 300.0f, 400.0f, 500.0f, 600.0f }
+// 700 は 2026-10-10 に足した(スラロームの連続で、曲がったことによるずれが ±4mm。右の1本で曲がり終わりの角度の誤差 −2.9°。試走会で確かめる)
+#define SPEED_SELECT_SEARCH_TURN_V_MM_S { 300.0f, 400.0f, 500.0f, 600.0f, 700.0f }
 // 最短走行の直進の最高速度(大回りの速さは FAST_LARGE* のまま)
 #define SPEED_SELECT_FAST_V_MM_S     { 600.0f, 800.0f, 1000.0f, 1200.0f, 1400.0f, 1500.0f }
+// 最短走行の直進の加速度・減速度を、選んだ最高速度から決める表(上の表と同じ並び)。FAST_SWEEP はこの値を使い(ACCEL は選ばない)、
+// RUN の FAST は ACCEL を選ぶ画面の最初の値にする(減速度は選んだ加速度と FAST_DECEL_MAX_MM_S2 の小さい方)。
+// FAST_BANDS は帯ごとに書いた値、LONG_LOG は FAST_ACCEL_MM_S2 のまま。
+// 2026-10-09 のログ: 加速は 10000 まで速度の誤差 77mm/s 以下、減速は 8000 以上で誤差 ±100〜190mm/s(滑っている可能性)。
+// 遅い速さは控えめに、速いほど短い直線でも最高速度に届くよう加速度を上げる。減速は 5000 で頭打ち
+#define FAST_ACCEL_FOR_SPEED_MM_S2   { 3000.0f, 3000.0f, 4000.0f, 5000.0f, 6000.0f, 8000.0f }
+#define FAST_DECEL_FOR_SPEED_MM_S2   { 3000.0f, 3000.0f, 4000.0f, 5000.0f, 5000.0f, 5000.0f }
 // 最短走行の小回りの速さ(探索と同じ形とモデル。直進の最高速度を選んだ後に選ぶ)
-#define SPEED_SELECT_FAST_SMALL_V_MM_S { 300.0f, 400.0f, 500.0f, 600.0f }
+// 700 は 2026-10-10 に足した(SPEED_SELECT_SEARCH_TURN_V_MM_S と同じ理由)
+#define SPEED_SELECT_FAST_SMALL_V_MM_S { 300.0f, 400.0f, 500.0f, 600.0f, 700.0f }
 // SLALOM の試験・小回りの連続の試験(SLALOM_SWEEP)の小回りの速さ。探索より上まで選べる(限界を探すため)。
 // 試験は曲がり始めまで1区画半(270mm + 前のオフセット)しかないので、2000mm/s² で加速しきれる 900mm/s まで
 // (1000mm/s 以上は届かず、選んだ速さより遅く曲がり始めてしまう。800mm/s で横加速度 約 1.0G、900mm/s で 約 1.3G)
@@ -388,6 +419,24 @@
 #define SPEED_SELECT_ACCEL_MM_S2     { 2000.0f, 3000.0f, 4000.0f, 5000.0f, 6000.0f, 8000.0f, 10000.0f }
 // PIVOT の試験の最高角速度(角加速度は試験の値のまま)
 #define SPEED_SELECT_PIVOT_OMEGA_DPS { 180.0f, 360.0f, 540.0f }
+
+// モード選択の一番上の階層のショートカット(4〜9 番)で、値を選ぶ所に入れる値(そのモードで選ぶ順。app/mode_ui.c)。
+// 値は上の SPEED_SELECT_* の表にあるものにする(表にない値なら、その所だけふつうに選ぶ)
+#define SHORTCUT_STRAIGHT_V    { 1400.0f, 1500.0f, 2000.0f, 2000.0f }  // 4: SPEED FROM, TO, ACCEL FROM, TO(4本)
+#define SHORTCUT_STRAIGHT_ACC  { 1000.0f, 1000.0f, 3000.0f, 10000.0f } // 5: 同じ並び(12本)
+#define SHORTCUT_SLALOM_LOW    { 300.0f, 700.0f }                      // 6: FROM, TO(20本)
+#define SHORTCUT_SLALOM_HIGH   { 800.0f, 900.0f }                      // 7: FROM, TO(8本)
+#define SHORTCUT_LONG_LOG      { 2.0f, 1.0f }                          // 9: PART, STEP
+
+// 区画の真ん中で回りながら壁センサーを記録する試験(TEST の SENSOR_SPIN。app/sensor_spin)。plant_sim の壁センサーのモデル用。
+// 遅いほどセンサーの読みと向きの対応がはっきりする。流す方式なので長さの上限はない
+#define SENSOR_SPIN_ANGLE_DEG      360.0f // 左に回ってから右に同じだけ回って戻る
+#define SENSOR_SPIN_OMEGA_DPS      45.0f  // 最高角速度(360° で約 8 秒)
+#define SENSOR_SPIN_ALPHA_DPS2     360.0f // 角加速度
+#define SENSOR_SPIN_LOG_DECIMATION 2u     // 2 tick(2ms)に1回記録する
+// 探索で初めて入った区画ごとに真ん中で回る(RUN の SEARCH_SPIN。app/search_run)。回り方は上の SENSOR_SPIN_ANGLE/OMEGA/ALPHA と同じ。
+// 記録はふつうの探索のログ(SEARCH_LOG_DECIMATION ごと)。既知の区間をまとめて走るのは使わない(区画を飛ばさないため)
+#define SEARCH_SPIN_HOLD_MS        300    // 止まってから回るまで・左右の間・回った後に止まっている時間
 
 // 最短走行の大回り(SMALL は探索と同じ SLALOM_* の形の小回りで、速さは選ぶ)。前後のオフセットは logic/control/slalom が
 // 計算する(*_ADJ はそこからの調整分)。どれも仮の値で、まず横加速度を小回りより小さめにしてある。
@@ -452,7 +501,8 @@
 
 // 試しの迷路で探索するときのゴール。1 にすると MAZE_GOALS の代わりにこちらを使う。
 // (5×7 の迷路で、スタートの右隣の1区画をゴールにして試す)
-#define SEARCH_USE_TEST_GOAL    1
+// 2026-10-09: 0 にして MAZE_GOALS((7,7)〜(8,8) の4区画)を使う
+#define SEARCH_USE_TEST_GOAL    0
 #define SEARCH_TEST_GOAL_COUNT  1
 #define SEARCH_TEST_GOALS       { { 1, 0 } }
 

@@ -25,8 +25,9 @@
 
 // 走りながら SD へ流すときのブロックの大きさ(SD のセクタ 512 の倍数)。バッファはこれを2つ持てる大きさ。
 #define LOGGER_STREAM_BLOCK_BYTES   24576u
-// 流すときに、ファイルを先に確保しておく大きさ(15列・5ms ごとなら約 11 分ぶん)
-#define LOGGER_STREAM_RESERVE_BYTES (8u * 1024u * 1024u)
+// 流すときに、ファイルを先に確保しておく大きさ(探索のログの 35列・5ms ごとなら約 20 分ぶん)。
+// 8MB(約 5 分)では、区画ごとに回る SEARCH_SPIN(1区画 約 18 秒)の途中で使い切った(2026-10-09)
+#define LOGGER_STREAM_RESERVE_BYTES (32u * 1024u * 1024u)
 
 // RAM に貯める記録のバッファ[float]。8列なら約1500サンプル(1kHzで1.5s)。
 // 長い記録はLogger_SetDuration()で間引く。48KB。

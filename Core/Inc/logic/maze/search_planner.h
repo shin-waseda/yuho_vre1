@@ -70,4 +70,13 @@ void SearchPlanner_Init(SearchPlanner *sp, WallMap *map, SearchAlgo algo,
 // ゴール・スタートに着いたとき、目的地へ行けないとき、終わった後はACTION_STOP。
 Action SearchPlanner_Step(SearchPlanner *sp, WallObservation obs);
 
+// 既知の区間をまとめて走るための先読み(機体の app/search_run と maze_sim で同じものを使う)。
+// SearchPlanner_Step が直進(1区画)を返した直後に呼ぶ(sp->pos / heading は、その直進で入る区画 C1 と向き)。
+// C1 から、プランナーの経路(Dijkstra の next_dir。今のノードより先はコストが小さいので、計算を途中で止めても
+// 決まっている)をたどり、壁が全部分かっている区画が続く間の進む向きを moves[1..m] に書く(moves[0] は C1 に入る向き)。
+// 目的地の区画・まだ分かっていない区画に入る所で止め、最後の2区画(終わりの区画の1つ手前と、終わりの区画に入る所)が
+// まっすぐになるまで手前で切る(大回りが終わりの区画の真ん中で終わると、境界に戻れないため)。
+// m < min_moves なら 0(まとめない)。Dijkstra でなければ 0。moves は MAZE_CELL_COUNT 個あること。
+uint16_t SearchPlanner_KnownRun(const SearchPlanner *sp, uint16_t min_moves, Direction *moves);
+
 #endif

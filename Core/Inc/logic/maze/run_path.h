@@ -70,7 +70,8 @@ typedef struct {
 // 既定値は円弧だけの理想的な形(長さは RunType_TurnLength()、オフセットは0)。
 // 実機でスラロームの前後オフセットを入れたら、turn_len と turn_pre / turn_post を合わせて変える。
 typedef struct {
-    float accel;                     // [mm/s²] 直進の加速度・減速度
+    float accel;                     // [mm/s²] 直進の加速度
+    float decel;                     // [mm/s²] 直進の減速度(RunProfile_Default は accel と同じ)
     float vmax;                      // [mm/s] 直進の最高速度
     float v_turn[RUN_TYPE_COUNT];    // [mm/s] 旋回の種類ごとの速度
     float turn_len[RUN_TYPE_COUNT];  // [mm] 旋回の経路の長さ(オフセットを含む)
@@ -79,6 +80,27 @@ typedef struct {
 } RunProfile;
 
 RunProfile RunProfile_Default(void);
+
+// 旋回の動き(機体がスラロームとして走る値)。最短走行・探索の既知の区間(app/search_run)と maze_sim で同じものを使う。
+typedef struct {
+    float v_mm_s;     // 並進の速さ
+    float omega_dps;  // 最高角速度
+    float alpha_dps2; // 角加速度
+    float angle_deg;  // 90 か 180
+    float pre_mm;     // 前のオフセット
+    float post_mm;    // 後ろのオフセット
+} RunTurnSpec;
+
+// 直進の最高速度 vmax・加速度 accel・小回りの速さ small_v で走るときの、旋回3種の動き(turns[RunType]、右と左に同じ値)と、
+// それを使う RunProfile を作る。小回りは探索と同じ形(SLALOM_*)を small_v にして、前後のオフセットはスラロームのずれの
+// モデル(Slalom_SmallTurnOffsets)で計算する。大回り 90°・180° は FAST_LARGE* の速さと形(+ *_ADJ)。turns は NULL でもよい。
+RunProfile RunProfile_ForSpeeds(float vmax, float accel, float small_v, RunTurnSpec turns[RUN_TYPE_COUNT]);
+
+// 探索の既知の区間(SearchPlanner_KnownRun の moves[0..m])を、最短走行の指令の列にする。区画 C0 の入口の境界にいて
+// C0 をまっすぐ抜ける所から始まるので、1つ手前の区画 P の真ん中から「P → C0 → C1 → moves[1..m]」の経路として作り、
+// 最後の直進を半区画短くして、終わりの区画の真ん中ではなく入口の境界で終わるようにする(先頭の半区画 P → C0 は走り済み)。
+// 作れなければ false(最後が直進でない、直進が短すぎるなど)。
+bool RunPath_FromKnownRun(const Direction *moves, uint16_t m, const RunProfile *prof, bool use_large, RunList *out);
 
 // 旋回ならtrue
 bool RunType_IsTurn(RunType type);

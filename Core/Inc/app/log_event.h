@@ -24,7 +24,7 @@ typedef enum {
     LOG_EV_EDGE_CORR = 13,    // a:side b:corr c:expected d:edge_pos
     LOG_EV_FRONT_TRIG = 14,   // a:diff b:sum c:by_sensor
     // ---- 動き(control_loop が出す) ----
-    LOG_EV_STRAIGHT = 20,     // a:dist b:v_max c:v_end d:accel
+    LOG_EV_STRAIGHT = 20,     // a:dist b:v_max c:v_end d:accel e:decel
     LOG_EV_PIVOT = 21,        // a:angle b:omega c:alpha
     LOG_EV_SLALOM = 22,       // a:angle b:omega c:alpha d:v
     LOG_EV_MOTION_DONE = 23,  // a:motion
@@ -43,12 +43,18 @@ typedef enum {
     LOG_EV_ROUTE = 44,        // a:cost b:est_s c:count d:type
     LOG_EV_MAP_CELLS = 45,    // a:index b:w0 c:w1 d:w2 e:w3
     LOG_EV_LONG_RUN = 46,     // a:index b:part c:step d:v e:v_turn
-    LOG_EV_FAST_PARAMS = 47,  // a:v b:accel c:small_v d:type
-    LOG_EV_SEARCH_PARAMS = 48, // a:v b:turn_v
+    LOG_EV_FAST_PARAMS = 47,  // a:v b:accel c:small_v d:type e:decel
+    LOG_EV_SEARCH_PARAMS = 48, // a:v b:turn_v c:accel d:slalom
     LOG_EV_KNOWN_RUN = 49,    // a:cells b:commands c:large d:end_x e:end_y
     // ---- 異常 ----
     LOG_EV_FAILSAFE = 50,     // a:cause b:value
     LOG_EV_TIMEOUT = 51,      // a:where
+    // ---- 壁センサーのモデル用(RUN の SEARCH_SPIN)----
+    LOG_EV_SENSOR_SPIN = 52,  // a:x b:y c:heading d:walls e:phase
+    // ---- 速度帯の最短走行(RUN の FAST_BANDS)----
+    LOG_EV_FAST_BAND = 53,    // a:band b:no c:total
+    // ---- 探索の選び方(RUN の SEARCH)----
+    LOG_EV_SEARCH_MODE = 54,  // a:map b:scope c:algo
 } LogEventCode;
 
 // LOG_EV_BOOT: 今の起動のリセットの原因(FAULT_RESET_*、interface/fault_diag.h)と、その前に HardFault があったか(1/0)。
@@ -64,8 +70,13 @@ typedef enum {
 // LOG_EV_RUN_TYPE の kind: 0 探索の曲がり方(0 PIVOT, 1 SMALL), 1 最短走行(0 PIVOT, 1 SMALL, 2 LARGE)。
 //   2 最短走行の後の帰り道(長い走行のモード。type は 1)。
 // LOG_EV_LONG_RUN: 長い走行のモードで、何番目(1〜)・段・段の中の番号・速さ(探索: 直進とスラローム、最短走行: 直進と小回り)。
-// LOG_EV_FAST_PARAMS: 最短走行で選んだ直進の速さ・加速度・小回りの速さ・走り方(RUN_TYPE と同じ)。走り始めに入れる。
-// LOG_EV_SEARCH_PARAMS: 探索(と帰り道)の直進の速さ・スラロームの速さ。走り始めに入れる。
+// LOG_EV_FAST_PARAMS: 最短走行で選んだ直進の速さ・加速度・小回りの速さ・走り方(RUN_TYPE と同じ)・直進の減速度
+//   (加速度と FAST_DECEL_MAX_MM_S2 の小さい方。前のログでは 0)。走り始めに入れる。
+// LOG_EV_STRAIGHT の decel: 減速度(加速度と同じことが多い。前のログでは 0)。
+// LOG_EV_SEARCH_PARAMS: 探索(と帰り道)の直進の速さ・スラロームの速さ・直進の加速度・曲がり方(1 スラローム，0 超信地旋回)。
+//   走り始めに入れる(前のログでは c・d が 0)。
+// LOG_EV_SEARCH_MODE: 探索の地図(1 初期化，2 flash の地図に重ねる)・行き先(1 往復，2 片道，3 全面)・アルゴリズム(1 Dijkstra，2 足立法)。
+//   探索と同じ所に入る(帰り道・最短走行では前の探索の値のまま)。
 // LOG_EV_KNOWN_RUN: 探索で既知の区間をまとめて走り始めた。区画の数、指令の数(STOP を含む)、大回りを使ったか、終わりの区画。
 //   続けて LOG_EV_RUN_CMD(指令ごと)が入る。
 // LOG_EV_TIMEOUT の where: 0 探索, 1 最短走行。LOG_EV_PHASE の phase: SearchPhase(search_planner.h)。
@@ -74,5 +85,7 @@ typedef enum {
 //   expected は壁切れが起きるはずだった目標の距離、edge_pos は実際に起きた目標の距離。
 // LOG_EV_FRONT_TRIG: スラロームの前壁補正。diff は距離で決めた曲がり始めの位置からのずれ[mm]
 //   (− なら手前で曲がり始めた)、sum はそのときの FL+FR、by_sensor は 1 なら前の壁の値で、0 なら距離で始めた。
+// LOG_EV_SENSOR_SPIN: 探索で初めて入った区画の真ん中で回った(壁センサーのモデル用)。区画、回る前の向き(Direction)、
+//   その区画の壁(地図の向きで bit0 北, bit1 東, bit2 南, bit3 西)、phase: 0 左に回り始める, 1 右に回り始める, 2 回り終わった。
 
 #endif

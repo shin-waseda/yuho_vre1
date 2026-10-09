@@ -64,3 +64,31 @@ Action SearchPlanner_Step(SearchPlanner *sp, WallObservation obs) {
     MazePos_Step(sp->pos, next, &sp->pos);
     return a;
 }
+
+static bool IsTarget(const SearchPlanner *sp, MazePos p) {
+    if (sp->phase == SEARCH_PHASE_TO_GOAL) return MazePos_InList(p, sp->goals, sp->goal_count);
+    return MazePos_Equal(p, sp->start);
+}
+
+uint16_t SearchPlanner_KnownRun(const SearchPlanner *sp, uint16_t min_moves, Direction *moves) {
+    if (sp->algo != SEARCH_ALGO_DIJKSTRA) return 0;
+    if (sp->phase != SEARCH_PHASE_TO_GOAL && sp->phase != SEARCH_PHASE_TO_START) return 0;
+    MazePos c = sp->pos;
+    Direction h = sp->heading;
+    uint16_t m = 0;
+    moves[0] = h;
+    while (m < MAZE_CELL_COUNT - 1u) {
+        if (IsTarget(sp, c) || !WallMap_IsCellKnown(sp->map, c)) break;
+        Direction d;
+        if (!Dijkstra_NextDir(&sp->work.solver, c, h, &d)) break;
+        if (d == Dir_Opposite(h)) break; // その場で向きを変える所はまとめない
+        MazePos nc;
+        if (!MazePos_Step(c, d, &nc)) break;
+        c = nc;
+        h = d;
+        moves[++m] = d;
+    }
+    while (m >= 2u && !(moves[m] == moves[m - 1u] && moves[m - 1u] == moves[m - 2u])) m--;
+    if (m < min_moves || m < 2u) return 0;
+    return m;
+}

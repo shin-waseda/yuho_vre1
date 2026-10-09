@@ -13,7 +13,8 @@ typedef struct {
     float distance_mm; // 進む距離(>0)
     float v_max;       // 最高速度[mm/s]
     float v_end;       // 終点の速度[mm/s](0なら止まる)
-    float accel;       // 加速度・減速度の大きさ[mm/s^2]
+    float accel;       // 加速度の大きさ[mm/s^2]
+    float decel;       // 減速度の大きさ[mm/s^2](VelocityProfile_Start なら accel と同じ)
 
     // 現在の目標(Stepで更新)
     float pos_mm;  // 開始からの目標位置
@@ -26,6 +27,9 @@ typedef struct {
 // v_start: 開始時の速度(停止からなら0)。
 void VelocityProfile_Start(VelocityProfile *p, float distance_mm, float v_start,
                            float v_max, float v_end, float accel);
+// 加速度と減速度を別にする(減速でタイヤが滑りやすいので、減速だけ小さくする。最短走行の直進)。
+void VelocityProfile_StartAD(VelocityProfile *p, float distance_mm, float v_start,
+                             float v_max, float v_end, float accel, float decel);
 
 // dt秒進める。done後は v=v_end, a=0 を保つ。
 void VelocityProfile_Step(VelocityProfile *p, float dt);

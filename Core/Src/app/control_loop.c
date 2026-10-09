@@ -74,7 +74,8 @@ typedef struct {
     float v_max;    // [mm/s] or [dps]
     float v_end;    // [mm/s](超信地旋回は0)
     float accel;    // [mm/s^2] or [dps^2]
-    float sign;     // 直進: +1 前進 / -1 後退、超信地旋回: +1 反時計回り
+    float decel;    // 減速度(直進だけ別にできる。旋回は accel と同じ)
+    float sign;    // 直進: +1 前進 / -1 後退、超信地旋回: +1 反時計回り
 } MotionCommand;
 static MotionCommand s_pending;
 static volatile bool s_start_pending = false;
@@ -119,15 +120,20 @@ void App_SetTargetVelocity(float mm_s) {
 }
 
 void App_StartStraight(float distance_mm, float v_max, float v_end, float accel) {
+    App_StartStraightAD(distance_mm, v_max, v_end, accel, accel);
+}
+
+void App_StartStraightAD(float distance_mm, float v_max, float v_end, float accel, float decel) {
     s_pending.type = MOTION_STRAIGHT;
     s_pending.distance = fabsf(distance_mm);
     s_pending.v_max = v_max;
     s_pending.v_end = v_end;
     s_pending.accel = accel;
+    s_pending.decel = decel;
     s_pending.sign = (distance_mm >= 0.0f) ? 1.0f : -1.0f;
     s_motion_done = false;
     s_start_pending = true; // 最後に立てる
-    Logger_Event(LOG_EV_STRAIGHT, distance_mm, v_max, v_end, accel, 0.0f);
+    Logger_Event(LOG_EV_STRAIGHT, distance_mm, v_max, v_end, accel, decel);
 }
 
 void App_StartPivot(float angle_deg, float omega_max_dps, float alpha_dps2) {
@@ -136,6 +142,7 @@ void App_StartPivot(float angle_deg, float omega_max_dps, float alpha_dps2) {
     s_pending.v_max = omega_max_dps;
     s_pending.v_end = 0.0f;
     s_pending.accel = alpha_dps2;
+    s_pending.decel = alpha_dps2;
     s_pending.sign = (angle_deg >= 0.0f) ? 1.0f : -1.0f;
     s_motion_done = false;
     s_start_pending = true; // 最後に立てる
@@ -148,6 +155,7 @@ void App_StartSlalom(float angle_deg, float omega_max_dps, float alpha_dps2) {
     s_pending.v_max = omega_max_dps;
     s_pending.v_end = 0.0f;
     s_pending.accel = alpha_dps2;
+    s_pending.decel = alpha_dps2;
     s_pending.sign = (angle_deg >= 0.0f) ? 1.0f : -1.0f;
     s_motion_done = false;
     s_start_pending = true; // 最後に立てる
@@ -240,8 +248,8 @@ static void UpdateProfile(void) {
         } else {
             s_target_acc = 0.0f;         // スラロームは今の並進の速さのまま曲がる
         }
-        VelocityProfile_Start(&s_profile, s_pending.distance, v_start,
-                              s_pending.v_max, s_pending.v_end, s_pending.accel);
+        VelocityProfile_StartAD(&s_profile, s_pending.distance, v_start,
+                                s_pending.v_max, s_pending.v_end, s_pending.accel, s_pending.decel);
         s_profile_active = true;
         s_start_pending = false;
     }
@@ -597,6 +605,12 @@ void App_ControlTick(void) {
             ff_r -= PIVOT_FF_FRIC_CW_R;
         }
     }
+
+    // 尻当てで壁に押し当てている間は、PID の出力の上限を下げる。車輪が壁で止まると速度の偏差が残り続け、
+    // 積分が溜まって PWM が上がり(最大の 6〜7 割)、電池の電圧が下がって低電圧の FailSafe になった(2026-10-09)。
+    // 上限に張り付くと積分は止まる(PID_Update)ので、溜まり続けることもない
+    s_vpid.output_min = s_wall_push ? -SEARCH_SETPOS_PUSH_PID_MAX_V : VELOCITY_PID_OUTPUT_MIN;
+    s_vpid.output_max = s_wall_push ? SEARCH_SETPOS_PUSH_PID_MAX_V : VELOCITY_PID_OUTPUT_MAX;
 
     WheelVelocity out;
     if (robot_stopped) {

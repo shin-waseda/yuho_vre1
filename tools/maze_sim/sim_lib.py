@@ -63,6 +63,8 @@ def _sources():
     srcs = [os.path.join(HERE, "sim_api.c"), os.path.join(HERE, "sim_core.c"),
             os.path.join(ROOT, "Core", "Src", "logic", "command.c")]
     srcs += sorted(glob.glob(os.path.join(ROOT, "Core", "Src", "logic", "maze", "*.c")))
+    # 最短走行の旋回の表(RunProfile_ForSpeeds)と、スラロームのずれのモデル
+    srcs += [os.path.join(ROOT, "Core", "Src", "logic", "control", n) for n in ("slalom.c", "velocity_profile.c")]
     return srcs
 
 
@@ -74,6 +76,7 @@ def _hashed_files():
               os.path.join(ROOT, "Core", "Inc", "global.h"),
               os.path.join(ROOT, "Core", "Inc", "logic", "command.h")]
     files += sorted(glob.glob(os.path.join(ROOT, "Core", "Inc", "logic", "maze", "*.h")))
+    files += sorted(glob.glob(os.path.join(ROOT, "Core", "Inc", "logic", "control", "*.h")))
     return files
 
 
