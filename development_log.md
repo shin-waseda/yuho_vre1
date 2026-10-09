@@ -1983,3 +1983,38 @@ plot_log                   % ログを時系列のグラフにする(複数の�
   - `SEARCH_KNOWN_FAST_ENABLE`(0 で前と同じ)，`SEARCH_KNOWN_LARGE`，`SEARCH_KNOWN_MIN_MOVES`，`SEARCH_KNOWN_ACCEL_MM_S2` を足した．
     ログに `LOG_EV_KNOWN_RUN`(49: 区画の数・指令の数・大回りを使ったか・終わりの区画)が入る．
   - 10-09 の予定の 1 番に，この確認を足した．
+
+- **plant_sim の最初の実装**(`tools/plant_sim`，`docs/plant_sim_design.md` 記録 6)．実機の `app/`(`test_mode.c` 以外)と `logic/` を
+  そのまま PC の gcc でコンパイルし，`main.h` と interface 層だけを差し替えた．仮想の時計で 1ms ごとに `App_ControlTick` を回す．
+  迷路なしの直進 540mm が走った(本当の機体の値をずらすと FB が働くことも確認)．壁センサ，迷路，ログのファイル，探索のシナリオはまだ．
+
+- **plant_sim を worktree に分けた**(`docs/plant_sim_design.md` 記録 7．設計の記録は worktree の中)．シミュは
+  `M:/User/Desktop/school/club/sim`(`feature/plant-sim`)，このフォルダは `feature/slalom-speed-model` に戻した(コミット前の変更はそのまま)．
+  シミュは `fw_root.local` でこのフォルダのファームウェア(コミット前の変更も含む)をコンパイルする．シミュの日記もここに書く．
+
+- **plant_sim: SD の代わりに PC のファイルへログを書く**(worktree の `docs/plant_sim_design.md` 記録 8)．`--sd-dir` のフォルダを SD とみなし，
+  実機と同じ形式の `.bin` を書く(`logger.c`，`run_log.c` はそのまま)．`yuho_common.load_log` で読めた(34 列，409 行)．
+  - **`logger.c` の流す方式に競合の候補を見つけた(未確認・直していない)**: 割り込みがブロックを 180 行で埋めた後，次に記録する(5ms 後)までに
+    SD の書き込みが終わると，同じブロックに 181 行目を書き足し，ブロック(とバッファ)の外まで書く．シミュでは書き込みを 3ms 以下にすると起きた．
+    実機の書き込みは平均 16〜30ms なのでふだんは起きないはずだが，5ms より速く終わることが一度でもあれば起きうる．
+
+- **maze_sim の GUI に最新の探索を入れ，速さ・探索法・最短走行の走り方を選べるようにした**(ユーザーの依頼．ブランチ `feature/maze-sim-gui`．
+  未確認: ファームウェアのビルド・実機)．
+  - 既知の区間をまとめる計算を logic 層へ移し，ファームウェアとシミュで同じものを使うようにした:
+    `SearchPlanner_KnownRun`(先読み)，`RunPath_FromKnownRun`(指令の列)，`RunProfile_ForSpeeds`(速さから旋回の表を作る．
+    前は `search_run.c` の `ComputeFastTurns` の中にあった)．`search_run.c` の `TryKnownRun` はこれらを呼ぶだけになった．
+    シミュのビルドに `logic/control/slalom.c` と `velocity_profile.c` を足した．
+  - `sim_api.c` の `sim_step` を機体の `app/search_run` と同じ流れにした．ゴールで止まって 180° 回り，まっすぐ進むときは既知の区間を
+    まとめて進む．探索の時間の目安(台形の加減速，スラロームの形，超信地旋回，尻当て，ゴールで止まる時間)も足していく．
+    実機のログとはまだ合わせていない．
+  - GUI(`gui.py`)の変更:
+    - TAB で行，`,` / `.` で値を選ぶ．行は探索法，探索の直進，スラロームの速さ，曲がり方(スラローム/超信地旋回)，既知の区間の on/off，
+      最短の直進・加速度・小回りの速さ．値の表は `params.h` の `SPEED_SELECT_*` を DLL から読む．
+    - V の走り方は機体の LARGE / SMALL / PIVOT に，比べる相手の time-optimal / all walls known を加えた．PIVOT は時間だけ出す．
+    - 既知の区間をまとめて走った所は，軌跡を緑で描く．
+  - **時間の見積もりのずれを1つ直した**: `RunList_EstimateTime` は列の両端を速度0とするので，そのままだと既知の区間ありのほうが遅く出た
+    (609 迷路の合計 73539s 対 72899s)．機体は走りながら入って抜けるので，シミュ側で両端の直進だけ見積もり直した(72745s 対 72899s)．
+    既定の速さ(500/500)では，直線の最高速度が探索と同じなので，縮むのは 0.2% だけ．
+  - 確認(609 迷路，Dijkstra と足立法，4通りの速さ): CRASH・LOST は0．既知の区間あり・なしで探索の手数は同じ(123030)．
+    FAILED の3つは前からある，ゴールへ行けない迷路．
+  - 残り: コマンドラインの `maze_sim.c` は前のままの流れ(既知の区間なし)．
