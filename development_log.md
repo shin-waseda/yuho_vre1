@@ -2412,3 +2412,7 @@ n 番は LED n と n+1 が点く．確実に光るのは LED1〜7 なので，8�
   - FAST_RUN は SPEED → SMALL TURN → 走り方 になった(ACCEL を選ばない)．FAST_SWEEP は SPEED FROM/TO → SMALL FROM/TO → TYPE になった
     (ACCEL FROM/TO を選ばない．本数は 速さ × 小回り × 走り方)．
   - `search_run.c` の `SetFastAccelForSpeed`．表にない速さは，それ以下で一番近い速さの値．使わなくなった `kFastAccels` は消した．
+
+- **モードの選び方の一覧を `docs/mode_select.md` に書いた**(ユーザーの依頼)．操作，一番上の階層(ショートカット 4〜10)，RUN・TEST・SD の
+  モードごとの選ぶもの・ログの場所，選べる値の表，最短走行の加減速度の表，FAST_BANDS の速度帯，止まったときの LED．
+  コードを変えたら合わせて直す．
