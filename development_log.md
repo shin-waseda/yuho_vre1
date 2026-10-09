@@ -2306,3 +2306,18 @@ n 番は LED n と n+1 が点く．確実に光るのは LED1〜7 なので，8�
     - K と C を `turn_sim.py` と同じ計算で合わせた: 全部で K = 0.042，C = 0.42s，b = +4.1mm(右へ)，残りのずれ RMS 6.0mm．
       速さごとに合わせると K = 0.03〜0.07，C = 0.25〜0.7s とばらつき，よく決まらない．1次遅れのモデルだけでは合わない可能性がある．まだ params.h には入れない．
   - `slalom/turn_0001`〜`0004`(500mm/s の小回り，21:17 に取り込み)は前の形式のスラロームの試験のログ(いつのものかは未確認)．
+
+- **最短走行の FAST_SWEEP の範囲を決めた**(ユーザーが今のビルドで取る)．8 FAST_SWEEP で SPEED 1200〜1400，ACCEL 5000〜6000，
+  SMALL 500〜600，TYPE 3(両方)．16 本．
+- **最短走行の直進の減速度を加速度と分けた**(ユーザーの依頼．ブランチ `feature/fast-decel` を `fix/setpos-voltage-drop` から切った
+  (コミット前の変更も持ち越した)．未確認: ビルド・実機)．
+  - 理由: 加速度の連続のログで，加速は 10000 でも大丈夫だったが，減速は 8000 以上で誤差が大きかった(滑っている可能性)．
+  - `VelocityProfile_StartAD`(減速度を別に渡す)を足した．`VelocityProfile_Start` は減速度 = 加速度でこれを呼ぶ(今までと同じ)．
+  - `App_StartStraightAD` を足した．`App_StartStraight` は減速度 = 加速度．`LOG_EV_STRAIGHT` の e に減速度を入れる．
+  - `RunProfile` に `decel` を足した．`RunProfile_Default` は加速度と同じ，`RunProfile_ForSpeeds` は加速度と `FAST_DECEL_MAX_MM_S2`(5000)の
+    小さい方．`RunProfile_StraightTime` は加速と減速を別の値で計算する(経路の時間の計算・加速度が足りるかの判定に効く)．
+  - 最短走行の直進(`FastStraightTo`，探索の既知の区間も同じ)は，加速度は選んだ値，減速度は `FAST_DECEL_MAX_MM_S2` まで．
+    `LOG_EV_FAST_PARAMS` の e に減速度を入れる．
+  - PC で確かめた: 1080mm・1000mm/s で，加速度 8000・減速度 5000 のプロファイルの時間 1.243 秒と見積もり(`RunProfile_StraightTime`)が一致．
+    減速度 = 加速度(3000)のときは前と同じ 1.413 秒．
+  - これで FAST_SWEEP の ACCEL に 8000・10000 を選んでも，減速は 5000 になる．
