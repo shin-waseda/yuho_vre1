@@ -2404,3 +2404,11 @@ n 番は LED n と n+1 が点く．確実に光るのは LED1〜7 なので，8�
 - 1・2 は同じ迷路で速さだけ変える．3 は同じ帯を2回走る(どちらも比べるため)．
 - 尻当ての後に壁にそろっているか(上限 3.0V)も，1〜4 のログで見る．
 - 当たったら，どの帯の何本目か(行きか帰りか)を覚えておく．
+
+- **FAST_RUN と FAST_SWEEP の加速度・減速度を，選んだ最高速度から決めるようにした**(ユーザーの依頼．選ぶ手間を減らすため．
+  FAST_BANDS は帯ごとに書いた値のまま，LONG_LOG も今のまま．未確認: ビルド・実機)．
+  - `params.h` に `FAST_ACCEL_FOR_SPEED_MM_S2` と `FAST_DECEL_FOR_SPEED_MM_S2` を足した(`SPEED_SELECT_FAST_V_MM_S` と同じ並び)．
+    600: 3000/3000，800: 3000/3000，1000: 4000/4000，1200: 5000/5000，1400: 6000/5000，1500: 8000/5000．
+  - FAST_RUN は SPEED → SMALL TURN → 走り方 になった(ACCEL を選ばない)．FAST_SWEEP は SPEED FROM/TO → SMALL FROM/TO → TYPE になった
+    (ACCEL FROM/TO を選ばない．本数は 速さ × 小回り × 走り方)．
+  - `search_run.c` の `SetFastAccelForSpeed`．表にない速さは，それ以下で一番近い速さの値．使わなくなった `kFastAccels` は消した．
