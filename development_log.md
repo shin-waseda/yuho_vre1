@@ -2203,3 +2203,15 @@ n 番は LED n と n+1 が点く．確実に光るのは LED1〜7 なので，8�
 - 連続の試験がシフトレジスタの LED を走った本数ぶん点滅させて止まったら `SweepHalt`(電池・回転と尻当ての失敗・SD の保存の失敗)．
   マイコン直結の LED が点滅したら FailSafe(LED_5 だけ: 電池，LED_1・2: 速度の誤差，LED_1〜3: 角速度)．
 - 8 の FAST_SWEEP は，範囲を広げると本数がかけ算で増えるので電池の持ちに注意．
+
+### 2026-10-09(続き)
+
+- **maze_sim に足した「走りのパラメータ」を外して，前の版に戻した**(ユーザーの依頼)．
+  - なぜ: maze_sim はアルゴリズム(経路の選び方)の確認だけをする，という役割分担にしたいため．
+  - 戻したもの(上の「maze_sim の GUI に最新の探索を入れ…」の GUI とシミュ側の部分): `gui.py`，`sim_api.c`，`README.md` はコミット済みの版(21ee3f9 の時点)のまま．
+    `sim_lib.py` からは `sim_set_params` などパラメータの関数と `PLAN_SMALL` を外した．
+    なくなったもの: TAB と `, / .` での値の選択，探索の時間の目安，既知の区間をまとめる流れと緑の軌跡，V の LARGE / SMALL / PIVOT．
+  - 残したもの: logic 層へ移した `SearchPlanner_KnownRun`・`RunPath_FromKnownRun`・`RunProfile_ForSpeeds`(ファームウェアが使う)．
+    `run_path.c` が `slalom.c` を呼ぶようになったので，シミュのビルド(`build.sh`，`sim_lib.py`)に `logic/control/slalom.c` と
+    `velocity_profile.c` を足した所はそのまま．
+  - 確かめたこと: `python sim_lib.py` で DLL を作り直し，乱数迷路で最後まで探索できた(`route cost: 86 best: 86`)．GUI は起動していない．
