@@ -513,7 +513,8 @@ void App_ControlTick(void) {
     // 加速度も速度と同じ線形変換で車輪ごとに分ける(FFには目標の加速度だけを使う)。
     RobotVelocity target_robot_acc = {
         .linear_mm_s = s_target_acc,
-        .angular_rad_s = s_target_alpha_dps2 * DEG_TO_RAD,
+        // 回転は直進より回しにくい(機体の慣性)ので、回転の加速度の FF だけ ANGULAR_FF_ACC_SCALE 倍にする
+        .angular_rad_s = s_target_alpha_dps2 * DEG_TO_RAD * ANGULAR_FF_ACC_SCALE,
     };
     WheelVelocity target_wheel_acc = Kinematics_RobotToWheel(target_robot_acc);
 
@@ -611,6 +612,12 @@ void App_ControlTick(void) {
     // 上限に張り付くと積分は止まる(PID_Update)ので、溜まり続けることもない
     s_vpid.output_min = s_wall_push ? -SEARCH_SETPOS_PUSH_PID_MAX_V : VELOCITY_PID_OUTPUT_MIN;
     s_vpid.output_max = s_wall_push ? SEARCH_SETPOS_PUSH_PID_MAX_V : VELOCITY_PID_OUTPUT_MAX;
+    // 押し当てを始めた瞬間に、車輪速度の積分を捨てる。直前の超信地旋回で溜まった積分(前へ回っていた車輪は前向きに
+    // +3V ほど)が残っていると、その車輪は最初の約1秒、下がらずに前向きに押し、片側だけ下がって機体が回り、
+    // 壁にそろわなかった(2026-10-10、search_0017 / back_0011)
+    static bool s_prev_wall_push = false;
+    if (s_wall_push && !s_prev_wall_push) VelocityPID_Reset(&s_vpid);
+    s_prev_wall_push = s_wall_push;
 
     WheelVelocity out;
     if (robot_stopped) {

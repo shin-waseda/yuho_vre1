@@ -121,6 +121,7 @@ static const char *PhaseName(SearchPhase p) {
         case SEARCH_PHASE_TO_START: return "TO_START";
         case SEARCH_PHASE_DONE:     return "DONE";
         case SEARCH_PHASE_FAILED:   return "FAILED";
+        case SEARCH_PHASE_FULL:     return "FULL";
         default:                    return "?";
     }
 }
@@ -352,6 +353,23 @@ static bool TurnBack(DrivePos *dp, MazePos pos, Direction heading) {
     if (front && left) {
         return Pivot(-90.0f) && SetPosition(dp) && Pivot(-90.0f) && SetPosition(dp);
     }
+    return Pivot(180.0f);
+}
+
+// ゴール(探索のゴール・スタート，最短走行のゴール)で 180° 向きを変える。真ん中にいること。
+// 壁が一つでもあれば、尻当てで向きと位置をそろえる(2026-10-10)。
+//   前と右 / 前と左: TurnBack と同じ(90° → 尻当てを2回)
+//   右だけ: 左90° → 尻当て(右の壁が後ろになる) → 左90°。左だけ: 右90° → 尻当て → 右90°
+//   前だけ: 180° → 尻当て(前の壁が後ろになる)。壁がなければその場で 180°
+static bool TurnBackAtGoal(DrivePos *dp, MazePos pos, Direction heading) {
+    bool front = WallMap_HasWall(&s_map, pos, heading, WALL_VIEW_KNOWN);
+    bool right = WallMap_HasWall(&s_map, pos, Dir_Turn(heading, 1), WALL_VIEW_KNOWN);
+    bool left = WallMap_HasWall(&s_map, pos, Dir_Turn(heading, -1), WALL_VIEW_KNOWN);
+
+    if (front && (right || left)) return TurnBack(dp, pos, heading);
+    if (right) return Pivot(90.0f) && SetPosition(dp) && Pivot(90.0f);
+    if (left) return Pivot(-90.0f) && SetPosition(dp) && Pivot(-90.0f);
+    if (front) return Pivot(180.0f) && SetPosition(dp);
     return Pivot(180.0f);
 }
 
@@ -648,7 +666,8 @@ static bool SearchLoop(const DrivePos *dp_start, WallObservation obs, WallSensor
 static bool TryKnownRun(DrivePos *dp, MazePos c0, Direction h0, WallObservation *obs, WallSensorValues *sv,
                         bool *used);
 
-// 1回の探索(往復: スタート → ゴール → スタート、片道: スタート → ゴール)。打ち切ったら false。
+// 1回の探索(往復: スタート → ゴール → スタート、片道: スタート → ゴール、
+// 全面: 最短経路になりうる区画を回る → スタート。logic/maze/search_planner.h)。打ち切ったら false。
 // 地図は、初期化(SEARCH_MAP_NEW)か、flash に残した地図に重ねる(SEARCH_MAP_CONTINUE)。
 static bool RunSearch(SearchAlgo algo, const MazePos *goals, uint8_t goal_count) {
     MazePos start = { MAZE_START_X, MAZE_START_Y };
@@ -665,11 +684,8 @@ static bool RunSearch(SearchAlgo algo, const MazePos *goals, uint8_t goal_count)
     s_event_count = 0;
     memset(s_spun, 0, sizeof(s_spun));
     if (s_search_scope == SEARCH_SCOPE_FULL) {
-        // 全面探索(迷路の全部の区画を見る)はまだ作っていない。作るときはここから始める。
-        // 段階を FAILED にして、FinishSearchRun が地図を flash に書かないようにする
-        printf("FULL SEARCH: not implemented yet\r\n");
-        s_planner.phase = SEARCH_PHASE_FAILED;
-        return false;
+        // 全面探索: ゴールでは止まらず、最短経路が決まったらスタートへ戻る(段階 FULL → TO_START → DONE)
+        SearchPlanner_StartFull(&s_planner);
     }
 
     DrivePos dp;
@@ -755,7 +771,7 @@ static bool SearchLoop(const DrivePos *dp_start, WallObservation obs, WallSensor
                     App_ControlLoop_SetEnabled(false);
                     return true;
                 }
-                ok = TurnBack(&dp, s_planner.pos, s_planner.heading);
+                ok = TurnBackAtGoal(&dp, s_planner.pos, s_planner.heading);
                 if (!ok) break;
                 LED_SetDirectPattern(LED_DIRECT_ALL);
                 DelayWatching(SEARCH_GOAL_WAIT_MS);
@@ -929,7 +945,7 @@ void SearchSpin_Run(void) {
 
 // ---- RUN の SEARCH ----
 // 地図(初期化 / 重ねる)・行き先(往復 / 片道 / 全面)・アルゴリズム・直進の速さ・加速度・スラロームの速さ・曲がり方を選んでから、
-// 手かざしで探索する(終わったら、同じ設定で次の手かざしを待つ)。全面探索はまだ作っていない(選ぶと走らずに止まる)。
+// 手かざしで探索する(終わったら、同じ設定で次の手かざしを待つ)。
 void SearchMenu_Run(void) {
     const MazePos *goals;
     uint8_t goal_count = GetGoals(&goals);
@@ -956,7 +972,6 @@ void SearchMenu_Run(void) {
     printf("SEARCH: map %s, %s, %s, v=%.0f mm/s accel=%.0f, slalom %.0f mm/s, turn %s\r\n",
            kMapNames[s_search_map], kScopeNames[s_search_scope], (algo == SEARCH_ALGO_ADACHI) ? "adachi" : "dijkstra",
            s_search_v, s_search_accel, s_search_turn_v, s_search_slalom ? "SLALOM" : "PIVOT");
-    if (s_search_scope == SEARCH_SCOPE_FULL) printf("FULL SEARCH is not implemented yet (it stops without running)\r\n");
     PrintSettings(goals, goal_count);
     ComputeSlalomOffsets();
 
@@ -1129,7 +1144,7 @@ static bool RunFastSlalom(const RunList *list) {
         MazePos pos;
         Direction heading;
         RouteEnd(&pos, &heading);
-        ok = TurnBack(&dp, pos, heading); // ゴールの真ん中で 180°(尻当てあり)
+        ok = TurnBackAtGoal(&dp, pos, heading); // ゴールの真ん中で 180°(壁があれば尻当て)
     }
     if (ok) {
         LED_SetDirectPattern(LED_DIRECT_ALL);
@@ -1201,7 +1216,7 @@ static bool RunFast(void) {
             cells = 1;
         }
     }
-    if (ok) ok = TurnBack(&dp, pos, heading); // ゴールの真ん中で 180°(尻当てあり)
+    if (ok) ok = TurnBackAtGoal(&dp, pos, heading); // ゴールの真ん中で 180°(壁があれば尻当て)
     if (ok) {
         LED_SetDirectPattern(LED_DIRECT_ALL);
         DelayWatching(SEARCH_GOAL_WAIT_MS);
