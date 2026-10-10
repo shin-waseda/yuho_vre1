@@ -2849,3 +2849,10 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
 - **モードの一覧を入れ子(木の形)で書いた**(ユーザーの依頼．`docs/mode_tree.md`)．一番上の階層 → RUN / TEST / SD の中 → RUN の TEST の中 と，
   それぞれ選ぶ順，選ぶ値の表，AUTO の今の設定の流れ．操作・速度帯・止まったときの LED は `docs/mode_select.md` を見るようにした．
   `docs/mode_select.md` は SCOPE 3(全面探索)を「まだ作っていない」と書いたままで古い(直していない)．
+- **`docs/mode_select.md` の古い所を直した**(ユーザーの依頼)．SCOPE 3 を「まだ作っていない(選ぶと走らずに止まる)」から，全面探索の中身
+  (最短経路になりうる区画を回り，決まったらスタートへ戻る．決まれば地図を flash に残す)へ．冒頭の「どのコードをもとに書いたか」に
+  `feature/autonomous`(10-11)を足し，`docs/mode_tree.md` への案内を入れた．止まったときの LED の連続のモードに AUTO を足し，
+  「AUTO は電池では止めない」「探索で止まったときはシフトレジスタの LED が光らない」を書いた．
+- **AUTO がログを SD に残すかを確かめた**(ユーザーの質問)．残す: 1本ごとに `PrepareStart` → `Logger_StreamBegin` で SD の `search/` にファイルを作って
+  走りながら流し，`EndRunLog` で閉じる(探索・最短走行・帰り道・最後の全面探索で共通)．AUTO 1 回で 9 ファイル(search，fast × 4，back × 3，search)．
+  コードは変えていない．SD が挿さっていない(マウントできない)ときは保存されず，走りは続ける．`mode_select.md` と `mode_tree.md` に書いた．
