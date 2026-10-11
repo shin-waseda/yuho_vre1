@@ -26,3 +26,14 @@ void LEDTest_Run(void) {
         }
     }
 }
+
+void LEDAllOn_Run(void) {
+    printf("LED ALL ON\r\n");
+
+    LED_SetShiftPattern((uint16_t)((1u << LED_SHIFT_COUNT) - 1u));
+    LED_SetDirectPattern(LED_DIRECT_ALL);
+
+    while (1) {
+        HAL_Delay(1000);
+    }
+}

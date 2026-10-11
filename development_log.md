@@ -2942,3 +2942,7 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
 - **今の状態を「2026 東北地区大会」として master にマージしてプッシュした**(ユーザーの依頼)．`fix/fast-run-corrections` のコミットしていない変更
   (最短走行の補正，AUTO の低電圧のフェイルセーフを切る，maze_sim の変更，大会で使った bin など)をコミットしてから，master へ `--no-ff` でマージした．
   `base_plate.DXF` と `.settings/stm32cubeide.project.prefs` は入れていない．
+- **TEST にすべての LED を点けたままにするモード LED_ALL_ON を足した**(ユーザーの依頼．ブランチ `feature/led-all-on` を master から作った．未確認: ビルド・実機)．
+  TEST の 13 番(末尾．前からある番号は変えない)．シフトレジスタの LED1〜16 と直結の LED_1〜6 を点け，電源を切るまでそのまま(`LEDAllOn_Run`，`led_test.c`)．
+  `RobotMode` の値も末尾(`MODE_AUTONOMOUS` の後)に足したので，ログの `MODE mode=` の番号は今までと同じ．`docs/mode_select.md` と `docs/mode_tree.md` にも足した．
+- **LED_ALL_ON をコミットして master にマージし，プッシュした**(ユーザーの依頼)．

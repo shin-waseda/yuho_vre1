@@ -10,4 +10,8 @@
 // 595のどの出力に当たるかをUARTへ表示する。電源を切るまで戻らない。
 void LEDTest_Run(void);
 
+// すべての LED(シフトレジスタの LED1〜16 と直結の LED_1〜6)を点けたままにする。
+// 電源を切るまで戻らない。
+void LEDAllOn_Run(void);
+
 #endif

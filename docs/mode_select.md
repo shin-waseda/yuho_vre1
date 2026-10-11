@@ -85,6 +85,7 @@
 | 10 | SLALOM_SWEEP | FROM(s90) → TO(s90) | `slalom/s90r_NNNN`，`slalom/s90l_NNNN` |
 | 11 | STRAIGHT_SWEEP | SPEED FROM → SPEED TO → ACCEL FROM → ACCEL TO | `straight/sweep_NNNN` |
 | 12 | SENSOR_SPIN | なし(真ん中に手で置いて手かざし．左に1周・右に1周) | `sensor/spin_NNNN` |
+| 13 | LED_ALL_ON | なし(すべての LED を点けたままにする．戻るにはリセット) | ― |
 
 - **LONG_LOG**: 探索を速さを変えて，次に最短走行を小回り・大回りで，続けて走る．PART 1〜4 は探索(直進の速さ 300 / 400 / 500 / 600)，
   5 は最短走行の小回り，6 は大回り．STEP は PART の中の番号(電池を替えた後に続きから始めるため)．
