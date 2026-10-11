@@ -45,6 +45,7 @@ static const char *ModeName(RobotMode mode) {
         case MODE_FAST_BANDS:    return "FAST_BANDS";
         case MODE_RUN_TEST:      return "TEST";
         case MODE_AUTONOMOUS:    return "AUTO";
+        case MODE_LED_ALL_ON:    return "LED_ALL_ON";
         default:                return "UNKNOWN";
     }
 }
@@ -53,7 +54,7 @@ static const char *ModeName(RobotMode mode) {
 // 一番上の階層の各項目が、その中のモードの一覧を持つ。並び順がエンコーダで送る順になる。
 static const RobotMode s_test_modes[] = {
     MODE_SENSOR, MODE_SENSOR_LOG, MODE_VEL_PID, MODE_STRAIGHT_TEST, MODE_PIVOT_TEST, MODE_SLALOM_TEST, MODE_LED_TEST, MODE_PARTY,
-    MODE_LONG_LOG, MODE_SLALOM_SWEEP, MODE_STRAIGHT_SWEEP, MODE_SENSOR_SPIN,
+    MODE_LONG_LOG, MODE_SLALOM_SWEEP, MODE_STRAIGHT_SWEEP, MODE_SENSOR_SPIN, MODE_LED_ALL_ON,
 };
 static const RobotMode s_run_modes[] = {
     // SEARCH は地図・行き先・アルゴリズムなどを中で選ぶ(SearchMenu_Run)。ログ取りの走行は TEST の中で選ぶ(RunTest_Run)
@@ -394,6 +395,9 @@ void ModeUI_Run(RobotMode mode) {
             break;
         case MODE_LED_TEST:
             LEDTest_Run();
+            break;
+        case MODE_LED_ALL_ON:
+            LEDAllOn_Run();
             break;
         case MODE_STRAIGHT_TEST:
             StraightTest_Run();
