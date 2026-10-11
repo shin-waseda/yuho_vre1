@@ -27,6 +27,10 @@ void FailSafe_Init(void);
 // ISR(App_ControlTick)から1kHzで呼ぶ。条件が継続したら発動してラッチする。
 void FailSafe_Update(const FailSafeInput *in);
 
+// 低電圧で発動させるか(既定は true)。false の間は電圧を見ない(速度偏差・角速度の監視はそのまま)。
+// 自立賞の AUTO で、途中で止まらないように使う。
+void FailSafe_SetLowVoltageEnabled(bool enabled);
+
 // 即座に発動させる(起動時の電圧チェックなど)。最初の原因だけが残る。
 void FailSafe_Trip(FailSafeCause cause, float value);
 

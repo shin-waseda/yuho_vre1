@@ -8,6 +8,28 @@
 const MazePos kSimGoals[MAZE_GOAL_COUNT] = MAZE_GOALS;
 const MazePos kSimStart = { MAZE_START_X, MAZE_START_Y };
 
+// 機体の FastBand(app/search_run.c)と同じ並び
+typedef struct {
+    float v, accel, decel, small_v;
+    uint8_t type; // 1 SMALL、2 LARGE
+} SimFastBand;
+static const SimFastBand kSimBands[] = FAST_BANDS;
+
+int SimCore_FastBandCount(void) {
+    return (int)(sizeof(kSimBands) / sizeof(kSimBands[0]));
+}
+
+RunProfile SimCore_FastProfile(int band, bool *large) {
+    if (band < 1) band = 1;
+    if (band > SimCore_FastBandCount()) band = SimCore_FastBandCount();
+    const SimFastBand *b = &kSimBands[band - 1];
+    // 機体の ComputeFastTurns と同じ(減速度は帯の値)
+    RunProfile prof = RunProfile_ForSpeeds(b->v, b->accel, b->small_v, NULL);
+    prof.decel = b->decel;
+    if (large != NULL) *large = (b->type == 2u);
+    return prof;
+}
+
 // ------------------------------------------------------------
 // 本当の迷路を作る
 // ------------------------------------------------------------
@@ -184,6 +206,9 @@ bool SimCore_Execute(const WallMap *truth, MazePos *pos, Direction *heading, Act
 void SimCore_PlannerValues(const SearchPlanner *sp, MazeSolver *out) {
     if (sp->phase == SEARCH_PHASE_TO_GOAL) {
         Dijkstra_Compute(out, sp->map, WALL_VIEW_SEARCH, &sp->cost_to_goal, sp->goals, sp->goal_count);
+    } else if (sp->phase == SEARCH_PHASE_FULL) {
+        // 全面探索: 今の行き先(最短経路になりうる、まだ見ていない区画)へ
+        Dijkstra_Compute(out, sp->map, WALL_VIEW_SEARCH, &sp->cost_to_goal, sp->full_targets, sp->full_target_count);
     } else {
         Dijkstra_Compute(out, sp->map, WALL_VIEW_SEARCH, &sp->cost_to_start, &sp->start, 1);
     }

@@ -12,6 +12,12 @@
     --goal S,T90,T180,K        行きのコスト(直進,90°,180°,既知区画の上乗せ)
     --back S,T90,T180,K        帰りのコスト
     --speed N                  1秒あたりの区画数(既定 8)
+    --scope round|oneway|full  探索の行き先(往復・片道・全面)
+    --search V,TV,ACCEL        探索の直進の速さ・スラロームの速さ・加速度(既定 params.h)
+    --pivot                    探索で曲がるとき超信地旋回
+    --band N                   最短走行の速度帯(FAST_BANDS の N 番目。既定 3)
+    --plant-no-build           X で plant_sim を走らせる前にビルドし直さない
+    --plant-opt "..."          X で plant_sim にそのまま渡すオプション(例 "--no-crash-stop")
 
 操作(画面右にも出る):
     SPACE / P   再生・一時停止          S / →   1区画だけ進める(一時停止中)
@@ -21,6 +27,10 @@
     N / B       次 / 前の迷路(一覧の同じ分類の中で。乱数ならシード)
     A           アルゴリズムを切り替えて最初から
     C           コスト(歩数)の表示      T       まだ見ていない壁の表示
+    O           探索の行き先(往復 → 片道 → 全面)を切り替えて最初から
+    K           最短走行の速度帯を次の帯にする
+    X           今の迷路と探索の設定で plant_sim を走らせ、機体と同じ形式のログを残す(build/plant_logs/)
+    Z           最後にできた plant_sim のログを log_viewer で開く
     ↑ / ↓       速さ                   ESC / Q 終わる
 探索が終わった後(最短走行):
     G           最短走行を再生 / 一時停止(終わっていれば最初から)
@@ -35,7 +45,10 @@
 import argparse
 import math
 import os
+import subprocess
 import sys
+import threading
+import time
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")  # pygame の起動メッセージを出さない
 import pygame  # noqa: E402
@@ -85,6 +98,16 @@ def parse_cost(text):
     return tuple(int(p) for p in parts)
 
 
+def parse_search(text):
+    try:
+        v = tuple(float(x) for x in text.split(","))
+    except ValueError:
+        v = ()
+    if len(v) != 3 or min(v) <= 0:
+        raise argparse.ArgumentTypeError("search must be V,TURN_V,ACCEL (all > 0)")
+    return v
+
+
 def jp_font(size):
     """日本語が出るフォント(なければ既定のフォント)"""
     for name in JP_FONTS:
@@ -101,6 +124,11 @@ class MazeGui:
         self.goal_cost = args.goal
         self.back_cost = args.back
         self.speed = args.speed
+        # 探索の行き先と速さ(機体の RUN の SEARCH と同じ選び方)、最短走行の速度帯(FAST_BANDS)
+        self.scope = {"round": sl.SCOPE_ROUND, "oneway": sl.SCOPE_ONE_WAY, "full": sl.SCOPE_FULL}[args.scope]
+        self.search_speeds = args.search or (0.0, 0.0, 0.0)  # 0 は params.h の値
+        self.slalom = not args.pivot
+        self.band = args.band
         self.plan_kind = sl.PLAN_TIME  # 表示・再生する最短走行の経路
         self.run_scale = 1.0           # 再生の速さ(実時間の何倍か)
 
@@ -116,6 +144,15 @@ class MazeGui:
             recent = [by_id[i] for i in self.prefs["recent"] if i in by_id and by_id[i].playable]
             if recent:
                 self.maze_file = recent[0].path
+
+        # plant_sim(機体と同じ形式のログ。X で走らせ、Z で log_viewer で開く)
+        self.plant_build = not args.plant_no_build
+        self.plant_opt = args.plant_opt
+        self.plant_thread = None   # 走らせているスレッド
+        self.plant_result = None   # スレッドが書く: できたログのパス(失敗なら "")
+        self.plant_status = ""     # 右の欄に出す文
+        self.plant_log = None      # 最後にできたログ
+        self.plant_started = 0.0
 
         self.show_cost = True
         self.show_hidden = True
@@ -143,6 +180,8 @@ class MazeGui:
         self.font_jp = jp_font(15)
         self.font_jp_small = jp_font(12)
 
+        self.apply_search()
+        self.band = self.sim.set_band(self.band)
         self.prof = self.sim.run_profile()
         self.load_maze()
 
@@ -189,6 +228,65 @@ class MazeGui:
         self.run_playing = False
         self.message = ""
 
+    def apply_search(self):
+        """探索の行き先と速さを DLL に渡す(次の reset から使う)"""
+        v, turn_v, accel = self.search_speeds
+        self.sim.set_search(self.scope, v, turn_v, accel, self.slalom)
+
+    def compute_plans(self):
+        """探索の後の最短走行の経路と時間(今の速度帯で)"""
+        self.plans = {}
+        for kind in (sl.PLAN_TIME, sl.PLAN_COST, sl.PLAN_TIME_BEST):
+            plan = self.sim.run_plan(kind)
+            if plan:
+                cmds, times, total, feasible = plan
+                motion = rm.RunMotion(cmds, times, self.prof, self.sim.start)
+                self.plans[kind] = (total, feasible, motion)
+
+    def start_plant(self):
+        """今の迷路と探索の設定で plant_sim を走らせる(別のスレッド。走っている間も GUI は動く)"""
+        if self.plant_thread is not None:
+            self.message = "plant_sim is already running"
+            return
+        e = self.current_entry()
+        name = e.name if e else (os.path.splitext(os.path.basename(self.maze_file))[0] if self.maze_file
+                                 else f"random{self.seed}")
+        scope = sl.SCOPE_NAMES[self.scope]
+        out_dir = os.path.join(sl.BUILD_DIR, "plant_logs", f"{name}_{scope}_{time.strftime('%Y%m%d_%H%M%S')}")
+        maze_path = os.path.join(out_dir, "maze.txt")
+        self.sim.write_maze(maze_path)        # 乱数の迷路でも渡せるように、今の迷路を書き出す
+        est = self.sim.search_estimate()      # logic 層の計算なので、このスレッドで先に行う
+        self.plant_result = None
+        self.plant_started = time.time()
+        self.plant_status = "running" + (f" (search est. {est:.0f} s)" if est else "")
+
+        def work():
+            log = self.sim.plant_log(maze_path, out_dir, est or 0.0, self.plant_build, self.plant_opt)
+            self.plant_result = log or ""
+
+        self.plant_thread = threading.Thread(target=work, daemon=True)
+        self.plant_thread.start()
+
+    def poll_plant(self):
+        """plant_sim のスレッドが終わっていたら結果を受け取る"""
+        if self.plant_thread is None or self.plant_thread.is_alive():
+            return
+        self.plant_thread = None
+        if self.plant_result:
+            self.plant_log = self.plant_result
+            self.plant_status = f"done: {os.path.basename(self.plant_log)} (Z: view)"
+            self.message = "plant_sim log: " + os.path.relpath(self.plant_log, sl.ROOT)
+        else:
+            self.plant_status = "FAILED (see the console)"
+
+    def open_plant_log(self):
+        """最後にできた plant_sim のログを log_viewer で開く(別のプロセス)"""
+        if not self.plant_log:
+            self.message = "no plant_sim log yet (X: run plant_sim)"
+            return
+        viewer = os.path.join(sl.ROOT, "tools", "log_viewer.py")
+        subprocess.Popen([sys.executable, viewer, self.plant_log])
+
     def finished(self):
         return self.status not in (sl.SIM_MOVED, sl.SIM_AT_GOAL)
 
@@ -207,13 +305,7 @@ class MazeGui:
             self.message = "reached goal"
         elif self.status == sl.SIM_DONE:
             self.route = self.sim.route()
-            self.plans = {}
-            for kind in (sl.PLAN_TIME, sl.PLAN_COST, sl.PLAN_TIME_BEST):
-                plan = self.sim.run_plan(kind)
-                if plan:
-                    cmds, times, total, feasible = plan
-                    motion = rm.RunMotion(cmds, times, self.prof, self.sim.start)
-                    self.plans[kind] = (total, feasible, motion)
+            self.compute_plans()
             self.message = "search done (G: fastest run)"
             self.paused = True
         elif self.finished():
@@ -595,8 +687,11 @@ class MazeGui:
             add(f"goal   : {self.cost_text(self.goal_cost, False)}")
             add(f"back   : {self.cost_text(self.back_cost, True)}")
         add(f"speed  : {self.speed} cells/s")
+        sp = self.sim.search_params()
+        add(f"search : {sl.SCOPE_NAMES[sp['scope']]}, v {sp['v']:.0f} / slalom {sp['turn_v']:.0f}"
+            + ("" if sp['slalom'] else " (pivot)"))
         # 区画の数字は、プランナーが最後に計算した目的地までの値
-        target = "goal" if self.sim.phase() == 0 else "start"
+        target = {sl.PHASE_TO_GOAL: "goal", sl.PHASE_FULL: "targets"}.get(self.sim.phase(), "start")
         unit = "steps" if self.algo == sl.ALGO_ADACHI else "cost"
         add(f"numbers: {unit} to {target}", COLOR_DIM)
         add("")
@@ -612,6 +707,16 @@ class MazeGui:
             add(f"action : {name}")
         to_goal, back = self.sim.moves()
         add(f"moves  : {to_goal} + {back} = {to_goal + back}")
+        # 探索の時間の見積もり(機体の動きを params.h の値でたどる。search_time.c)
+        t, t_goal, n_setpos, n_known = self.sim.search_time()
+        goal_label = "route decided" if sp['scope'] == sl.SCOPE_FULL else "goal"
+        add(f"time   : {t:5.1f} s" + (f" ({goal_label} {t_goal:.1f} s)" if t_goal is not None else ""))
+        add(f"         setpos {n_setpos}, known runs {n_known}", COLOR_DIM)
+        if self.plant_status:
+            status = self.plant_status
+            if self.plant_thread is not None:
+                status += f" {time.time() - self.plant_started:.0f} s"
+            add(f"plant  : {status}", COLOR_BAD if status.startswith("FAILED") else COLOR_TEXT)
         if self.message:
             add(f">> {self.message}", COLOR_BAD if bad else COLOR_GOOD)
 
@@ -621,7 +726,9 @@ class MazeGui:
             add(f"route cost {found}" + (" = optimal" if found == best else f" (best {best})"),
                 COLOR_GOOD if found == best else COLOR_TEXT)
         if self.plans:
-            add("fastest run (V: switch, G: play)")
+            add(f"fastest run band {self.band}: v {self.prof['vmax']:.0f}, "
+                f"small {self.prof['v_turn'][sl.RUN_SMALL90_R]:.0f}")
+            add("  (V: switch, G: play, K: band)", COLOR_DIM)
             best_time = self.plans[sl.PLAN_TIME_BEST][0] if sl.PLAN_TIME_BEST in self.plans else None
             for kind, label in ((sl.PLAN_TIME, "time-optimal"), (sl.PLAN_COST, "cost + large"),
                                 (sl.PLAN_TIME_BEST, "all walls known")):
@@ -650,7 +757,9 @@ class MazeGui:
         for k in ["SPACE/P play  S/-> step  F to end",
                   "R restart  L list  M fav  N/B maze",
                   f"A algo  C cost[{'on' if self.show_cost else 'off'}]  T hidden[{'on' if self.show_hidden else 'off'}]",
-                  "G run  V plan  UP/DOWN speed  Q quit"]:
+                  "O scope  K band  G run  V plan",
+                  "X plant_sim log  Z view the log",
+                  "UP/DOWN speed  Q quit"]:
             add(k, COLOR_DIM)
 
         for text, color, font in lines:
@@ -724,6 +833,24 @@ class MazeGui:
         elif key == pygame.K_a:
             self.algo = sl.ALGO_ADACHI if self.algo == sl.ALGO_DIJKSTRA else sl.ALGO_DIJKSTRA
             self.restart()
+        elif key == pygame.K_x:
+            self.start_plant()
+        elif key == pygame.K_z:
+            self.open_plant_log()
+        elif key == pygame.K_o:
+            # 探索の行き先: 往復 → 片道 → 全面 → 往復 …(最初から)
+            order = [sl.SCOPE_ROUND, sl.SCOPE_ONE_WAY, sl.SCOPE_FULL]
+            self.scope = order[(order.index(self.scope) + 1) % len(order)]
+            self.apply_search()
+            self.restart()
+        elif key == pygame.K_k:
+            # 最短走行の速度帯: 次の帯(最後の次は1)。探索が終わっていれば経路と時間を計算し直す
+            self.band = self.sim.set_band(self.band % self.sim.band_count() + 1)
+            self.prof = self.sim.run_profile()
+            self.run_t = None
+            self.run_playing = False
+            if self.plans is not None:
+                self.compute_plans()
         elif key == pygame.K_c:
             self.show_cost = not self.show_cost
         elif key == pygame.K_t:
@@ -770,6 +897,7 @@ class MazeGui:
                     self.repeat_key = None
 
             self.repeat_browser_key(dt)
+            self.poll_plant()
 
             motion = self.current_motion()
             if self.run_playing and motion is not None and not self.browser_open:
@@ -799,6 +927,14 @@ def main():
     p.add_argument("--goal", type=parse_cost, default=None, help="cost to goal: S,T90,T180,K")
     p.add_argument("--back", type=parse_cost, default=None, help="cost back to start: S,T90,T180,K")
     p.add_argument("--speed", type=int, default=8, help="cells per second (default 8)")
+    p.add_argument("--scope", choices=["round", "oneway", "full"], default="round",
+                   help="search scope: round trip, one way, full (default round)")
+    p.add_argument("--search", type=parse_search, default=None,
+                   help="search speeds V,TURN_V,ACCEL [mm/s, mm/s, mm/s^2] (default params.h)")
+    p.add_argument("--pivot", action="store_true", help="search turns by pivoting instead of slalom")
+    p.add_argument("--band", type=int, default=3, help="fastest-run speed band in FAST_BANDS (default 3)")
+    p.add_argument("--plant-no-build", action="store_true", help="X: do not rebuild plant_sim before running it")
+    p.add_argument("--plant-opt", default=None, help='X: options passed to plant_sim as is (e.g. "--no-crash-stop")')
     args = p.parse_args()
     MazeGui(args).run()
 

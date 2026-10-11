@@ -44,6 +44,7 @@ static const char *ModeName(RobotMode mode) {
         case MODE_SEARCH_SPIN:   return "SEARCH_SPIN";
         case MODE_FAST_BANDS:    return "FAST_BANDS";
         case MODE_RUN_TEST:      return "TEST";
+        case MODE_AUTONOMOUS:    return "AUTO";
         default:                return "UNKNOWN";
     }
 }
@@ -56,7 +57,7 @@ static const RobotMode s_test_modes[] = {
 };
 static const RobotMode s_run_modes[] = {
     // SEARCH は地図・行き先・アルゴリズムなどを中で選ぶ(SearchMenu_Run)。ログ取りの走行は TEST の中で選ぶ(RunTest_Run)
-    MODE_SEARCH, MODE_FAST_RUN, MODE_RUN_TEST,
+    MODE_SEARCH, MODE_FAST_RUN, MODE_RUN_TEST, MODE_AUTONOMOUS,
 };
 static const RobotMode s_sd_modes[] = {
     MODE_SD_DUMP, MODE_SD_DUMP_ALL, MODE_STREAM_TEST,
@@ -447,6 +448,9 @@ void ModeUI_Run(RobotMode mode) {
             break;
         case MODE_RUN_TEST:
             RunTest_Run();
+            break;
+        case MODE_AUTONOMOUS:
+            AutonomousRun_Run();
             break;
         default:
             break;

@@ -17,8 +17,8 @@ case "$(uname -s)" in
     *)                    LIB=build/libmaze_sim.so;    LIBFLAGS="-shared -fPIC" ;;
 esac
 
-gcc $CFLAGS -o build/maze_sim maze_sim.c sim_core.c $LOGIC
+gcc $CFLAGS -o build/maze_sim maze_sim.c sim_core.c search_time.c plant_bridge.c $LOGIC -lm
 echo "built tools/maze_sim/build/maze_sim"
 
-gcc $CFLAGS $LIBFLAGS -o "$LIB" sim_api.c sim_core.c $LOGIC
+gcc $CFLAGS $LIBFLAGS -o "$LIB" sim_api.c sim_core.c search_time.c plant_bridge.c $LOGIC -lm
 echo "built tools/maze_sim/$LIB"

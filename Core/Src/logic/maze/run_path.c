@@ -67,6 +67,11 @@ RunProfile RunProfile_ForSpeeds(float vmax, float accel, float small_v, RunTurnS
         prof.v_turn[t] = turns[t].v_mm_s;
         prof.turn_pre[t] = turns[t].pre_mm;
         prof.turn_post[t] = turns[t].post_mm;
+        // 旋回の長さは、機体が実際に曲がる道のり(角速度の上げ下げを含む = 速さ × 曲がる時間)に前後のオフセットを足したもの。
+        // 理想の円弧の長さを使うと、曲線の部分の時間が短く出る(2026-10-10 のログ: 小回り 700mm/s で 0.162 秒と見積もり、
+        // 実際は 0.183 秒。最短走行の見積もりが実測より 5〜12% 短かった主な原因)
+        SlalomParams sp = { turns[t].v_mm_s, turns[t].omega_dps, turns[t].alpha_dps2, turns[t].angle_deg };
+        prof.turn_len[t] = turns[t].pre_mm + Slalom_ComputeShape(&sp).length_mm + turns[t].post_mm;
     }
     return prof;
 }
@@ -213,15 +218,28 @@ static float TurnPost(const RunList *list, const RunProfile *prof, int i) {
 bool RunProfile_LinkedStraightTime(const RunProfile *prof, float dist,
                                    float v_in, float off_in, float v_out, float off_out,
                                    float *time) {
-    // オフセットを含めた長い直進として加減速する
+    // 速度を変えられるか(戻り値)は、オフセットを含めた長い直進で決める
     float ext = dist + off_in + off_out;
     if (ext <= 0.0f) { // 長さ0(オフセットのない旋回どうしが直接つながる): 速度は変えられない
         *time = 0.0f;
         return v_in == v_out;
     }
+    float t_ext;
+    bool ok = RunProfile_StraightTime(prof, ext, v_in, v_out, &t_ext);
+    if (!ok) t_ext = 2.0f * ext / (v_in + v_out); // 加速度が足りない: 必要な加速度で一様に変える
+
+    // 時間は実機の走り方で数える(app/search_run の RunList_Drive): 前の旋回の後オフセットと次の旋回の前オフセットは
+    // 旋回の速さのまま走り、加減速は間の直進だけで行う。オフセットの中でも加速するとした数え方だと、旋回の後の直進
+    // 1本あたり約 10ms 短く出た(2026-10-10 のログ)。直進がない(旋回どうしが直接つながる)ときは、今までどおり
+    // オフセットの中で速度を変える
+    if (dist <= 0.0f) {
+        *time = t_ext;
+        return ok;
+    }
     float t;
-    bool ok = RunProfile_StraightTime(prof, ext, v_in, v_out, &t);
-    if (!ok) t = 2.0f * ext / (v_in + v_out); // 加速度が足りない: 必要な加速度で一様に変える
+    if (!RunProfile_StraightTime(prof, dist, v_in, v_out, &t)) t = 2.0f * dist / (v_in + v_out);
+    if (off_in > 0.0f && v_in > 0.0f) t += off_in / v_in;
+    if (off_out > 0.0f && v_out > 0.0f) t += off_out / v_out;
     *time = t;
     return ok;
 }

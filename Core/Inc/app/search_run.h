@@ -55,4 +55,9 @@ void FastSweep_Run(void);
 // ログ取りにも本番(始めと終わりに同じ速度帯)にも使う。走り始めに LOG_EV_FAST_BAND を入れる。電源を切るまで戻らない。
 void FastBands_Run(void);
 
+// 自立賞(RUN の AUTO)。1回の手かざしで、機体に触らずに 探索 → 最短走行とスタートへの帰り道 を
+// AUTONOMOUS_FAST_COUNT 回 走る(AUTONOMOUS_FINAL_FULL_SEARCH なら、最後はゴールから全面探索をしてスタートへ戻る)。
+// 設定はすべて params.h の AUTONOMOUS_*(選ぶものはない)。電源を切るまで戻らない。
+void AutonomousRun_Run(void);
+
 #endif

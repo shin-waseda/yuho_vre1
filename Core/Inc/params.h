@@ -367,6 +367,25 @@
 }
 #define FAST_BAND_REPEAT        1       // 速度帯ごとに走る回数
 
+// 自立賞(RUN の AUTO。app/search_run の AutonomousRun_Run)。1回の手かざしで、機体に触らずに
+// 探索 → 最短走行とスタートへの帰り道 を AUTONOMOUS_FAST_COUNT 回 走る。走る前に選ぶものはない(ここで決める)。
+// 探索は 2026-10-10 の試走会で走れた 600/500(往復)。最短は 1200・小回り 600・SMALL で，加減速は 2000 に下げた
+// (試走会のログで，減速度 2000 の減速中の速度の誤差は −38/+52mm/s，5000 は −93/+128mm/s まであった)。
+// 電池の電圧では止めない(フェイルセーフの低電圧も AUTO の間は使わない。速度偏差・角速度のフェイルセーフは効く)。
+#define AUTONOMOUS_SEARCH_SCOPE        1       // 1 往復，3 全面(どちらもスタートで終わる。片道は使えない)
+#define AUTONOMOUS_SEARCH_ALGO         1       // 1 Dijkstra，2 足立法
+#define AUTONOMOUS_SEARCH_V_MM_S       600.0f  // 探索の直進の速さ(最後の全面探索も同じ)
+#define AUTONOMOUS_SEARCH_TURN_V_MM_S  500.0f  // 探索のスラロームの速さ(最後の全面探索も同じ)
+#define AUTONOMOUS_SEARCH_ACCEL_MM_S2  2000.0f // 探索の直進の加速度(最後の全面探索も同じ)
+#define AUTONOMOUS_FAST_V_MM_S         1200.0f // 最短走行の直進の最高速度
+#define AUTONOMOUS_FAST_ACCEL_MM_S2    2000.0f // 最短走行の加速度
+#define AUTONOMOUS_FAST_DECEL_MM_S2    2000.0f // 最短走行の減速度
+#define AUTONOMOUS_FAST_SMALL_V_MM_S   600.0f  // 最短走行の小回りの速さ
+#define AUTONOMOUS_FAST_TYPE           1u      // 1 SMALL，2 LARGE
+#define AUTONOMOUS_FAST_COUNT          4u      // 探索の後に走る最短走行の本数(1本ごとにスタートへ戻る)
+#define AUTONOMOUS_FINAL_FULL_SEARCH   1       // 1: 最後の最短走行の後は，帰り道の代わりにゴールから全面探索をして
+                                               //    スタートへ戻り，地図を flash に残す。0: ふつうの帰り道
+
 // 尻当て(BlueEyes の set_position と同じ使い方)。後ろの壁に押し当てて向きと位置をそろえ、
 // 真ん中まで進む。スタート(start_sequence)、途中の180°、ゴールと終わりの180°で使う。
 #define SEARCH_SETPOS_BACK_V_MM_S  100.0f // 後ろへ下がる速さ
@@ -508,6 +527,10 @@
 #define SLALOM_FRONT_REF_SUM_AT_PRE0 400.0f // 前の調整分が 0 のときの閾値
 #define SLALOM_FRONT_SUM_PER_MM      4.5f   // 曲がり始めが 1mm 動いたときの FL+FR の変わり方
 #define SLALOM_FRONT_WINDOW_MM 15.0f
+// 最短走行の指令の列(app/search_run の RunList_Drive．探索の既知の区間も)の小回りでも前壁補正を使うか。
+// 2026-10-11: 0 にした(10-10 の 16:10 ごろから FR が約 2 倍に読めていて閾値が合わず、範囲の手前の端でばかり決まるため。
+// 最短走行は 10-10 まで前壁補正なし・壁切れ補正だけで走れていた)。探索の小回り(SLALOM_FRONT_ENABLE)はそのまま。
+#define FAST_FRONT_ENABLE      0
 
 // 試しの迷路で探索するときのゴール。1 にすると MAZE_GOALS の代わりにこちらを使う。
 // (5×7 の迷路で、スタートの右隣の1区画をゴールにして試す)

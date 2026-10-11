@@ -1,7 +1,8 @@
 # モードの選び方(一覧)
 
-ブランチ `feature/run-menu` のコード(2026-10-09 の終わり)をもとに書いた．メニューの表は `Core/Src/app/mode_ui.c`，
-値の表は `Core/Inc/params.h`．コードを変えたらここも直す．
+ブランチ `feature/run-menu` のコード(2026-10-09 の終わり)をもとに書き，`feature/autonomous`(2026-10-11)で AUTO と全面探索を足した．
+メニューの表は `Core/Src/app/mode_ui.c`，値の表は `Core/Inc/params.h`．コードを変えたらここも直す．
+入れ子(木の形)の一覧は [mode_tree.md](mode_tree.md)．
 
 ## 操作
 
@@ -38,13 +39,22 @@
 | 1 | SEARCH | MAP(1 初期化，2 重ねる) → SCOPE(1 往復，2 片道，3 全面) → ALGO(1 Dijkstra，2 足立法) → SPEED → ACCEL → SLALOM → TURN(1 スラローム，2 超信地旋回) | `search/search_NNNN` |
 | 2 | FAST | SPEED → ACCEL(最初は SPEED に合う値) → SMALL TURN → TURN(1 SMALL，2 LARGE，3 PIVOT) | `search/fast_NNNN` |
 | 3 | TEST | TEST(1 FAST_SWEEP，2 SEARCH_SPIN，3 FAST_BANDS，4 LONG_LOG) → それぞれの選ぶもの | 下を見る |
+| 4 | **AUTO**(自立賞) | なし(設定は `params.h` の `AUTONOMOUS_*`) | `search/search_NNNN`，`search/fast_NNNN`，`search/back_NNNN` |
 
 どの値も，何も回さずに決めると 1 番(FAST の ACCEL だけは SPEED に合う値)．
+
+- **AUTO(自立賞)**: スタート区画に北向きに置いて手かざし1回で，機体に触らずに「探索 → 最短走行とスタートへの帰り道 を `AUTONOMOUS_FAST_COUNT` 回」走る．
+  今の設定は，探索 600/500(往復，Dijkstra)，最短 1200・加速度 2000・減速度 2000・小回り 600・SMALL を 4 本．
+  最後の最短走行の後は，帰り道の代わりにゴールから全面探索(600/500)をしてスタートへ戻り，地図を flash に残す(`AUTONOMOUS_FINAL_FULL_SEARCH`)．
+  電池の電圧では止めない(フェイルセーフの低電圧も AUTO の間は使わない．車輪の速度の誤差・角速度のフェイルセーフは効く)．走れなかったときは止まって，シフトレジスタの LED に何本目かを出す
+  (探索で止まったときは 0 本なので，今はシフトレジスタの LED は光らない)．
+  ログは1本ごとに SD へ流して残す(探索 `search`，最短走行 `fast` × 4，帰り道 `back` × 3，最後の全面探索 `search` の 9 ファイル)．
 
 - **SEARCH**: スタート区画に北向きに置く．終わったら同じ設定で次の手かざしを待つ．
   - MAP: 1 は空の地図から．2 は flash に残した地図(前の探索)から始める(なければ空の地図)．
   - SCOPE: 1 はゴールへ行ってスタートに戻る．2 はゴールの真ん中で止まって終わる．どちらもゴールまで行けば地図を flash に残す．
-    3(全面探索)は**まだ作っていない**(選ぶと走らずに止まる)．
+    3(全面探索)は，ゴールでは止まらずに，最短経路になりうる区画(未知の壁を「なし」とみなした最短経路が横切る未知の壁の両側)を回り，
+    最短経路が決まったらスタートへ戻る．最短経路が決まれば地図を flash に残す．
   - ACCEL: 直進の加速度・減速度(1 番の 2000 が今までの値)．
   - 壁が全部分かっている区間はまとめて走る(直線の加速．SPEED が大回りの速さ以上なら大回り)．
 - **FAST**: 探索で残した地図で，スタートからゴールまで走る(ゴールで終わり．同じ設定で次の手かざしを待つ)．
@@ -129,7 +139,7 @@ SD のログは，PC に SD カードを挿して `tools/sd_import.py` で取り
 
 ## 止まったとき
 
-- **シフトレジスタの LED が本数ぶん点滅**: 連続のモード(FAST_SWEEP，FAST_BANDS，STRAIGHT_SWEEP，SLALOM_SWEEP，LONG_LOG)が止めた印．
-  電池(走る前の静止時で 7.5V 未満)，経路がない，走りの打ち切りなど．点滅した本数が，何本目で止まったか．
+- **シフトレジスタの LED が本数ぶん点滅**: 連続のモード(FAST_SWEEP，FAST_BANDS，STRAIGHT_SWEEP，SLALOM_SWEEP，LONG_LOG，AUTO)が止めた印．
+  電池(走る前の静止時で 7.5V 未満．AUTO は電池では止めない)，経路がない，走りの打ち切りなど．点滅した本数が，何本目で止まったか．
 - **マイコン直結の LED が点滅**: FailSafe．LED_5 だけ: 電池の低電圧(7.0V)，LED_1・2: 車輪の速度の誤差，LED_1〜3: 角速度，全部: それ以外．
 - **左後ろの LED が点いたまま**: SD へのログの保存に失敗した(走りは続ける)．

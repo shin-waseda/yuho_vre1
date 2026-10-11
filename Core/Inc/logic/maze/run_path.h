@@ -59,16 +59,17 @@ typedef struct {
 //
 // 旋回は 前オフセット(直線) → 曲線 → 後オフセット(直線) の形で、指令の始めから終わりまで
 // (小回りは境目から境目、大回りは中心から中心)の長さが turn_len。
-// 時間の数え方(曲線の部分だけが一定の速度で、オフセットは直進と一緒に加減速する):
+// 時間の数え方(実機の走り方 = app/search_run の RunList_Drive に合わせる。2026-10-10 に最短走行のログで確かめた):
 //   - 旋回の時間は、曲線の部分(turn_len − 前後オフセット)を旋回の速度で走る時間
 //     (RunProfile_CurveTime)。
-//   - 直進の時間は、隣の旋回のオフセットを含めた長い直進の時間(RunProfile_LinkedStraightTime)。
+//   - 直進の時間は、隣の旋回のオフセットを旋回の速度のまま走る時間 + 間の直進を台形加速で走る時間
+//     (RunProfile_LinkedStraightTime)。オフセットは直進の側に数える。
 //   - 旋回どうしが直接つながるときは、前の旋回の後オフセット + 次の旋回の前オフセットを
-//     長さ0の直進とみなして同じように扱う(速度が違えば、オフセットの中で変える)。
+//     長さ0の直進とみなし、その中で速度を変える(速度が同じなら、旋回の速度のまま走る)。
 //   オフセットを旋回の側に数えて直進から引く分け方だと、直結の区間で加速した分が
 //   負の時間になり、Dijkstra で扱えない。この分け方なら、どの部分の時間も0以上になる。
 // 既定値は円弧だけの理想的な形(長さは RunType_TurnLength()、オフセットは0)。
-// 実機でスラロームの前後オフセットを入れたら、turn_len と turn_pre / turn_post を合わせて変える。
+// RunProfile_ForSpeeds は実機の旋回の形を使う(turn_len = 前オフセット + 曲がる道のり(速さ × 曲がる時間) + 後オフセット)。
 typedef struct {
     float accel;                     // [mm/s²] 直進の加速度
     float decel;                     // [mm/s²] 直進の減速度(RunProfile_Default は accel と同じ)
@@ -138,9 +139,11 @@ bool RunList_Push(RunList *list, RunCommand cmd);
 bool RunProfile_StraightTime(const RunProfile *prof, float dist, float v_in, float v_out,
                              float *time);
 
-// 旋回にはさまれた直進の時間[s]。隣の旋回のオフセットを含めた、長さ dist + off_in + off_out の
-// 直進として求める。off_in は前の旋回の後オフセット、off_out は次の旋回の前オフセット
-// (隣が旋回でなければ0)。加速度が足りなければfalse(timeは「必要な加速度で一様に変える」とした値)。
+// 旋回にはさまれた直進の時間[s]。off_in は前の旋回の後オフセット、off_out は次の旋回の前オフセット
+// (隣が旋回でなければ0)。時間は、オフセットを旋回の速度(v_in / v_out)のまま走り、長さ dist の直進で
+// 加減速するとして求める(dist が0なら、オフセットの中で速度を変える)。
+// 速度を変えられるか(戻り値)は、長さ dist + off_in + off_out の直進で決める。
+// 加速度が足りなければfalse(timeは「必要な加速度で一様に変える」とした値)。
 bool RunProfile_LinkedStraightTime(const RunProfile *prof, float dist,
                                    float v_in, float off_in, float v_out, float off_out,
                                    float *time);

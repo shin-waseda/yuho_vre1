@@ -13,6 +13,15 @@
 //   --goal S,T90,T180,K      探索の行きのDijkstraのコスト(直進,90°旋回,180°旋回,既知区画の上乗せ)
 //   --back S,T90,T180,K      探索の帰りのコスト(既定は params.h。K = MAZE_COST_KNOWN_CELL_RETURN)
 //   --known-back K           帰りの既知区画の上乗せだけを変える
+//   --scope round|oneway|full 探索の行き先(往復・片道・全面。既定 round)
+//   --search V,TV,ACCEL      探索の直進の速さ・スラロームの速さ・加速度[mm/s, mm/s, mm/s²](既定は params.h)
+//   --pivot                  探索で曲がるとき、スラロームでなく超信地旋回(機体の TURN 2)
+//   --band N                 最短走行の速度帯(params.h の FAST_BANDS の N 番目。既定 3)
+//   --plant-log DIR          同じ迷路・同じ探索の設定で plant_sim を走らせ、機体と同じ形式のログを DIR に残す
+//                            (迷路ファイル1つのときだけ。plant_bridge.h)
+//   --plant-exe PATH         plant_sim の実行ファイル(既定: 環境変数 YUHO_PLANT_SIM、tools/maze_sim/plant_sim.local)
+//   --plant-no-build         走らせる前に plant_sim をビルドし直さない
+//   --plant-opt "..."        plant_sim にそのまま渡すオプション(例 "--no-crash-stop")
 //   --verbose                1区画ごとに地図を表示する
 //   --sizes                  構造体の大きさを表示して終わる
 // 探索で見つけた経路の評価(最短走行のコスト)は、常に params.h のコストで計算する。
@@ -21,9 +30,10 @@
 // 迷路ファイルの形式 (micromouseonline/mazefiles の classic と同じ):
 //   北(上)から 2*MAZE_SIZE+1 行。角は 'o' か '+'、横の壁は "---"、縦の壁は '|'。
 //
-// 流れ: 探索(ゴールへ行ってスタートへ戻る) → 分かった壁だけで最短経路を計算 →
+// 流れ: 探索(ゴールへ行ってスタートへ戻る。全面は最短経路になりうる区画を回ってから戻る。片道はゴールまで) →
+//       探索の時間を見積もる(search_time.c。機体の探索の動きを params.h の値でたどる) → 分かった壁だけで最短経路を計算 →
 //       その経路を本当の迷路で走らせて、壁にぶつからずゴールに着くか確かめる →
-//       最短走行の時間を見積もる(コストが最短の経路を大回りに置き換えたもの、
+//       最短走行の時間を見積もる(速度帯の速さで。コストが最短の経路を大回りに置き換えたもの、
 //       走行時間が最短の経路(TimeDijkstra)、迷路を全部知っていたときの走行時間が最短の経路)。
 
 #include <stdio.h>
@@ -40,6 +50,8 @@
 #include "logic/maze/run_path.h"
 #include "logic/maze/time_dijkstra.h"
 #include "sim_core.h"
+#include "search_time.h"
+#include "plant_bridge.h"
 
 #define STEP_LIMIT 5000 // 探索で指令をこれだけ実行しても終わらなければ打ち切る
 
@@ -87,6 +99,10 @@ typedef struct {
     float time_large;     // 見つけた経路を大回りに置き換えて走ったときの時間[s](同上)
     float time_opt;       // 時間で選んだ経路(TimeDijkstra)の時間[s](負なら失敗)
     float time_opt_best;  // 迷路を全部知っていたときの、時間で選んだ経路の時間[s]
+    float search_s;       // 探索の時間の見積もり[s](スタートの尻当てから、終わりの 180° と待ちまで)
+    float goal_s;         // 往復・片道: ゴールに止まった時刻、全面: 最短経路が決まった時刻[s]
+    int setpos;           // 尻当ての回数
+    int known_runs;       // 既知の区間をまとめて走った回数
 } Result;
 
 static void PrintRunList(const char *title, const RunList *list, const float *times) {
@@ -105,8 +121,10 @@ static void PrintRunList(const char *title, const RunList *list, const float *ti
 
 // mapの分かっている壁だけで、時間が最短の最短走行の経路を求めて時間[s]を返す(失敗なら負)。
 // 経路は本当の迷路(truth)でも走らせ、壁にぶつからずにゴールで止まるかを確かめる。
+static RunProfile s_prof; // 最短走行の速さ(--band の速度帯。main で決める)
+
 static float TimeOptimalRun(const WallMap *map, const WallMap *truth, bool print) {
-    RunProfile prof = RunProfile_Default();
+    RunProfile prof = s_prof;
     TimeDijkstra_Compute(&s_time_solver, map, WALL_VIEW_KNOWN, &prof, s_goals, s_goal_count,
                          kSimStart, DIR_NORTH);
     if (!TimeDijkstra_BuildRun(&s_time_solver, &s_run)) {
@@ -152,10 +170,11 @@ typedef struct {
     bool set_back_cost;
     MazeCost goal_cost;
     MazeCost back_cost;
+    SearchTimeParams search; // 探索の速さと行き先(search_time.h)
 } SimConfig;
 
 static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, bool quiet) {
-    Result r = { false, 0, 0, MAZE_COST_INF, MAZE_COST_INF, -1.0f, -1.0f, -1.0f, -1.0f };
+    Result r = { false, 0, 0, MAZE_COST_INF, MAZE_COST_INF, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 0, 0 };
     SearchAlgo algo = cfg->algo;
 
     // --- 探索 ---
@@ -163,6 +182,11 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
     SearchPlanner_Init(&s_planner, &s_map, algo, kSimStart, DIR_NORTH, s_goals, s_goal_count);
     if (cfg->set_goal_cost) s_planner.cost_to_goal = cfg->goal_cost;
     if (cfg->set_back_cost) s_planner.cost_to_start = cfg->back_cost;
+    bool one_way = (cfg->search.scope == SEARCH_TIME_ONE_WAY);
+    if (cfg->search.scope == SEARCH_TIME_FULL) SearchPlanner_StartFull(&s_planner);
+    SearchTime st;
+    SearchTime_Init(&st, &cfg->search);
+    SearchTime_Start(&st);
     MazePos pos = kSimStart;
     Direction heading = DIR_NORTH;
 
@@ -170,6 +194,11 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
         WallObservation obs = SimCore_Sense(truth, pos, heading);
         SearchPhase before = s_planner.phase;
         Action a = SearchPlanner_Step(&s_planner, obs);
+        SearchTime_Step(&st, &s_planner, obs, a, before);
+        if (!quiet && before == SEARCH_PHASE_FULL && s_planner.phase == SEARCH_PHASE_TO_START) {
+            printf("shortest route decided at (%u,%u) after %d moves (%.1f s)\n", pos.x, pos.y, r.moves_to_goal,
+                   (double)st.t_goal_s);
+        }
 
         if (a.type == ACTION_STOP) {
             if (s_planner.phase == SEARCH_PHASE_FAILED) {
@@ -178,8 +207,13 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
             }
             if (s_planner.phase == SEARCH_PHASE_DONE) break;
             if (!quiet && before == SEARCH_PHASE_TO_GOAL) {
-                printf("reached goal (%u,%u) after %d moves\n", pos.x, pos.y, r.moves_to_goal);
+                printf("reached goal (%u,%u) after %d moves (%.1f s)\n", pos.x, pos.y, r.moves_to_goal,
+                       (double)st.t_goal_s);
             }
+            if (one_way) break; // 片道: ゴールで止まって終わる
+            // 機体はゴールの真ん中で 180° 回ってから帰り始める(app/search_run の SearchLoop)。向きを合わせる
+            heading = Dir_Opposite(heading);
+            s_planner.heading = heading;
             continue;
         }
 
@@ -192,7 +226,7 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
                                pos.x, pos.y, s_planner.pos.x, s_planner.pos.y);
             return r;
         }
-        if (s_planner.phase == SEARCH_PHASE_TO_GOAL) r.moves_to_goal++;
+        if (s_planner.phase == SEARCH_PHASE_TO_GOAL || s_planner.phase == SEARCH_PHASE_FULL) r.moves_to_goal++;
         else r.moves_to_start++;
 
         if (verbose) {
@@ -203,9 +237,20 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
                           &pos, heading, s_goals, s_goal_count);
         }
     }
-    if (s_planner.phase != SEARCH_PHASE_DONE) {
+    bool finished = (s_planner.phase == SEARCH_PHASE_DONE) || (one_way && s_planner.phase == SEARCH_PHASE_TO_START);
+    if (!finished) {
         if (!quiet) printf("search did not finish in %d steps\n", STEP_LIMIT);
         return r;
+    }
+    r.search_s = st.t_s;
+    r.goal_s = st.t_goal_s;
+    r.setpos = st.n_setpos;
+    r.known_runs = st.n_known;
+    if (!quiet) {
+        printf("search time: %.1f s (straight %.1f, slalom %.1f, pivot %.1f, setpos %.1f x%u, wait %.1f, "
+               "known runs %.1f x%u / %u cells)\n",
+               (double)st.t_s, (double)st.t_straight, (double)st.t_slalom, (double)st.t_pivot, (double)st.t_setpos,
+               st.n_setpos, (double)st.t_goal_wait, (double)st.t_known, st.n_known, st.n_known_cells);
     }
 
     // --- 分かった壁だけで最短経路 ---
@@ -239,7 +284,7 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
     }
 
     // --- 最短走行の指令に置き換えて、走行時間を見積もる ---
-    RunProfile prof = RunProfile_Default();
+    RunProfile prof = s_prof;
     for (int large = 0; large <= 1; large++) {
         float total;
         float times[RUN_LIST_MAX];
@@ -322,6 +367,8 @@ static void PrintCost(const char *label, const MazeCost *c) {
 
 static void PrintResult(const Result *r) {
     printf("search: %d moves to goal, %d moves back\n", r->moves_to_goal, r->moves_to_start);
+    printf("search time: %.1f s (goal / shortest route decided at %.1f s), setpos %d, known runs %d\n",
+           (double)r->search_s, (double)r->goal_s, r->setpos, r->known_runs);
     printf("route cost: %u (best possible %u)%s\n", (unsigned)r->cost_found, (unsigned)r->cost_best,
            (r->cost_found == r->cost_best) ? "  = optimal" : "");
     printf("run time: %.3f s small turns only, %.3f s with large turns (negative = not feasible)\n",
@@ -344,6 +391,8 @@ typedef struct {
     double sum_opt;      // 時間で選んだ経路(timed の迷路だけ)
     double sum_opt_best;
     int opt_optimal;     // 時間で選んだ経路が、全部知っていたときと同じ時間だった迷路の数
+    double sum_search;   // 探索の時間の見積もり
+    double sum_goal_s;   // ゴールに止まった(全面: 最短経路が決まった)時刻
 } BatchStats;
 
 static void Batch_Add(BatchStats *b, const Result *r, const char *label) {
@@ -356,6 +405,8 @@ static void Batch_Add(BatchStats *b, const Result *r, const char *label) {
     b->sum_goal += r->moves_to_goal;
     b->sum_back += r->moves_to_start;
     b->sum_ratio += (double)r->cost_found / (double)r->cost_best;
+    b->sum_search += r->search_s;
+    b->sum_goal_s += r->goal_s;
     if (r->cost_found == r->cost_best) b->optimal++;
     if (r->time_small > 0.0f && r->time_large > 0.0f) {
         b->timed++;
@@ -376,9 +427,9 @@ static void Batch_Print(const BatchStats *b, const SimConfig *cfg) {
     }
     printf(" | %d mazes, %d failed, optimal %3d", b->count, b->failed, b->optimal);
     if (ok > 0) {
-        printf(", moves %.1f + %.1f = %.1f, cost ratio %.3f",
+        printf(", moves %.1f + %.1f = %.1f, search %.1f s (goal %.1f s), cost ratio %.3f",
                (double)b->sum_goal / ok, (double)b->sum_back / ok,
-               (double)(b->sum_goal + b->sum_back) / ok, b->sum_ratio / ok);
+               (double)(b->sum_goal + b->sum_back) / ok, b->sum_search / ok, b->sum_goal_s / ok, b->sum_ratio / ok);
     }
     if (b->timed > 0) {
         printf(", run time %.3f s (small) %.3f s (large) %.3f s (time-opt, best %.3f s, optimal %d)",
@@ -404,6 +455,10 @@ int main(int argc, char **argv) {
     cfg.goal_cost = MazeCost_Default();
     cfg.back_cost = MazeCost_Default();
     cfg.back_cost.known_cell = MAZE_COST_KNOWN_CELL_RETURN;
+    cfg.search = SearchTime_DefaultParams();
+    int band = SIM_DEFAULT_BAND;
+    const char *plant_dir = NULL;
+    PlantOptions plant = { NULL, true, NULL, argv[0] };
     if (files == NULL) return 2;
 
     for (int i = 1; i < argc; i++) {
@@ -427,6 +482,37 @@ int main(int argc, char **argv) {
             if (k < 0 || k > 1000) { fprintf(stderr, "bad --known-back: %ld\n", k); return 2; }
             cfg.back_cost.known_cell = (uint16_t)k;
             cfg.set_back_cost = true;
+        } else if (strcmp(argv[i], "--scope") == 0 && i + 1 < argc) {
+            i++;
+            if (strcmp(argv[i], "round") == 0) cfg.search.scope = SEARCH_TIME_ROUND;
+            else if (strcmp(argv[i], "oneway") == 0) cfg.search.scope = SEARCH_TIME_ONE_WAY;
+            else if (strcmp(argv[i], "full") == 0) cfg.search.scope = SEARCH_TIME_FULL;
+            else { fprintf(stderr, "unknown scope: %s\n", argv[i]); return 2; }
+        } else if (strcmp(argv[i], "--search") == 0 && i + 1 < argc) {
+            float v, tv, acc;
+            if (sscanf(argv[++i], "%f,%f,%f", &v, &tv, &acc) != 3 || v <= 0.0f || tv <= 0.0f || acc <= 0.0f) {
+                fprintf(stderr, "--search must be V,TURN_V,ACCEL: %s\n", argv[i]);
+                return 2;
+            }
+            cfg.search.v_mm_s = v;
+            cfg.search.turn_v_mm_s = tv;
+            cfg.search.accel_mm_s2 = acc;
+        } else if (strcmp(argv[i], "--pivot") == 0) {
+            cfg.search.slalom = false;
+        } else if (strcmp(argv[i], "--band") == 0 && i + 1 < argc) {
+            band = (int)strtol(argv[++i], NULL, 10);
+            if (band < 1 || band > SimCore_FastBandCount()) {
+                fprintf(stderr, "--band must be 1..%d\n", SimCore_FastBandCount());
+                return 2;
+            }
+        } else if (strcmp(argv[i], "--plant-log") == 0 && i + 1 < argc) {
+            plant_dir = argv[++i];
+        } else if (strcmp(argv[i], "--plant-exe") == 0 && i + 1 < argc) {
+            plant.exe = argv[++i];
+        } else if (strcmp(argv[i], "--plant-no-build") == 0) {
+            plant.build = false;
+        } else if (strcmp(argv[i], "--plant-opt") == 0 && i + 1 < argc) {
+            plant.extra = argv[++i];
         } else if (strcmp(argv[i], "--verbose") == 0) {
             verbose = true;
         } else if (strcmp(argv[i], "--sizes") == 0) {
@@ -440,6 +526,20 @@ int main(int argc, char **argv) {
         }
     }
     if (!CheckCostFits("goal", &cfg.goal_cost) || !CheckCostFits("back", &cfg.back_cost)) return 2;
+    s_prof = SimCore_FastProfile(band, NULL);
+    {
+        static const char *const kScope[] = { "", "round", "oneway", "full" };
+        printf("search: %s, v %.0f / slalom %.0f mm/s, accel %.0f, %s | fast run: band %d "
+               "(v %.0f, accel %.0f / %.0f, small turn %.0f mm/s)\n",
+               kScope[cfg.search.scope], (double)cfg.search.v_mm_s, (double)cfg.search.turn_v_mm_s,
+               (double)cfg.search.accel_mm_s2, cfg.search.slalom ? "slalom" : "pivot", band, (double)s_prof.vmax,
+               (double)s_prof.accel, (double)s_prof.decel, (double)s_prof.v_turn[RUN_SMALL90_R]);
+    }
+
+    if (plant_dir != NULL && (batch > 0 || file_count != 1)) {
+        fprintf(stderr, "--plant-log needs exactly one maze file (plant_sim reads the same file)\n");
+        return 2;
+    }
 
     if (batch > 0) {
         BatchStats b = { 0 };
@@ -480,8 +580,24 @@ int main(int argc, char **argv) {
     MazePrint_Map(&s_truth, NULL, &kSimStart, DIR_NORTH, s_goals, s_goal_count);
 
     Result r = RunOne(&s_truth, &cfg, verbose, false);
-    if (!r.ok) return 1;
-    printf("\n");
-    PrintResult(&r);
-    return 0;
+    if (r.ok) {
+        printf("\n");
+        PrintResult(&r);
+    }
+
+    if (plant_dir != NULL) {
+        // plant_sim は機体のファームウェアそのものなので、ゴールは params.h の MAZE_GOALS、コストは params.h の値
+        printf("\n=== plant_sim ===\n");
+        bool same_goals = (s_goal_count == MAZE_GOAL_COUNT);
+        for (uint8_t i = 0; same_goals && i < s_goal_count; i++) {
+            same_goals = MazePos_InList(s_goals[i], kSimGoals, MAZE_GOAL_COUNT);
+        }
+        if (!same_goals) printf("warning: the maze file's goals differ from params.h MAZE_GOALS (plant_sim uses MAZE_GOALS)\n");
+        if (cfg.set_goal_cost || cfg.set_back_cost) {
+            printf("warning: --goal / --back are not used by plant_sim (the firmware uses params.h)\n");
+        }
+        float est = (r.search_s > 0.0f) ? r.search_s : 300.0f;
+        if (!PlantLog_Run(&plant, files[0], &cfg.search, cfg.algo, est, plant_dir, NULL, 0)) return 1;
+    }
+    return r.ok ? 0 : 1;
 }
