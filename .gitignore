@@ -33,4 +33,5 @@ __pycache__/
 tools/maze_sim/mazes/
 maze_sim.md
 tools/maze_sim/maze_prefs.json
+tools/maze_sim/plant_sim.local
 tools/maze_sim/maze_file/

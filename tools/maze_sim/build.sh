@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 ROOT=../..
 mkdir -p build
 
-LOGIC="$ROOT/Core/Src/logic/command.c $ROOT/Core/Src/logic/maze/*.c"
+LOGIC="$ROOT/Core/Src/logic/command.c $ROOT/Core/Src/logic/maze/*.c $ROOT/Core/Src/logic/control/slalom.c $ROOT/Core/Src/logic/control/velocity_profile.c"
 CFLAGS="-std=c11 -Wall -Wextra -O2 -I$ROOT/Core/Inc"
 
 case "$(uname -s)" in
@@ -17,8 +17,8 @@ case "$(uname -s)" in
     *)                    LIB=build/libmaze_sim.so;    LIBFLAGS="-shared -fPIC" ;;
 esac
 
-gcc $CFLAGS -o build/maze_sim maze_sim.c sim_core.c $LOGIC
+gcc $CFLAGS -o build/maze_sim maze_sim.c sim_core.c search_time.c plant_bridge.c $LOGIC -lm
 echo "built tools/maze_sim/build/maze_sim"
 
-gcc $CFLAGS $LIBFLAGS -o "$LIB" sim_api.c sim_core.c $LOGIC
+gcc $CFLAGS $LIBFLAGS -o "$LIB" sim_api.c sim_core.c search_time.c plant_bridge.c $LOGIC -lm
 echo "built tools/maze_sim/$LIB"

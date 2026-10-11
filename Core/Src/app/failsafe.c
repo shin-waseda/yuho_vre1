@@ -15,6 +15,13 @@ static uint16_t s_low_voltage_ms = 0;
 static uint16_t s_vel_err_ms = 0;
 static uint16_t s_gyro_ms = 0;
 
+// 低電圧で発動させるか(メインが書き、ISRが読む。AUTO の間だけ false にする)
+static volatile bool s_low_voltage_enabled = true;
+
+void FailSafe_SetLowVoltageEnabled(bool enabled) {
+    s_low_voltage_enabled = enabled;
+}
+
 void FailSafe_Init(void) {
     s_cause = FAILSAFE_NONE;
     s_trip_value = 0.0f;
@@ -51,7 +58,8 @@ void FailSafe_Update(const FailSafeInput *in) {
 
     if (s_cause != FAILSAFE_NONE) return; // ラッチ済み
 
-    if (Persist(&s_low_voltage_ms, s_vbat_filtered < FAILSAFE_LOW_VOLTAGE_V, FAILSAFE_LOW_VOLTAGE_MS)) {
+    bool low_voltage = s_low_voltage_enabled && (s_vbat_filtered < FAILSAFE_LOW_VOLTAGE_V);
+    if (Persist(&s_low_voltage_ms, low_voltage, FAILSAFE_LOW_VOLTAGE_MS)) {
         FailSafe_Trip(FAILSAFE_LOW_VOLTAGE, s_vbat_filtered);
         return;
     }

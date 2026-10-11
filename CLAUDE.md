@@ -8,6 +8,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - ファイルの読み取りや、質問・相談への回答は自由に行ってよい
 - `yuho.ioc` の編集とコード再生成はユーザーが CubeIDE で行う
 
+### ブランチ(git)
+- ブランチを作るのは Claude の担当．新しいまとまった作業(新しい機能，大きな調整，不具合の修正など)を始めるとき，最初にファイルを変える前に作り，名前と元のブランチをユーザーに伝える
+- 元は GitHub の既定のブランチ `master` の最新(`main` ではない)．まだ `master` に入っていない作業の続きなら，そのブランチから作る
+- 名前は `feature/内容`(機能)，`fix/内容`(不具合の修正)．内容は英語の小文字とハイフン(例: `feature/front-wall-window`)
+- 小さな続きの作業(調整値を1つ変える，開発日記の追記など)は今のブランチのまま行う
+- `master` へのマージ(`--no-ff`)と `master` へのプッシュは，ユーザーに頼まれてから行う．マージやプッシュの前に `git ls-remote --symref origin HEAD` で既定のブランチを確かめる
+- ブランチを消すときは，先にユーザーに確認する
+- `.settings/stm32cubeide.project.prefs` は CubeIDE が環境ごとに書き換えるのでコミットしない
+
 ### ビルドと書き込み
 - ビルドと書き込みはユーザーが STM32CubeIDE で行う
 - ヘッドレスビルドを含め、ビルド・書き込みのコマンドは実行しない

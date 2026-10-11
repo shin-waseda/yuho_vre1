@@ -8,6 +8,8 @@
 #include <stddef.h>
 
 #include "sim_core.h"
+#include "search_time.h"
+#include "plant_bridge.h"
 #include "logic/maze/dijkstra.h"
 #include "logic/maze/step_map.h"
 #include "logic/maze/search_planner.h"
@@ -58,6 +60,121 @@ static int s_status;
 static SearchAlgo s_algo;
 static bool s_has_values; // リセット後、プランナーが一度でも経路を計算したか(区画の値の表示用)
 static MazeSolver s_value_solver; // 区画の値の表示用(プランナーは途中で計算を止めるので、全部を計算し直す)
+
+// 探索の設定(行き先・速さ)と、その時間の見積もり(search_time.c)
+static bool s_search_set = false;
+static SearchTimeParams s_search;
+static SearchTime s_st;
+// 最短走行の速さ(FAST_BANDS の速度帯)
+static int s_band = SIM_DEFAULT_BAND;
+static RunProfile s_prof;
+static bool s_prof_ready = false;
+
+static const RunProfile *Prof(void) {
+    if (!s_prof_ready) {
+        s_prof = SimCore_FastProfile(s_band, NULL);
+        s_prof_ready = true;
+    }
+    return &s_prof;
+}
+
+static const SearchTimeParams *Search(void) {
+    if (!s_search_set) {
+        s_search = SearchTime_DefaultParams();
+        s_search_set = true;
+    }
+    return &s_search;
+}
+
+// 探索の設定。scope: 1 往復, 2 片道, 3 全面。速さが 0 以下なら params.h の値。次の sim_reset から使う。
+SIM_EXPORT void sim_set_search(int scope, float v, float turn_v, float accel, int slalom) {
+    SearchTimeParams p = SearchTime_DefaultParams();
+    if (scope >= SEARCH_TIME_ROUND && scope <= SEARCH_TIME_FULL) p.scope = (SearchTimeScope)scope;
+    if (v > 0.0f) p.v_mm_s = v;
+    if (turn_v > 0.0f) p.turn_v_mm_s = turn_v;
+    if (accel > 0.0f) p.accel_mm_s2 = accel;
+    p.slalom = (slalom != 0);
+    s_search = p;
+    s_search_set = true;
+}
+
+// out[0] 直進の速さ, [1] スラロームの速さ, [2] 加速度, [3] スラローム(1/0), [4] 行き先
+SIM_EXPORT void sim_search_params(float *out) {
+    const SearchTimeParams *p = Search();
+    out[0] = p->v_mm_s;
+    out[1] = p->turn_v_mm_s;
+    out[2] = p->accel_mm_s2;
+    out[3] = p->slalom ? 1.0f : 0.0f;
+    out[4] = (float)p->scope;
+}
+
+// 探索の時間の見積もり。out[0] ここまでの時間[s], [1] ゴールに止まった(全面: 最短経路が決まった)時刻[s](まだなら負),
+// [2] 尻当ての回数, [3] 既知の区間をまとめて走った回数, [4] 終わったら 1
+SIM_EXPORT void sim_search_time(float *out) {
+    out[0] = s_st.t_s;
+    out[1] = s_st.t_goal_s;
+    out[2] = (float)s_st.n_setpos;
+    out[3] = (float)s_st.n_known;
+    out[4] = s_st.finished ? 1.0f : 0.0f;
+}
+
+// 今の迷路と探索の設定で、探索を最後まで(GUI の探索とは別に)たどって時間[s]を見積もる。終わらなければ負。
+// Dijkstra の作業領域を使うので、sim_step と同時に(別のスレッドから)呼ばないこと
+SIM_EXPORT float sim_search_estimate(void) {
+    static WallMap map;
+    static SearchPlanner sp;
+    WallMap_Init(&map);
+    SearchPlanner_Init(&sp, &map, s_algo, kSimStart, DIR_NORTH, s_goals, s_goal_count);
+    sp.cost_to_goal = s_planner.cost_to_goal; // GUI の探索と同じコスト(sim_reset で決めたもの)
+    sp.cost_to_start = s_planner.cost_to_start;
+    if (Search()->scope == SEARCH_TIME_FULL) SearchPlanner_StartFull(&sp);
+    SearchTime st;
+    SearchTime_Init(&st, Search());
+    SearchTime_Start(&st);
+    MazePos pos = kSimStart;
+    Direction heading = DIR_NORTH;
+    for (int i = 0; i < 5000 && !st.finished; i++) {
+        WallObservation obs = SimCore_Sense(&s_truth, pos, heading);
+        SearchPhase before = sp.phase;
+        Action a = SearchPlanner_Step(&sp, obs);
+        SearchTime_Step(&st, &sp, obs, a, before);
+        if (a.type == ACTION_STOP) {
+            if (sp.phase != SEARCH_PHASE_TO_START || Search()->scope == SEARCH_TIME_ONE_WAY) break;
+            heading = Dir_Opposite(heading); // ゴールで 180°(sim_step と同じ)
+            sp.heading = heading;
+            continue;
+        }
+        if (!SimCore_Execute(&s_truth, &pos, &heading, a)) return -1.0f;
+    }
+    return st.finished ? st.t_s : -1.0f;
+}
+
+// 今の迷路(maze_path に書き出したもの)と探索の設定で plant_sim を走らせ、機体と同じ形式のログを out_dir に残す
+// (plant_bridge.h。maze_sim の --plant-log と同じ)。exe が NULL か空なら plant_sim.local などから探す。
+// self は maze_sim のビルドのフォルダの中のパス(plant_sim.local と tools/get_log.py を探す基準)。
+// est_s は探索の時間の見積もり(sim_search_estimate。打ち切りの時間を決める。0 以下なら 300 秒とみなす)。
+// できたログのパスを log_out に書いて 1、失敗なら 0。時間がかかる(約 20 秒〜)ので、GUI は別のスレッドから呼ぶ
+// (中で logic 層の計算はしないので、sim_step と同時に呼んでよい)。
+SIM_EXPORT int sim_plant_log(const char *maze_path, const char *out_dir, const char *exe, int build, const char *extra,
+                             const char *self, float est_s, char *log_out, int log_len) {
+    PlantOptions o = { (exe != NULL && exe[0]) ? exe : NULL, build != 0, (extra != NULL && extra[0]) ? extra : NULL, self };
+    SearchTimeParams p = *Search();
+    float est = (est_s > 0.0f) ? est_s : 300.0f;
+    return PlantLog_Run(&o, maze_path, &p, s_algo, est, out_dir, log_out, (size_t)(log_len > 0 ? log_len : 0)) ? 1 : 0;
+}
+
+SIM_EXPORT int sim_band_count(void) {
+    return SimCore_FastBandCount();
+}
+
+// 最短走行の速度帯(1〜)を選ぶ。範囲の外なら端の帯。選んだ番号を返す
+SIM_EXPORT int sim_set_band(int band) {
+    if (band < 1) band = 1;
+    if (band > SimCore_FastBandCount()) band = SimCore_FastBandCount();
+    s_band = band;
+    s_prof_ready = false;
+    return s_band;
+}
 
 static MazeCost CostFromArray(const uint16_t *c, MazeCost fallback) {
     if (c == NULL) return fallback;
@@ -113,6 +230,9 @@ SIM_EXPORT int sim_reset(int algo, const uint16_t *goal_cost, const uint16_t *ba
     SearchPlanner_Init(&s_planner, &s_map, s_algo, kSimStart, DIR_NORTH, s_goals, s_goal_count);
     s_planner.cost_to_goal = to_goal;
     s_planner.cost_to_start = to_start;
+    if (Search()->scope == SEARCH_TIME_FULL) SearchPlanner_StartFull(&s_planner);
+    SearchTime_Init(&s_st, Search());
+    SearchTime_Start(&s_st);
 
     s_pos = kSimStart;
     s_heading = DIR_NORTH;
@@ -133,7 +253,9 @@ SIM_EXPORT int sim_step(uint8_t *type, uint8_t *cells) {
     }
 
     WallObservation obs = SimCore_Sense(&s_truth, s_pos, s_heading);
+    SearchPhase before = s_planner.phase;
     Action a = SearchPlanner_Step(&s_planner, obs);
+    SearchTime_Step(&s_st, &s_planner, obs, a, before);
     s_has_values = true;
     // 指令を返したときだけプランナーは経路を計算している(止まったときは前の値のまま)
     if (s_algo == SEARCH_ALGO_DIJKSTRA && a.type != ACTION_STOP) {
@@ -149,6 +271,15 @@ SIM_EXPORT int sim_step(uint8_t *type, uint8_t *cells) {
             case SEARCH_PHASE_TO_START: s_status = SIM_AT_GOAL; break;
             default:                    s_status = SIM_MOVED; break;
         }
+        if (s_status == SIM_AT_GOAL) {
+            if (Search()->scope == SEARCH_TIME_ONE_WAY) {
+                s_status = SIM_DONE; // 片道: ゴールで止まって終わる
+            } else {
+                // 機体はゴールの真ん中で 180° 回ってから帰り始める(app/search_run の SearchLoop)。向きを合わせる
+                s_heading = Dir_Opposite(s_heading);
+                s_planner.heading = s_heading;
+            }
+        }
         return s_status;
     }
 
@@ -160,7 +291,7 @@ SIM_EXPORT int sim_step(uint8_t *type, uint8_t *cells) {
         s_status = SIM_LOST;
         return s_status;
     }
-    if (s_planner.phase == SEARCH_PHASE_TO_GOAL) s_moves_to_goal++;
+    if (s_planner.phase == SEARCH_PHASE_TO_GOAL || s_planner.phase == SEARCH_PHASE_FULL) s_moves_to_goal++;
     else s_moves_back++;
     s_status = SIM_MOVED;
     return s_status;
@@ -172,7 +303,7 @@ SIM_EXPORT void sim_pose(uint8_t *x, uint8_t *y, uint8_t *dir) {
     *dir = (uint8_t)s_heading;
 }
 
-// 0: ゴールへ向かう 1: スタートへ戻る 2: 終わり 3: 失敗(SearchPhaseと同じ)
+// 0: ゴールへ向かう 1: スタートへ戻る 2: 終わり 3: 失敗 4: 全面探索で最短経路になりうる区画を回っている(SearchPhaseと同じ)
 SIM_EXPORT int sim_phase(void) {
     return (int)s_planner.phase;
 }
@@ -240,16 +371,18 @@ enum {
     SIM_PLAN_TIME_BEST = 2, // 迷路を全部知っていたときの、走行時間が最短の経路
 };
 
-// 速度のパラメータ(params.h の RUN_*)と区画の大きさ。
-// out[0] 加速度, [1] 最高速度, [2] 小回り90°, [3] 大回り90°, [4] 大回り180°, [5] SECTION_MM
+// 最短走行の速さ(sim_set_band で選んだ速度帯。既定は SIM_DEFAULT_BAND)と区画の大きさ。
+// out[0] 加速度, [1] 最高速度, [2] 小回り90°, [3] 大回り90°, [4] 大回り180°, [5] SECTION_MM, [6] 減速度, [7] 帯の番号
 SIM_EXPORT void sim_run_profile(float *out) {
-    RunProfile p = RunProfile_Default();
+    RunProfile p = *Prof();
     out[0] = p.accel;
     out[1] = p.vmax;
     out[2] = p.v_turn[RUN_SMALL90_R];
     out[3] = p.v_turn[RUN_LARGE90_R];
     out[4] = p.v_turn[RUN_LARGE180_R];
     out[5] = SECTION_MM;
+    out[6] = p.decel;
+    out[7] = (float)s_band;
 }
 
 // 最短走行の指令の列を求め、types/halves/times(指令ごとの時間[s])に最大 max 個書いて個数を返す
@@ -257,7 +390,7 @@ SIM_EXPORT void sim_run_profile(float *out) {
 // 指令はスタートの区画の中心から、北向きに静止した状態で始まる。
 SIM_EXPORT int sim_run_plan(int kind, uint8_t *types, uint8_t *halves, float *times, int max,
                             float *total, int *feasible) {
-    RunProfile prof = RunProfile_Default();
+    RunProfile prof = *Prof();
     *total = 0.0f;
     *feasible = 0;
 

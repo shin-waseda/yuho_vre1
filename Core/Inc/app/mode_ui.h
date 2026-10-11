@@ -9,9 +9,13 @@
 #include "robot_state.h"
 
 // 実行するモード(メニューの末端)。メニューの階層と並び順は mode_ui.c の表で決める。
-//   RUN : SEARCH(Dijkstra) / SEARCH_ADACHI / FAST_RUN
+//   RUN : SEARCH(地図・行き先・アルゴリズム・速さなどを選ぶ) / FAST(最短走行) /
+//         TEST(ログ取りの走行: FAST_SWEEP / SEARCH_SPIN / FAST_BANDS / LONG_LOG) / AUTO(自立賞)
 //   TEST: SENSOR / SENSOR_LOG / VEL_PID / STRAIGHT / PIVOT / SLALOM / LED_TEST / PARTY
 //   SD  : DUMP / DUMP_ALL / STREAM_TEST
+//   4〜9: ログ取りのモードへのショートカット(選ぶとすぐ決まる。FAST_SWEEP 以外は値も params.h の SHORTCUT_* で決まっていて選ばない)
+//         4 STRAIGHT_SWEEP(v)，5 STRAIGHT_SWEEP(acc)，6 SLALOM_SWEEP(low)，7 SLALOM_SWEEP(high)，8 FAST_SWEEP，9 LONG_LOG，
+//         10 SENSOR_SPIN
 typedef enum {
     MODE_SENSOR = 0,    // センサー・ジャイロ・エンコーダの値を表示し続ける
     MODE_SENSOR_LOG,    // 壁センサーの値を数秒ぶん記録する(止まった状態)
@@ -27,6 +31,15 @@ typedef enum {
     MODE_SEARCH,        // 探索走行(Dijkstra)
     MODE_SEARCH_ADACHI, // 探索走行(足立法)
     MODE_FAST_RUN,      // 最短走行(探索で flash に残した地図を使う)
+    MODE_LONG_LOG,      // 長い走行(探索と最短走行を速さを変えて続けて走り、ログを取る)
+    MODE_SLALOM_SWEEP,  // 小回りの連続の試験(速さを上げながら右で行って左で戻る)
+    MODE_STRAIGHT_SWEEP, // 直進の連続の試験(速さと加速度を上げながら行って戻る)
+    MODE_FAST_SWEEP,    // 最短走行の連続(速さ・加速度・小回りの速さを変えて続けて走り、毎回スタートへ戻る)
+    MODE_SENSOR_SPIN,   // 区画の真ん中で回りながら壁センサーを記録する(plant_sim の壁センサーのモデル用)
+    MODE_SEARCH_SPIN,   // 探索(Dijkstra)で、初めて入った区画ごとに真ん中で回る(壁センサーのモデル用)
+    MODE_FAST_BANDS,    // 速度帯の最短走行(速度帯を順に、行きと帰りを自動でくり返す)
+    MODE_RUN_TEST,      // RUN の中の TEST(ログ取りの走行: FAST_SWEEP / SEARCH_SPIN / FAST_BANDS / LONG_LOG から選ぶ)
+    MODE_AUTONOMOUS,    // 自立賞(探索 → 最短走行と帰り道を何本か。触らずに最後まで)
     MODE_COUNT
 } RobotMode;
 
@@ -44,9 +57,13 @@ void ModeUI_ShowBattery(float vbat, uint32_t hold_ms);
 RobotMode ModeUI_Select(void);
 
 // モードを決めた後に、走りの設定の値(速さなど)を values の中から選ぶ(ブロッキング)。
-// 操作と表示はモードの選択と同じ(右エンコーダで送り、ボタンで確定。n 番は LED n, n+1)。
-// def に一番近い値から始める。UART には name・値・unit を出す。選んだ値を返す。
+// 操作はモードの選択と同じ(右エンコーダで送り、ボタンで確定)。表示は棒グラフで、n 番は LED1〜n を点ける。
+// values は遅い順(小さい順)に並べること。1番から始める(def は count が 0 のときに返すだけ)。
+// UART には name・値・unit を出す。選んだ値を返す。
 float ModeUI_SelectValue(const char *name, const char *unit, const float *values, uint8_t count, float def);
+// ModeUI_SelectValue と同じだが、start 番目(0 始まり)から始める(回さずに決めるとその値になる)
+float ModeUI_SelectValueFrom(const char *name, const char *unit, const float *values, uint8_t count, uint8_t start,
+                             float def);
 
 // ModeUI_Select で選ばれたモード(ログに残す用)。
 RobotMode ModeUI_CurrentMode(void);

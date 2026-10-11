@@ -31,3 +31,7 @@ int16_t Encoder_GetDeltaR(void) {
     s_last_r = now;
     return delta;
 }
+
+uint16_t Encoder_GetCountR(void) {
+    return (uint16_t)__HAL_TIM_GET_COUNTER(&htim8);
+}

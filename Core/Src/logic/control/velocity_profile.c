@@ -5,15 +5,21 @@
 
 void VelocityProfile_Start(VelocityProfile *p, float distance_mm, float v_start,
                            float v_max, float v_end, float accel) {
+    VelocityProfile_StartAD(p, distance_mm, v_start, v_max, v_end, accel, accel);
+}
+
+void VelocityProfile_StartAD(VelocityProfile *p, float distance_mm, float v_start,
+                             float v_max, float v_end, float accel, float decel) {
     p->distance_mm = distance_mm;
     p->v_max = v_max;
     p->v_end = (v_end < v_max) ? v_end : v_max;
     p->accel = accel;
+    p->decel = decel;
     p->pos_mm = 0.0f;
     p->v = v_start;
     p->a = 0.0f;
     p->decelerating = false;
-    p->done = (distance_mm <= 0.0f) || (accel <= 0.0f);
+    p->done = (distance_mm <= 0.0f) || (accel <= 0.0f) || (decel <= 0.0f);
 }
 
 void VelocityProfile_Step(VelocityProfile *p, float dt) {
@@ -30,7 +36,7 @@ void VelocityProfile_Step(VelocityProfile *p, float dt) {
     if (!p->decelerating) {
         float decel_dist = 0.0f;
         if (p->v > p->v_end) {
-            decel_dist = (p->v * p->v - p->v_end * p->v_end) / (2.0f * p->accel);
+            decel_dist = (p->v * p->v - p->v_end * p->v_end) / (2.0f * p->decel);
         }
         if (remaining - p->v * dt <= decel_dist) {
             p->decelerating = true;
@@ -43,18 +49,21 @@ void VelocityProfile_Step(VelocityProfile *p, float dt) {
         // 固定の減速度だと、離散化の誤差で終点に速度が残ったまま着いてしまう。
         if (remaining > 1e-6f && p->v > p->v_end) {
             a_cmd = -(p->v * p->v - p->v_end * p->v_end) / (2.0f * remaining);
-            if (a_cmd < -PROFILE_DECEL_MARGIN * p->accel) a_cmd = -PROFILE_DECEL_MARGIN * p->accel;
+            if (a_cmd < -PROFILE_DECEL_MARGIN * p->decel) a_cmd = -PROFILE_DECEL_MARGIN * p->decel;
         } else {
             a_cmd = 0.0f;
         }
     } else if (p->v < p->v_max) {
         a_cmd = p->accel;  // 加速
+    } else if (p->v > p->v_max) {
+        a_cmd = -p->decel; // 上限より速く始めた(走りながら遅い指令に切り替えた): すぐ上限まで減速する
     } else {
         a_cmd = 0.0f;      // 等速
     }
 
     float v_next = p->v + a_cmd * dt;
     if (a_cmd > 0.0f && v_next > p->v_max) v_next = p->v_max;
+    if (a_cmd < 0.0f && !p->decelerating && v_next < p->v_max) v_next = p->v_max;
     if (a_cmd < 0.0f && v_next < p->v_end) v_next = p->v_end;
     if (v_next < 0.0f) v_next = 0.0f;
 

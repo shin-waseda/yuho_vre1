@@ -15,6 +15,7 @@
 #include "app/search_run.h"
 #include "app/slalom_test.h"
 #include "app/stream_test.h"
+#include "app/sensor_spin.h"
 #include "app/failsafe.h"
 #include "app/logger.h"
 #include "interface/sdcard.h"
@@ -35,7 +36,16 @@ static const char *ModeName(RobotMode mode) {
         case MODE_SD_DUMP:       return "SD_DUMP";
         case MODE_SD_DUMP_ALL:   return "SD_DUMP_ALL";
         case MODE_STREAM_TEST:   return "STREAM_TEST";
-        default:                 return "UNKNOWN";
+        case MODE_LONG_LOG:      return "LONG_LOG";
+        case MODE_SLALOM_SWEEP:  return "SLALOM_SWEEP";
+        case MODE_STRAIGHT_SWEEP: return "STRAIGHT_SWEEP";
+        case MODE_FAST_SWEEP:    return "FAST_SWEEP";
+        case MODE_SENSOR_SPIN:   return "SENSOR_SPIN";
+        case MODE_SEARCH_SPIN:   return "SEARCH_SPIN";
+        case MODE_FAST_BANDS:    return "FAST_BANDS";
+        case MODE_RUN_TEST:      return "TEST";
+        case MODE_AUTONOMOUS:    return "AUTO";
+        default:                return "UNKNOWN";
     }
 }
 
@@ -43,27 +53,55 @@ static const char *ModeName(RobotMode mode) {
 // 一番上の階層の各項目が、その中のモードの一覧を持つ。並び順がエンコーダで送る順になる。
 static const RobotMode s_test_modes[] = {
     MODE_SENSOR, MODE_SENSOR_LOG, MODE_VEL_PID, MODE_STRAIGHT_TEST, MODE_PIVOT_TEST, MODE_SLALOM_TEST, MODE_LED_TEST, MODE_PARTY,
+    MODE_LONG_LOG, MODE_SLALOM_SWEEP, MODE_STRAIGHT_SWEEP, MODE_SENSOR_SPIN,
 };
 static const RobotMode s_run_modes[] = {
-    MODE_SEARCH, MODE_SEARCH_ADACHI, MODE_FAST_RUN,
+    // SEARCH は地図・行き先・アルゴリズムなどを中で選ぶ(SearchMenu_Run)。ログ取りの走行は TEST の中で選ぶ(RunTest_Run)
+    MODE_SEARCH, MODE_FAST_RUN, MODE_RUN_TEST, MODE_AUTONOMOUS,
 };
 static const RobotMode s_sd_modes[] = {
     MODE_SD_DUMP, MODE_SD_DUMP_ALL, MODE_STREAM_TEST,
 };
+// ログ取りのモードへのショートカット(一番上の階層で選ぶとすぐ決まる。TEST / RUN の中にも残してある)。
+// preset があれば、そのモードで値を選ぶ所(ModeUI_SelectValue)を、選ぶ順に preset の値で埋めて飛ばす(値は params.h の SHORTCUT_*)
+static const RobotMode s_long_log_mode[] = { MODE_LONG_LOG };
+static const RobotMode s_slalom_sweep_mode[] = { MODE_SLALOM_SWEEP };
+static const RobotMode s_straight_sweep_mode[] = { MODE_STRAIGHT_SWEEP };
+static const RobotMode s_fast_sweep_mode[] = { MODE_FAST_SWEEP };
+static const RobotMode s_sensor_spin_mode[] = { MODE_SENSOR_SPIN };
+static const float s_preset_straight_v[] = SHORTCUT_STRAIGHT_V;
+static const float s_preset_straight_acc[] = SHORTCUT_STRAIGHT_ACC;
+static const float s_preset_slalom_low[] = SHORTCUT_SLALOM_LOW;
+static const float s_preset_slalom_high[] = SHORTCUT_SLALOM_HIGH;
+static const float s_preset_long_log[] = SHORTCUT_LONG_LOG;
 
 typedef struct {
     const char *name;
     const RobotMode *modes;
     uint8_t count;
+    const float *preset;  // NULL なら値を選ぶ
+    uint8_t preset_count;
 } ModeMenu;
 
 #define MENU_COUNT_OF(a) ((uint8_t)(sizeof(a) / sizeof((a)[0])))
 
 static const ModeMenu s_menus[] = {
-    { "RUN",  s_run_modes,  MENU_COUNT_OF(s_run_modes) },
-    { "TEST", s_test_modes, MENU_COUNT_OF(s_test_modes) },
-    { "SD",   s_sd_modes,   MENU_COUNT_OF(s_sd_modes) },
+    { "RUN",  s_run_modes,  MENU_COUNT_OF(s_run_modes),  NULL, 0u },
+    { "TEST", s_test_modes, MENU_COUNT_OF(s_test_modes), NULL, 0u },
+    { "SD",   s_sd_modes,   MENU_COUNT_OF(s_sd_modes),   NULL, 0u },
+    { "STRAIGHT_SWEEP(v)",   s_straight_sweep_mode, 1u, s_preset_straight_v,   MENU_COUNT_OF(s_preset_straight_v) },
+    { "STRAIGHT_SWEEP(acc)", s_straight_sweep_mode, 1u, s_preset_straight_acc, MENU_COUNT_OF(s_preset_straight_acc) },
+    { "SLALOM_SWEEP(low)",   s_slalom_sweep_mode,   1u, s_preset_slalom_low,   MENU_COUNT_OF(s_preset_slalom_low) },
+    { "SLALOM_SWEEP(high)",  s_slalom_sweep_mode,   1u, s_preset_slalom_high,  MENU_COUNT_OF(s_preset_slalom_high) },
+    { "FAST_SWEEP",          s_fast_sweep_mode,     1u, NULL, 0u }, // 範囲は解析の後で決めるので選ぶ
+    { "LONG_LOG",            s_long_log_mode,       1u, s_preset_long_log,     MENU_COUNT_OF(s_preset_long_log) },
+    { "SENSOR_SPIN",         s_sensor_spin_mode,    1u, NULL, 0u }, // 値を選ぶ所はない
 };
+
+// 選んだショートカットの値と、次に使う番号
+static const float *s_preset = NULL;
+static uint8_t s_preset_count = 0u;
+static uint8_t s_preset_next = 0u;
 #define MENU_TOP_COUNT MENU_COUNT_OF(s_menus)
 
 static void WaitButtonRelease(void) {
@@ -189,6 +227,11 @@ static void ShowIndex(uint8_t index) {
     LED_SetShiftPattern((uint16_t)(0x3u << index));
 }
 
+// 値(速さなど)を選んでいるときの表示: 番号n なら LED1〜n を点ける棒グラフ(1番が一番遅い値)。
+static void ShowValueIndex(uint8_t index) {
+    LED_SetShiftPattern((uint16_t)((1u << (index + 1u)) - 1u));
+}
+
 // U6のはんだ不良対策で、確実に光るLED1〜7(D23〜D17)だけを使う。
 // 基板修理後はLED_SHIFT_COUNTに戻してよい。
 #define MODE_UI_BAR_LED_COUNT 7
@@ -220,6 +263,8 @@ static const char *s_show_unit = "";
 static void ShowItem(uint8_t i) {
     if (s_show_values != NULL) {
         printf("%s %d: %.0f %s\r\n", s_show_name, (int)i + 1, s_show_values[i], s_show_unit);
+        ShowValueIndex(i);
+        return;
     } else if (s_show_menu == NULL) {
         printf("MENU %d: %s\r\n", (int)i + 1, s_menus[i].name);
     } else {
@@ -229,11 +274,13 @@ static void ShowItem(uint8_t i) {
 }
 
 // 右エンコーダの回転で 0〜count-1 を送り(start から始める)、ボタンで確定した番号を返す。
+// 回転はカウンタの値を直接読み、ここで差を取る(Encoder_GetDeltaR は使わない)。モードを決めた後は
+// 1kHz の制御の割り込みが Encoder_GetDeltaR で差分を持っていくので、それを使うと回しても動かなかった。
 static uint8_t SelectIndex(uint8_t count, uint8_t start) {
     uint8_t index = start;
     float accumulated = 0.0f;
 
-    (void)Encoder_GetDeltaR(); // 前の階層で決定するまでに回った分を捨てる
+    uint16_t last = Encoder_GetCountR(); // ここから数える(前の階層で決定するまでに回った分は数えない)
     ShowItem(index);
 
     while (1) {
@@ -244,7 +291,9 @@ static uint8_t SelectIndex(uint8_t count, uint8_t start) {
             }
         }
 
-        int16_t delta_r = Encoder_GetDeltaR();
+        uint16_t now = Encoder_GetCountR();
+        int16_t delta_r = (int16_t)(now - last); // 16bit の折り返しを使った差
+        last = now;
         accumulated += (float)delta_r;
 
         while (accumulated >= MODE_SELECT_PULSES_PER_STEP) {
@@ -282,26 +331,54 @@ RobotMode ModeUI_Select(void) {
     RobotMode mode = (menu->count == 1) ? menu->modes[0] : menu->modes[SelectIndex(menu->count, 0)];
     printf("MODE: %s / %s\r\n", menu->name, ModeName(mode));
     s_current_mode = mode;
+    s_preset = menu->preset;
+    s_preset_count = menu->preset_count;
+    s_preset_next = 0u;
     return mode;
 }
 
 float ModeUI_SelectValue(const char *name, const char *unit, const float *values, uint8_t count, float def) {
+    return ModeUI_SelectValueFrom(name, unit, values, count, 0u, def);
+}
+
+float ModeUI_SelectValueFrom(const char *name, const char *unit, const float *values, uint8_t count, uint8_t start,
+                             float def) {
     if (count == 0u) return def;
     if (count > SELECT_MAX_ITEMS) count = SELECT_MAX_ITEMS;
-    // def に一番近い値から始める
-    uint8_t start = 0;
-    for (uint8_t i = 1; i < count; i++) {
-        if (fabsf(values[i] - def) < fabsf(values[start] - def)) start = i;
+    // ショートカットの値があれば、選ばずにそれを使う(表にない値なら、ふつうに選ぶ)
+    if (s_preset != NULL && s_preset_next < s_preset_count) {
+        float v = s_preset[s_preset_next++];
+        for (uint8_t k = 0; k < count; k++) {
+            if (values[k] == v) {
+                printf("%s: %.0f %s (shortcut)\r\n", name, v, unit);
+                return v;
+            }
+        }
+        printf("shortcut value %.0f is not in the list of %s: select it\r\n", v, name);
     }
     printf("select %s (turn right wheel, press button to set)\r\n", name);
     s_show_values = values;
     s_show_name = name;
     s_show_unit = unit;
-    uint8_t i = SelectIndex(count, start);
+    if (start >= count) start = 0u;
+    uint8_t i = SelectIndex(count, start); // ModeUI_SelectValue は1番(一番遅い値)から始める
     s_show_values = NULL;
     LED_SetShiftPattern(0x0000u);
     printf("%s: %.0f %s\r\n", name, values[i], unit);
     return values[i];
+}
+
+// RUN の中の TEST: ログ取りの走行を、値を選ぶのと同じ画面(棒グラフ)で選んで始める
+static void RunTest_Run(void) {
+    static const RobotMode kTests[] = { MODE_FAST_SWEEP, MODE_SEARCH_SPIN, MODE_FAST_BANDS, MODE_LONG_LOG };
+    static const float kValues[] = { 1.0f, 2.0f, 3.0f, 4.0f };
+    printf("RUN TEST: 1 FAST_SWEEP, 2 SEARCH_SPIN, 3 FAST_BANDS, 4 LONG_LOG\r\n");
+    uint8_t n = (uint8_t)ModeUI_SelectValue("TEST(1 FAST_SWEEP 2 SEARCH_SPIN 3 FAST_BANDS 4 LONG_LOG)", "", kValues,
+                                            MENU_COUNT_OF(kValues), 1.0f);
+    RobotMode mode = kTests[n - 1u];
+    printf("MODE: RUN / TEST / %s\r\n", ModeName(mode));
+    s_current_mode = mode; // ログの MODE に、選んだ走行を残す
+    ModeUI_Run(mode);
 }
 
 void ModeUI_Run(RobotMode mode) {
@@ -322,7 +399,7 @@ void ModeUI_Run(RobotMode mode) {
             StraightTest_Run();
             break;
         case MODE_SEARCH:
-            SearchRun_Run(SEARCH_ALGO_DIJKSTRA);
+            SearchMenu_Run();
             break;
         case MODE_SEARCH_ADACHI:
             SearchRun_Run(SEARCH_ALGO_ADACHI);
@@ -347,6 +424,33 @@ void ModeUI_Run(RobotMode mode) {
             break;
         case MODE_SLALOM_TEST:
             SlalomTest_Run();
+            break;
+        case MODE_LONG_LOG:
+            LongLogRun_Run();
+            break;
+        case MODE_SLALOM_SWEEP:
+            SlalomSweep_Run();
+            break;
+        case MODE_STRAIGHT_SWEEP:
+            StraightSweep_Run();
+            break;
+        case MODE_FAST_SWEEP:
+            FastSweep_Run();
+            break;
+        case MODE_SENSOR_SPIN:
+            SensorSpin_Run();
+            break;
+        case MODE_SEARCH_SPIN:
+            SearchSpin_Run();
+            break;
+        case MODE_FAST_BANDS:
+            FastBands_Run();
+            break;
+        case MODE_RUN_TEST:
+            RunTest_Run();
+            break;
+        case MODE_AUTONOMOUS:
+            AutonomousRun_Run();
             break;
         default:
             break;

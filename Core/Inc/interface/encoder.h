@@ -13,4 +13,9 @@ int16_t Encoder_GetDeltaR(void);
 // それまでに溜まった回転がオドメトリへ一気に入るのを防ぐ。
 void Encoder_SyncDelta(void);
 
+// 右のカウンタの今の値(16bit。読んでも GetDeltaR の前回値は変わらない)。
+// 制御の割り込みが GetDeltaR を使っている間に、メインで右タイヤの回転を読むとき(モードの UI の値選び)に使う。
+// 差は呼び出し側で (int16_t)(now - last) として取る。
+uint16_t Encoder_GetCountR(void);
+
 #endif

@@ -59,18 +59,20 @@ typedef struct {
 //
 // 旋回は 前オフセット(直線) → 曲線 → 後オフセット(直線) の形で、指令の始めから終わりまで
 // (小回りは境目から境目、大回りは中心から中心)の長さが turn_len。
-// 時間の数え方(曲線の部分だけが一定の速度で、オフセットは直進と一緒に加減速する):
+// 時間の数え方(実機の走り方 = app/search_run の RunList_Drive に合わせる。2026-10-10 に最短走行のログで確かめた):
 //   - 旋回の時間は、曲線の部分(turn_len − 前後オフセット)を旋回の速度で走る時間
 //     (RunProfile_CurveTime)。
-//   - 直進の時間は、隣の旋回のオフセットを含めた長い直進の時間(RunProfile_LinkedStraightTime)。
+//   - 直進の時間は、隣の旋回のオフセットを旋回の速度のまま走る時間 + 間の直進を台形加速で走る時間
+//     (RunProfile_LinkedStraightTime)。オフセットは直進の側に数える。
 //   - 旋回どうしが直接つながるときは、前の旋回の後オフセット + 次の旋回の前オフセットを
-//     長さ0の直進とみなして同じように扱う(速度が違えば、オフセットの中で変える)。
+//     長さ0の直進とみなし、その中で速度を変える(速度が同じなら、旋回の速度のまま走る)。
 //   オフセットを旋回の側に数えて直進から引く分け方だと、直結の区間で加速した分が
 //   負の時間になり、Dijkstra で扱えない。この分け方なら、どの部分の時間も0以上になる。
 // 既定値は円弧だけの理想的な形(長さは RunType_TurnLength()、オフセットは0)。
-// 実機でスラロームの前後オフセットを入れたら、turn_len と turn_pre / turn_post を合わせて変える。
+// RunProfile_ForSpeeds は実機の旋回の形を使う(turn_len = 前オフセット + 曲がる道のり(速さ × 曲がる時間) + 後オフセット)。
 typedef struct {
-    float accel;                     // [mm/s²] 直進の加速度・減速度
+    float accel;                     // [mm/s²] 直進の加速度
+    float decel;                     // [mm/s²] 直進の減速度(RunProfile_Default は accel と同じ)
     float vmax;                      // [mm/s] 直進の最高速度
     float v_turn[RUN_TYPE_COUNT];    // [mm/s] 旋回の種類ごとの速度
     float turn_len[RUN_TYPE_COUNT];  // [mm] 旋回の経路の長さ(オフセットを含む)
@@ -79,6 +81,27 @@ typedef struct {
 } RunProfile;
 
 RunProfile RunProfile_Default(void);
+
+// 旋回の動き(機体がスラロームとして走る値)。最短走行・探索の既知の区間(app/search_run)と maze_sim で同じものを使う。
+typedef struct {
+    float v_mm_s;     // 並進の速さ
+    float omega_dps;  // 最高角速度
+    float alpha_dps2; // 角加速度
+    float angle_deg;  // 90 か 180
+    float pre_mm;     // 前のオフセット
+    float post_mm;    // 後ろのオフセット
+} RunTurnSpec;
+
+// 直進の最高速度 vmax・加速度 accel・小回りの速さ small_v で走るときの、旋回3種の動き(turns[RunType]、右と左に同じ値)と、
+// それを使う RunProfile を作る。小回りは探索と同じ形(SLALOM_*)を small_v にして、前後のオフセットはスラロームのずれの
+// モデル(Slalom_SmallTurnOffsets)で計算する。大回り 90°・180° は FAST_LARGE* の速さと形(+ *_ADJ)。turns は NULL でもよい。
+RunProfile RunProfile_ForSpeeds(float vmax, float accel, float small_v, RunTurnSpec turns[RUN_TYPE_COUNT]);
+
+// 探索の既知の区間(SearchPlanner_KnownRun の moves[0..m])を、最短走行の指令の列にする。区画 C0 の入口の境界にいて
+// C0 をまっすぐ抜ける所から始まるので、1つ手前の区画 P の真ん中から「P → C0 → C1 → moves[1..m]」の経路として作り、
+// 最後の直進を半区画短くして、終わりの区画の真ん中ではなく入口の境界で終わるようにする(先頭の半区画 P → C0 は走り済み)。
+// 作れなければ false(最後が直進でない、直進が短すぎるなど)。
+bool RunPath_FromKnownRun(const Direction *moves, uint16_t m, const RunProfile *prof, bool use_large, RunList *out);
 
 // 旋回ならtrue
 bool RunType_IsTurn(RunType type);
@@ -116,9 +139,11 @@ bool RunList_Push(RunList *list, RunCommand cmd);
 bool RunProfile_StraightTime(const RunProfile *prof, float dist, float v_in, float v_out,
                              float *time);
 
-// 旋回にはさまれた直進の時間[s]。隣の旋回のオフセットを含めた、長さ dist + off_in + off_out の
-// 直進として求める。off_in は前の旋回の後オフセット、off_out は次の旋回の前オフセット
-// (隣が旋回でなければ0)。加速度が足りなければfalse(timeは「必要な加速度で一様に変える」とした値)。
+// 旋回にはさまれた直進の時間[s]。off_in は前の旋回の後オフセット、off_out は次の旋回の前オフセット
+// (隣が旋回でなければ0)。時間は、オフセットを旋回の速度(v_in / v_out)のまま走り、長さ dist の直進で
+// 加減速するとして求める(dist が0なら、オフセットの中で速度を変える)。
+// 速度を変えられるか(戻り値)は、長さ dist + off_in + off_out の直進で決める。
+// 加速度が足りなければfalse(timeは「必要な加速度で一様に変える」とした値)。
 bool RunProfile_LinkedStraightTime(const RunProfile *prof, float dist,
                                    float v_in, float off_in, float v_out, float off_out,
                                    float *time);
