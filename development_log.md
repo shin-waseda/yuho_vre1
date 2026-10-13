@@ -2978,3 +2978,21 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
   - search_0003(全面探索 800/600/2000): PHASE 1 の前，85.50s に FAILSAFE cause=1(低電圧 6.77V)．80.92s に行き止まりの (12,1) で真ん中に止まろうとして，
     目標の 14mm 手前で前の壁に当たって止まり(ad_fl 1155)，その後の尻当て 2 回で後ろへ押し続ける間に PWM が −2000〜−2600 まで上がり，電圧が 6.8〜6.9V に下がった．
     電池は走り始めで 7.6V(この日の 12 本目)．AUTO 以外では低電圧のフェイルセーフが効くので止まった．
+
+### 2026-10-13 CubeIDE をやめて VS Code + CMake でビルドする準備(`feature/vscode-cmake`，`master` から)
+
+- **CubeIDE を卒業するため，CubeMX の Toolchain/IDE を CMake にして作り直し，CubeIDE の設定を CMakeLists.txt に移した**(ユーザーの依頼．参考: Qiita の akiaki96 さんの記事)．
+  - VS Code の拡張は，記事のやり方(CMake Tools + clangd，Mac 向け，デバッグなし)ではなく **ST 公式の STM32CubeIDE for Visual Studio Code** にした．
+    Windows で使え，ツールを自動で入れ，ST-Link でデバッグできるため．どちらもビルドの土台は CubeMX が作る CMake で同じ．
+  - CubeMX で作り直すと，`.ioc` の Compiler/Linker が GCC から Starm-Clang に変わり，`.ioc` 側では GCC に戻せなかった．
+    `CMakePresets.json` の toolchainFile を `gcc-arm-none-eabi.cmake` に替えて，CubeIDE と同じ GCC でビルドするようにした．
+    次に作り直したとき，`CMakePresets.json` が starm-clang に書き戻されるかは未確認(`git diff` で見る)．
+  - CubeIDE の設定から引き継いだもの(すべて CubeMX が作り直さない `CMakeLists.txt` に書いた):
+    - Debug も `-O2 -g3`(CubeMX の既定は `-O0`)．`add_subdirectory` より前に書かないと HAL・FatFs が `-O0` のままになる．
+    - リンカースクリプトは前の `STM32F405RGTX_FLASH.ld`．CubeMX が作った `STM32F405XX_FLASH.ld` は FLASH 1024K で，地図を保存する最後のセクタ(896K〜)を空けていない．
+      名前を置き換えられなかったら CMake が止まるようにした．
+    - `-u _printf_float`，`Core/Src/app`・`interface`・`logic` の .c をすべて(47 個)，ビルドの後に `yuho.bin` を作る．
+  - CubeMX が作ったスタートアップ `startup_stm32f405xx.s` は `Core/Startup/startup_stm32f405rgtx.s` と中身が同じ．`.gitignore` に `build/` を足した．
+  - 結果: ビルドはまだしていない(未確認)．
+  - 次: VS Code に ST 公式の拡張を入れてビルド・書き込み・デバッグを試す．その後，CubeIDE のファイル(`.cproject`，`Debug/`)と使わないファイルの扱い，
+    `Debug/yuho.bin` をコミットする決まり，CLAUDE.md の「ビルドと書き込み」を決め直す．コンパイラの版が CubeIDE と違い得るので，最初はいつもの試験で走りを確かめる．
