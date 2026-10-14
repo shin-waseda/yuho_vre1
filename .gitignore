@@ -35,3 +35,6 @@ maze_sim.md
 tools/maze_sim/maze_prefs.json
 tools/maze_sim/plant_sim.local
 tools/maze_sim/maze_file/
+
+# CMake のビルド出力(VS Code + CMake)
+build/
