@@ -2996,3 +2996,13 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
   - 結果: ビルドはまだしていない(未確認)．
   - 次: VS Code に ST 公式の拡張を入れてビルド・書き込み・デバッグを試す．その後，CubeIDE のファイル(`.cproject`，`Debug/`)と使わないファイルの扱い，
     `Debug/yuho.bin` をコミットする決まり，CLAUDE.md の「ビルドと書き込み」を決め直す．コンパイラの版が CubeIDE と違い得るので，最初はいつもの試験で走りを確かめる．
+
+### 2026-10-15 モードの文書を1つにまとめた(`feature/mode-tree-doc`，`master` から)
+
+- **`docs/mode_select.md` を `docs/mode_tree.md` にまとめ，`mode_select.md` を消した**(ユーザーの依頼．2つあってどちらが最新か分からないため)．コードは変えていない．
+  - 2つは同じコミット(`6fc3f6e`，10-11)で直してあり，どちらも今の `mode_ui.c` と合っていた．
+  - `mode_tree.md` の順: 操作 → 木 → RUN(説明とログ) → AUTO の今の設定 → TEST(ログと説明) → SD → 選べる値の表(加速度・減速度，FAST_BANDS) → 止まったとき．
+    RUN・TEST の「選ぶもの」の列は木と同じなので表から外し，ログの置き場所だけ残した．ショートカットの「逆に回すと」は木の中に書いた．
+  - 値の表は2つの版を1つにした(PIVOT の OMEGA と FAST_BANDS の行を両方から入れた)．
+  - まだ `mode_select.md` を指しているもの: `docs/software_article.md`，`docs/simulator_article.md`(どちらも git に入っていない別の作業のもの．直していない)．
+    過去の日記の `mode_select.md` はそのまま．
