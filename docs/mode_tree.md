@@ -1,10 +1,22 @@
-# モードの一覧(入れ子)
+# モードの一覧
 
-ブランチ `feature/autonomous` のコード(2026-10-11)をもとに書いた．メニューの表は `Core/Src/app/mode_ui.c`，値の表は `Core/Inc/params.h`．
-操作の仕方・値の表・止まったときの LED は [mode_select.md](mode_select.md) を見る．
+ブランチ `feature/run-menu` のコード(2026-10-09 の終わり)をもとに書き，`feature/autonomous`(2026-10-11)で AUTO と全面探索を足した．
+2026-10-15 に `mode_select.md`(操作・値の表・止まったときの LED)をこのファイルにまとめた．
+メニューの表は `Core/Src/app/mode_ui.c`，値の表は `Core/Inc/params.h`．コードを変えたらここも直す．
 
-- 右のタイヤを回して選び，ボタンで決める．番号はエンコーダで送る順(1 から)．
-- `→` は選ぶ順．`[ ]` の中は選べる値(1 番から)．何も回さずに決めると 1 番．
+## 操作
+
+- 起動すると電池の残りを LED の棒グラフで出した後，モードを選ぶ画面になる．
+- **右のタイヤを回して選び，ボタンで決める**．タイヤ 1/4 周で1つ進む．端では輪のようにつながる(1 番から逆に回すと最後の番号)．
+- モードの番号 n は，シフトレジスタの **LED n と n+1** が点く．
+- 値(速さなど)を選ぶ画面は **1 番(一番遅い値)から始まり**，n 番なら **LED1〜n** が点く棒グラフ．何も回さずに決めると 1 番．
+- 確実に光るのは LED1〜7(U6 のはんだ不良)．8 番以降は見えないことがあるので，1 番から逆に回して選ぶ．
+- UART をつないでいれば，番号・名前・選んだ値が出る．
+- 一度モードを決めたら，選び直すにはリセット(電源を入れ直す)．
+
+## 木
+
+- 番号はエンコーダで送る順(1 から)．`→` は選ぶ順．`[ ]` の中は選べる値(1 番から)．
 - 「手かざし」と書いたものは，選び終わった後に手かざしで走り出す．
 
 ```
@@ -44,25 +56,47 @@ MENU
 ├─  5 STRAIGHT_SWEEP(acc) ─ SPEED 1000〜1000，ACCEL 3000〜10000(12本)
 ├─  6 SLALOM_SWEEP(low) ─── FROM 300，TO 700(20本)
 ├─  7 SLALOM_SWEEP(high) ── FROM 800，TO 900(8本)
-├─  8 FAST_SWEEP ────────── 値は選ぶ(RUN → TEST → 1 と同じ)
-├─  9 LONG_LOG ──────────── PART 2，STEP 1
-└─ 10 SENSOR_SPIN ───────── 選ぶものはない
+├─  8 FAST_SWEEP ────────── 値は選ぶ(RUN → TEST → 1 と同じ)          逆に回すと 3つ戻す
+├─  9 LONG_LOG ──────────── PART 2，STEP 1                          逆に回すと 2つ戻す
+└─ 10 SENSOR_SPIN ───────── 選ぶものはない                          逆に回すと 1つ戻す
 ```
 
-## 選ぶ値の表
+ショートカットで，決まっている値が選べる値の表にないときは，その所だけふつうに選ぶ．
 
-| 選ぶもの | 値(1 番から) | params.h |
+## RUN(走る)
+
+どの値も，何も回さずに決めると 1 番(FAST の ACCEL だけは SPEED に合う値)．
+
+| 番号 | モード | ログ |
 |---|---|---|
-| SEARCH・SEARCH_SPIN の SPEED | 300，400，500，600，800，1000，1200，1500 | `SPEED_SELECT_SEARCH_V_MM_S` |
-| SEARCH・SEARCH_SPIN の SLALOM | 300，400，500，600，700 | `SPEED_SELECT_SEARCH_TURN_V_MM_S` |
-| SEARCH・FAST の ACCEL，STRAIGHT 系の ACCEL | 2000，3000，4000，5000，6000，8000，10000 | `SPEED_SELECT_ACCEL_MM_S2` |
-| FAST・FAST_SWEEP の SPEED | 600，800，1000，1200，1400，1500 | `SPEED_SELECT_FAST_V_MM_S` |
-| FAST・FAST_SWEEP の SMALL | 300，400，500，600，700 | `SPEED_SELECT_FAST_SMALL_V_MM_S` |
-| STRAIGHT 系の SPEED | 300，400，500，600，800，1000，1200，1400，1500 | `SPEED_SELECT_STRAIGHT_V_MM_S` |
-| SLALOM 系の速さ(s90) | 300，400，500，600，700，800，900 | `SPEED_SELECT_SLALOM_TEST_V_MM_S` |
-| FAST_BANDS の BAND | 1〜6(帯の中身は mode_select.md) | `FAST_BANDS` |
+| 1 | SEARCH | `search/search_NNNN` |
+| 2 | FAST | `search/fast_NNNN` |
+| 3 | TEST | 下を見る |
+| 4 | **AUTO**(自立賞) | `search/search_NNNN`，`search/fast_NNNN`，`search/back_NNNN` |
+
+- **SEARCH**: スタート区画に北向きに置く．終わったら同じ設定で次の手かざしを待つ．
+  - MAP: 1 は空の地図から．2 は flash に残した地図(前の探索)から始める(なければ空の地図)．
+  - SCOPE: 1 はゴールへ行ってスタートに戻る．2 はゴールの真ん中で止まって終わる．どちらもゴールまで行けば地図を flash に残す．
+    3(全面探索)は，ゴールでは止まらずに，最短経路になりうる区画(未知の壁を「なし」とみなした最短経路が横切る未知の壁の両側)を回り，
+    最短経路が決まったらスタートへ戻る．最短経路が決まれば地図を flash に残す．
+  - ACCEL: 直進の加速度・減速度(1 番の 2000 が今までの値)．
+  - 壁が全部分かっている区間はまとめて走る(直線の加速．SPEED が大回りの速さ以上なら大回り)．
+- **FAST**: 探索で残した地図で，スタートからゴールまで走る(ゴールで終わり．同じ設定で次の手かざしを待つ)．
+  ACCEL は最初に SPEED に合う値(下の表)が出る．減速度は ACCEL と 5000 の小さい方．
+- **TEST**: ログ取りの走行．
+  - 1 FAST_SWEEP: 全部の組み合わせを1回の手かざしで続けて走る．1本ごとにゴールからスタートへ自分で戻る．
+    加速度・減速度は SPEED から決まる．ログは `search/fast_NNNN`，`search/back_NNNN`．
+  - 2 SEARCH_SPIN: 曲がり方はクリックで切り替え(PIVOT / **SMALL**)．Dijkstra の往復の探索で，初めて入った区画ごとに真ん中で止まって
+    左に1周・右に1周回る(壁センサーのモデル用．1区画 約18秒)．区画と壁は `SENSOR_SPIN` のイベントに残る．ログは `search/spin_NNNN`．
+  - 3 FAST_BANDS: 速度帯(下の表)を遅い順に「最短走行 → スタートへ戻る」をくり返す．本番は FROM と TO に同じ速度帯．
+  - 4 LONG_LOG: TEST の LONG_LOG と同じ．
+- **AUTO(自立賞)**: 下の「AUTO の今の設定」を見る．
+
+ゴールは `params.h` の `MAZE_GOALS`((7,7)，(8,7)，(7,8)，(8,8) の4区画)．試しのゴールを使うときは `SEARCH_USE_TEST_GOAL` を 1 にする．
 
 ## AUTO(自立賞)の今の設定
+
+スタート区画に北向きに置いて手かざし1回で，機体に触らずに「探索 → 最短走行とスタートへの帰り道 を `AUTONOMOUS_FAST_COUNT` 回」走る．
 
 ```
 手かざし1回
@@ -72,5 +106,84 @@ MENU
          └─ 4 本目の後: ゴールから全面探索(600 / 500)をしてスタートへ帰り，地図を flash に残す
 ```
 
-`AUTONOMOUS_SEARCH_*`，`AUTONOMOUS_FAST_*`，`AUTONOMOUS_FINAL_FULL_SEARCH`(params.h)．
-ログは1本ごとに SD の `search/` へ流して残す(`search` → `fast` → `back` → … → `fast` → `search` の 9 ファイル)．
+- 設定は `AUTONOMOUS_SEARCH_*`，`AUTONOMOUS_FAST_*`，`AUTONOMOUS_FINAL_FULL_SEARCH`(params.h)．
+- 電池の電圧では止めない(フェイルセーフの低電圧も AUTO の間は使わない．車輪の速度の誤差・角速度のフェイルセーフは効く)．
+- 走れなかったときは止まって，シフトレジスタの LED に何本目かを出す(探索で止まったときは 0 本なので，今はシフトレジスタの LED は光らない)．
+- ログは1本ごとに SD の `search/` へ流して残す(探索 `search`，最短走行 `fast` × 4，帰り道 `back` × 3，最後の全面探索 `search` の 9 ファイル)．
+
+## TEST(試験)
+
+| 番号 | モード | ログ |
+|---|---|---|
+| 1 | SENSOR | ― |
+| 2 | SENSOR_LOG(数秒ぶん．止まった状態) | `sensor/wall_NNNN` |
+| 3 | VEL_PID(1回) | `vel_pid/step_NNNN` |
+| 4 | STRAIGHT | `straight/wall_run_NNNN` |
+| 5 | PIVOT | `pivot/turn90_NNNN` |
+| 6 | SLALOM | `slalom/<旋回>_NNNN` |
+| 7 | LED_TEST | ― |
+| 8 | PARTY(床を回されても同じ向きを保つ) | `party/hold_NNNN` |
+| 9 | LONG_LOG | `search/*` |
+| 10 | SLALOM_SWEEP | `slalom/s90r_NNNN`，`slalom/s90l_NNNN` |
+| 11 | STRAIGHT_SWEEP | `straight/sweep_NNNN` |
+| 12 | SENSOR_SPIN(左に1周・右に1周) | `sensor/spin_NNNN` |
+| 13 | LED_ALL_ON(戻るにはリセット) | ― |
+
+- **LONG_LOG**: 探索を速さを変えて，次に最短走行を小回り・大回りで，続けて走る．PART 1〜4 は探索(直進の速さ 300 / 400 / 500 / 600)，
+  5 は最短走行の小回り，6 は大回り．STEP は PART の中の番号(電池を替えた後に続きから始めるため)．
+- **SLALOM_SWEEP**: C の L字の通路の A に北向きに置く．各速さで右と左を2往復(4本)．
+- **STRAIGHT_SWEEP**: 直線の通路の端に置く．加速度ごとに速さを上げ，各組み合わせで行きと帰り(2本)．
+- **SENSOR_SPIN**: 区画・どの壁があったか・スタートの向きを書き留める(plant_sim の壁センサーのモデル用)．
+
+## SD
+
+| 番号 | モード | 中身 |
+|---|---|---|
+| 1 | SD_DUMP | まだ送っていないログを，ボタンで UART へ送る(PC は `tools/get_log.py`)．送ったものは SD の `sent/` へ移す |
+| 2 | SD_DUMP_ALL | 送ったものも含めて全部を UART へ送る |
+| 3 | STREAM_TEST | 走りながら SD へ流すログの試験(モーターは動かさない．クリックで間隔 1 / 5ms) |
+
+SD のログは，PC に SD カードを挿して `tools/sd_import.py` で取り込むこともできる．
+
+## 選べる値の表(params.h)
+
+| 選ぶもの | 値(1 番から．遅い順) | params.h |
+|---|---|---|
+| SEARCH・SEARCH_SPIN の SPEED | 300，400，500，600，800，1000，1200，1500 | `SPEED_SELECT_SEARCH_V_MM_S` |
+| SEARCH・SEARCH_SPIN の SLALOM | 300，400，500，600，700 | `SPEED_SELECT_SEARCH_TURN_V_MM_S` |
+| SEARCH・FAST の ACCEL，STRAIGHT 系の ACCEL | 2000，3000，4000，5000，6000，8000，10000 | `SPEED_SELECT_ACCEL_MM_S2` |
+| FAST・FAST_SWEEP の SPEED | 600，800，1000，1200，1400，1500 | `SPEED_SELECT_FAST_V_MM_S` |
+| FAST・FAST_SWEEP の SMALL | 300，400，500，600，700 | `SPEED_SELECT_FAST_SMALL_V_MM_S` |
+| STRAIGHT 系の SPEED | 300，400，500，600，800，1000，1200，1400，1500 | `SPEED_SELECT_STRAIGHT_V_MM_S` |
+| SLALOM 系の速さ(s90) | 300，400，500，600，700，800，900 | `SPEED_SELECT_SLALOM_TEST_V_MM_S` |
+| PIVOT の OMEGA | 180，360，540 | `SPEED_SELECT_PIVOT_OMEGA_DPS` |
+| FAST_BANDS の BAND | 1〜6(下の表) | `FAST_BANDS` |
+
+### 最短走行の加速度・減速度(FAST_SWEEP は SPEED から決まる．FAST は ACCEL の最初の値)
+
+| SPEED [mm/s] | 600 | 800 | 1000 | 1200 | 1400 | 1500 |
+|---|---|---|---|---|---|---|
+| 加速度 [mm/s²] | 3000 | 3000 | 4000 | 5000 | 6000 | 8000 |
+| 減速度 [mm/s²] | 3000 | 3000 | 4000 | 5000 | 5000 | 5000 |
+
+`FAST_ACCEL_FOR_SPEED_MM_S2`，`FAST_DECEL_FOR_SPEED_MM_S2`．
+
+### FAST_BANDS の速度帯
+
+| 帯 | 直進 [mm/s] | 加速度 | 減速度 | 小回り [mm/s] | 走り方 |
+|---|---|---|---|---|---|
+| 1 | 800 | 3000 | 3000 | 400 | SMALL |
+| 2 | 1000 | 4000 | 4000 | 500 | SMALL |
+| 3 | 1200 | 5000 | 5000 | 600 | SMALL |
+| 4 | 1200 | 5000 | 5000 | 600 | LARGE |
+| 5 | 1400 | 6000 | 5000 | 600 | LARGE |
+| 6 | 1500 | 8000 | 5000 | 600 | LARGE |
+
+`FAST_BANDS`．大回りの速さはどの帯も `FAST_LARGE*`(600mm/s)．
+
+## 止まったとき
+
+- **シフトレジスタの LED が本数ぶん点滅**: 連続のモード(FAST_SWEEP，FAST_BANDS，STRAIGHT_SWEEP，SLALOM_SWEEP，LONG_LOG，AUTO)が止めた印．
+  電池(走る前の静止時で 7.5V 未満．AUTO は電池では止めない)，経路がない，走りの打ち切りなど．点滅した本数が，何本目で止まったか．
+- **マイコン直結の LED が点滅**: FailSafe．LED_5 だけ: 電池の低電圧(7.0V)，LED_1・2: 車輪の速度の誤差，LED_1〜3: 角速度，全部: それ以外．
+- **左後ろの LED が点いたまま**: SD へのログの保存に失敗した(走りは続ける)．
