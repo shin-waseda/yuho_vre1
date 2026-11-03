@@ -417,7 +417,7 @@ def run_receiver(args):
 def main():
     parser = argparse.ArgumentParser(description="Receive yuho logger dumps over UART and save them as CSV.")
     parser.add_argument("port", nargs="?", help="serial port (e.g. COM5, /dev/ttyUSB0)")
-    parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--baud", type=int, default=921600) # 機体の USART1(yuho.ioc)と合わせる
     parser.add_argument("--out", default="logs", help="output root directory (default: logs)")
     parser.add_argument("--plot", action="store_true", help="show a plot after each received log")
     parser.add_argument("--once", action="store_true", help="exit after receiving one log")

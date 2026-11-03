@@ -6,42 +6,25 @@
 
 #include "interface/led.h"
 #include "interface/uart.h"
-#include "robot_state.h"
 
-// 実行するモード(メニューの末端)。メニューの階層と並び順は mode_ui.c の表で決める。
-//   RUN : SEARCH(地図・行き先・アルゴリズム・速さなどを選ぶ) / FAST(最短走行) /
-//         TEST(ログ取りの走行: FAST_SWEEP / SEARCH_SPIN / FAST_BANDS / LONG_LOG) / AUTO(自立賞)
-//   TEST: SENSOR / SENSOR_LOG / VEL_PID / STRAIGHT / PIVOT / SLALOM / LED_TEST / PARTY /
-//         LONG_LOG / SLALOM_SWEEP / STRAIGHT_SWEEP / SENSOR_SPIN / LED_ALL_ON
-//   SD  : DUMP / DUMP_ALL / STREAM_TEST
-//   4〜9: ログ取りのモードへのショートカット(選ぶとすぐ決まる。FAST_SWEEP 以外は値も params.h の SHORTCUT_* で決まっていて選ばない)
-//         4 STRAIGHT_SWEEP(v)，5 STRAIGHT_SWEEP(acc)，6 SLALOM_SWEEP(low)，7 SLALOM_SWEEP(high)，8 FAST_SWEEP，9 LONG_LOG，
-//         10 SENSOR_SPIN
+// 実行するモード。同定のブランチでは一段だけ(並び順がエンコーダで送る順。mode_ui.c の表で決める)。
+//   1 E0(動き出し) / 2 E1(並進のステップ) / 3 E2(超信地旋回のステップ) / 4 E2S(超信地旋回の階段) /
+//   5 E1S(前進のステップを電圧ごとに) / 6 E1V(並進の FF + 旋回の FB で走る検証) / 7 E1B(減速の同定) /
+//   8 E1T(走りながら旋回のステップ) / 9 E1K0(V_d = 0 の曲がり具合) / 10 E1W(V_d の跳びで b_ω) /
+//   11 SD_DUMP / 12 SD_DUMP_ALL
 typedef enum {
-    MODE_SENSOR = 0,    // センサー・ジャイロ・エンコーダの値を表示し続ける
-    MODE_SENSOR_LOG,    // 壁センサーの値を数秒ぶん記録する(止まった状態)
-    MODE_VEL_PID,
-    MODE_STRAIGHT_TEST,
-    MODE_PIVOT_TEST,
-    MODE_SLALOM_TEST,   // スラローム(小回り 90°)の試験
-    MODE_LED_TEST,
-    MODE_PARTY,         // 宴会芸(床を回されても同じ方向を向き続ける)
+    MODE_SYSID_E0 = 0,  // 電圧をゆっくり上げて、動き出す電圧を見る(app/sysid_mode)
+    MODE_SYSID_E1,      // 並進のステップ(開ループ)
+    MODE_SYSID_E2,      // 超信地旋回のステップ(開ループ)
+    MODE_SYSID_E2S,     // 超信地旋回のステップを、電圧を上げながら1回の手かざしで続ける
+    MODE_SYSID_E1S,     // 前進のステップを、手かざしごとに1つ電圧を上げて続ける
+    MODE_SYSID_E1V,     // 同定したモデルの FF(並進)と旋回の FB で、台形の速度パターンを走る
+    MODE_SYSID_E1B,     // FF で加速 → 一定 → 一定の電圧でブレーキ(減速の同定)
+    MODE_SYSID_E1T,     // 走りながら左右の差をステップで入れる(旋回の同定)
+    MODE_SYSID_E1K0,    // V_d = 0 で走ったときの曲がり具合 κ₀ を測る
+    MODE_SYSID_E1W,     // V_d を ±A で切り替え、ω̇ の跳びから b_ω を測る
     MODE_SD_DUMP,
     MODE_SD_DUMP_ALL,
-    MODE_STREAM_TEST,   // 走りながら SD へ流すログの試験(モーターは動かさない)
-    MODE_SEARCH,        // 探索走行(Dijkstra)
-    MODE_SEARCH_ADACHI, // 探索走行(足立法)
-    MODE_FAST_RUN,      // 最短走行(探索で flash に残した地図を使う)
-    MODE_LONG_LOG,      // 長い走行(探索と最短走行を速さを変えて続けて走り、ログを取る)
-    MODE_SLALOM_SWEEP,  // 小回りの連続の試験(速さを上げながら右で行って左で戻る)
-    MODE_STRAIGHT_SWEEP, // 直進の連続の試験(速さと加速度を上げながら行って戻る)
-    MODE_FAST_SWEEP,    // 最短走行の連続(速さ・加速度・小回りの速さを変えて続けて走り、毎回スタートへ戻る)
-    MODE_SENSOR_SPIN,   // 区画の真ん中で回りながら壁センサーを記録する(plant_sim の壁センサーのモデル用)
-    MODE_SEARCH_SPIN,   // 探索(Dijkstra)で、初めて入った区画ごとに真ん中で回る(壁センサーのモデル用)
-    MODE_FAST_BANDS,    // 速度帯の最短走行(速度帯を順に、行きと帰りを自動でくり返す)
-    MODE_RUN_TEST,      // RUN の中の TEST(ログ取りの走行: FAST_SWEEP / SEARCH_SPIN / FAST_BANDS / LONG_LOG から選ぶ)
-    MODE_AUTONOMOUS,    // 自立賞(探索 → 最短走行と帰り道を何本か。触らずに最後まで)
-    MODE_LED_ALL_ON,    // すべての LED(シフトレジスタの16個と直結の6個)を点けたままにする
     MODE_COUNT
 } RobotMode;
 
@@ -50,17 +33,14 @@ typedef enum {
 // の点灯本数に線形に割り当てる。しきい値未満は全消灯。
 void ModeUI_ShowBattery(float vbat, uint32_t hold_ms);
 
-// 起動時に一度呼ぶブロッキング処理。まず一番上の階層(RUN / TEST / SD)を選び、
-// 次にその中のモードを選ぶ(上の階層には戻らない。戻るにはリセット)。
-// 中のモードが1つだけの階層は、選んだ時点でそのモードに決まる。
-// どちらも右エンコーダの回転(MODE_SELECT_PULSES_PER_STEPごと)で送り、
+// 起動時に一度呼ぶブロッキング処理。モードを右エンコーダの回転(MODE_SELECT_PULSES_PER_STEPごと)で送り、
 // ボタン押下で確定する。番号は1始まりで、n 番はシフトレジスタの LED n, n+1 を点ける。
 // 選択されたモードを返す。
 RobotMode ModeUI_Select(void);
 
-// モードを決めた後に、走りの設定の値(速さなど)を values の中から選ぶ(ブロッキング)。
+// モードを決めた後に、走りの設定の値(電圧など)を values の中から選ぶ(ブロッキング)。
 // 操作はモードの選択と同じ(右エンコーダで送り、ボタンで確定)。表示は棒グラフで、n 番は LED1〜n を点ける。
-// values は遅い順(小さい順)に並べること。1番から始める(def は count が 0 のときに返すだけ)。
+// values は小さい順に並べること。1番から始める(def は count が 0 のときに返すだけ)。
 // UART には name・値・unit を出す。選んだ値を返す。
 float ModeUI_SelectValue(const char *name, const char *unit, const float *values, uint8_t count, float def);
 // ModeUI_SelectValue と同じだが、start 番目(0 始まり)から始める(回さずに決めるとその値になる)
@@ -76,7 +56,7 @@ typedef enum {
     SD_SAVE_FAILED,
 } SdSaveResult;
 
-// 試験モードの走行後、記録したログをSDカードへ保存し(バイナリ .bin)、結果をUARTに出す。
+// RAM に記録したログをSDカードへ保存し(バイナリ .bin)、結果をUARTに出す。
 // 成功ならマイコン直結のLED全部を0.5秒点灯して消す(ブロッキング)。
 // 失敗のときはLEDを変えずに SD_SAVE_FAILED を返すので、呼び出し側が
 // 次のボタン待ちを ModeUI_WaitClickBlinking(MODE_UI_LED_SD_ERROR) にして知らせる。
@@ -100,7 +80,6 @@ void ModeUI_WaitHandStart(void);
 
 // ボタンのクリックか、非接触スタート(ModeUI_WaitHandStart と同じ手かざし)のどちらかを待つ。
 // クリックなら true(離すまで待ってから)、手をかざして離したなら false を返す。
-// 走る前に設定を選ぶ(クリックで切り替え、手かざしで走り出す)のに使う。
 bool ModeUI_WaitHandStartOrClick(void);
 
 // 選択されたモードを実行する。未知のモードは何もしない。

@@ -12,22 +12,13 @@ static volatile float s_trip_value = 0.0f;
 static float s_vbat_filtered = 0.0f;
 static bool s_vbat_initialized = false;
 static uint16_t s_low_voltage_ms = 0;
-static uint16_t s_vel_err_ms = 0;
 static uint16_t s_gyro_ms = 0;
-
-// 低電圧で発動させるか(メインが書き、ISRが読む。AUTO の間だけ false にする)
-static volatile bool s_low_voltage_enabled = true;
-
-void FailSafe_SetLowVoltageEnabled(bool enabled) {
-    s_low_voltage_enabled = enabled;
-}
 
 void FailSafe_Init(void) {
     s_cause = FAILSAFE_NONE;
     s_trip_value = 0.0f;
     s_vbat_initialized = false;
     s_low_voltage_ms = 0;
-    s_vel_err_ms = 0;
     s_gyro_ms = 0;
 }
 
@@ -58,19 +49,9 @@ void FailSafe_Update(const FailSafeInput *in) {
 
     if (s_cause != FAILSAFE_NONE) return; // ラッチ済み
 
-    bool low_voltage = s_low_voltage_enabled && (s_vbat_filtered < FAILSAFE_LOW_VOLTAGE_V);
+    bool low_voltage = (s_vbat_filtered < FAILSAFE_LOW_VOLTAGE_V);
     if (Persist(&s_low_voltage_ms, low_voltage, FAILSAFE_LOW_VOLTAGE_MS)) {
         FailSafe_Trip(FAILSAFE_LOW_VOLTAGE, s_vbat_filtered);
-        return;
-    }
-
-    // --- 速度偏差: 制御中のみ。左右の大きい方で判定 ---
-    float err_l = fabsf(in->target.left_mm_s  - in->actual.left_mm_s);
-    float err_r = fabsf(in->target.right_mm_s - in->actual.right_mm_s);
-    float err = (err_l > err_r) ? err_l : err_r;
-    bool vel_diverge = in->control_enabled && (err > FAILSAFE_VEL_ERR_MM_S);
-    if (Persist(&s_vel_err_ms, vel_diverge, FAILSAFE_VEL_ERR_MS)) {
-        FailSafe_Trip(FAILSAFE_VELOCITY_DIVERGE, err);
         return;
     }
 

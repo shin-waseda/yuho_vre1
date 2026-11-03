@@ -24,20 +24,22 @@
 #define LOGGER_MAX_FIELDS  40 // time_s を含む(全部の値 + イベントの6列を残すため)
 
 // 走りながら SD へ流すときのブロックの大きさ(SD のセクタ 512 の倍数)。バッファはこれを2つ持てる大きさ。
-#define LOGGER_STREAM_BLOCK_BYTES   24576u
-// 流すときに、ファイルを先に確保しておく大きさ(探索のログの 35列・5ms ごとなら約 20 分ぶん)。
-// 8MB(約 5 分)では、区画ごとに回る SEARCH_SPIN(1区画 約 18 秒)の途中で使い切った(2026-10-09)
-#define LOGGER_STREAM_RESERVE_BYTES (32u * 1024u * 1024u)
+// SD が最大 0.6 秒ほど待たせたことがあるので、1ブロックがそれより長くなるようにする。
+// 2026-10-30: 6軸を足して E1V が 19 列(76B/行)になったので 32KB(約 0.43 秒)→ 48KB(約 0.65 秒)。
+// バッファは 2 ブロックで 96KB(SDIO の DMA が届く SRAM に置く。CCMRAM は不可)
+#define LOGGER_STREAM_BLOCK_BYTES   49152u
+// 流すときに、ファイルを先に確保しておく大きさ(19列・1kHz なら約 220 秒ぶん。E2S の階段 0.2〜3.0V・T_acc 4 秒は約 160 秒)
+#define LOGGER_STREAM_RESERVE_BYTES (16u * 1024u * 1024u)
 
-// RAM に貯める記録のバッファ[float]。8列なら約1500サンプル(1kHzで1.5s)。
-// 長い記録はLogger_SetDuration()で間引く。48KB。
+// RAM に貯める記録のバッファ[float]。11列なら約1490サンプル(1kHzで1.5s)。
+// 長い記録はLogger_SetDuration()で間引く。64KB。
 #define LOGGER_BUFFER_SIZE (2u * LOGGER_STREAM_BLOCK_BYTES / 4u)
 
 // 列とバッファを空にし、先頭に "time_s" 列を置く。保存先は "." / "log"、日時付き。
 // 記録中に呼ばないこと。
 void Logger_Init(void);
 
-// 列を追加する。valueはISRが書き換える変数(App_GetControlDebug()のメンバ等)。
+// 列を追加する。valueはISRが書き換える変数(SysidLoop_GetDebug()のメンバ等)。
 // 満杯ならfalse。記録中に呼ばないこと。
 bool Logger_AddField(const char *name, const volatile float *value);
 
@@ -67,6 +69,9 @@ uint32_t Logger_RecordableMs(void);
 
 void Logger_Start(void);
 void Logger_Stop(void);
+// 流す方式で、Logger_Stop で止めた記録を続きから再開する(ファイルを開いたまま、手で置き直す間だけ止めるとき)。
+// time_s は止めていた間を数えない(続けて増える)。流していなければ何もしない。ISR からも呼べる。
+void Logger_Resume(void);
 
 // ISR(1kHz)から毎tick呼ぶ。記録中でなければ何もしない。
 void Logger_Sample(void);
@@ -98,6 +103,9 @@ void Logger_StreamPoll(void);
 // 記録を止め、残りを送ってファイルを閉じる(止まっているときに呼ぶ)。dropped_rows(NULL可)に
 // 捨てた行の数を書く。失敗なら false。
 bool Logger_StreamEnd(uint32_t *dropped_rows);
+// 記録を止めている間に、いっぱいになったブロックを SD へ送り終えるまで待つ(途中までのブロックは送らない)。
+// 止めたまま長く待つ前に呼ぶ(待っている間は Logger_StreamPoll を呼ばないため)。時間内に終わらなければ false。
+bool Logger_StreamDrain(uint32_t timeout_ms);
 // 流している途中で SD への書き込みに失敗したら true(以後は書かない)。
 bool Logger_StreamFailed(void);
 

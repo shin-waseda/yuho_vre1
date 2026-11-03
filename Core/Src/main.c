@@ -34,7 +34,7 @@
 #include "interface/encoder.h"
 #include "interface/sdcard.h"
 #include "interface/fault_diag.h"
-#include "app/control_loop.h"
+#include "app/sysid_loop.h"
 #include "app/failsafe.h"
 #include "app/mode_ui.h"
 /* USER CODE END Includes */
@@ -123,7 +123,7 @@ int main(void)
   printf("WHO_AM_I: 0x%02X\r\n", whoami);
 
   // ジャイロのゼロ点補正(約1.1秒)。この間は機体を動かさないこと。
-  // App_ControlLoop_Init()がこの結果を取り込むので、必ずそれより前に行う。
+  // SysidLoop_Init()がこの結果を取り込むので、必ずそれより前に行う。
   printf("Gyro calibrating... keep still\r\n");
   ICM_CalibrateBlocking(1000);
   GyroOffset goff = ICM_GetOffset();
@@ -134,7 +134,7 @@ int main(void)
 HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);  // ENC_L
 HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);  // ENC_R
 
-  App_ControlLoop_Init(); // 制御ループは無効状態で起動する。各モード内でApp_ControlLoop_SetEnabled(true)する
+  SysidLoop_Init(); // モーターは止まった状態で起動する。走るのは同定のモードが SysidLoop_StartRun() したときだけ
 
   // 起動時の電圧チェック(表示だけ)。TIM6割り込み開始前なのでADCを直接読む。
   // ここではフェイルセーフを発動させない。USB や ST-LINK の給電で先に起動してから

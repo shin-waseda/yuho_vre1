@@ -8,6 +8,8 @@
 #define ICM_WHO_AM_I     0x75
 #define ICM_PWR_MGMT0    0x4E
 #define ICM_GYRO_CONFIG0 0x4F
+#define ICM_ACCEL_CONFIG0 0x50
+#define ICM_ACCEL_X_H    0x1F // ACCEL_DATA_X1。続けて Y・Z、そのあと GYRO_DATA_X1(0x25)が並ぶ
 #define ICM_GYRO_X_H     0x25
 #define ICM_GYRO_Y_H     0x27
 #define ICM_GYRO_Z_H     0x29
@@ -19,9 +21,19 @@ typedef struct {
 } GyroData;
 
 // X/Y/Zの生値をバースト読み出しで1回のSPI通信にまとめて取得する。
-// TIM6割り込み開始後はISR(App_ControlTick)だけが呼ぶこと。
-// メインループから同時に呼ぶとSPIを取り合う(値はApp_GetGyroRaw()で読む)。
+// TIM6割り込み開始後はISR(SysidLoop_Tick)だけが呼ぶこと。
+// メインループから同時に呼ぶとSPIを取り合う。
 GyroData ICM_ReadGyro(void);
+
+// 加速度とジャイロの生値(センサーの軸)
+typedef struct {
+    GyroData accel; // [LSB](ACCEL_SENSITIVITY_LSB_PER_G で g に直す)
+    GyroData gyro;  // [LSB]
+} ImuData;
+
+// 加速度 X/Y/Z とジャイロ X/Y/Z を、ACCEL_DATA_X1 から 12byte の1回のバースト読み出しで取得する。
+// 呼んでよい所は ICM_ReadGyro と同じ(TIM6割り込み開始後は ISR だけ)。
+ImuData ICM_ReadImu(void);
 
 // 静止時の生値の平均(ゼロ点オフセット)[LSB]。
 typedef struct {

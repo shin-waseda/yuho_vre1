@@ -217,10 +217,16 @@ void Logger_Stop(void) {
     }
 }
 
+void Logger_Resume(void) {
+    if (!s_stream) return;
+    s_state = LOGGER_RECORDING; // ブロック・tick の数はそのまま(続きに書く)
+}
+
 // 流す方式の1行(ISR)
 static void SampleStream(void) {
     uint8_t a = s_blk_active;
-    if (s_blk_full[a]) {
+    // 行数も見る: 止めている間に Logger_StreamDrain がいっぱいの書きかけのブロックを送ると、full は下りるが行数は上限のまま
+    if (s_blk_full[a] || s_blk_rows[a] >= s_blk_max_rows) {
         uint8_t o = (uint8_t)(a ^ 1u);
         if (s_blk_full[o]) { // 両方いっぱい(SD が追いついていない)
             s_stream_dropped++;
@@ -458,6 +464,16 @@ bool Logger_StreamEnd(uint32_t *dropped_rows) {
     if (dropped_rows != NULL) *dropped_rows = s_stream_dropped;
     s_stream = false;
     return !s_stream_failed && closed;
+}
+
+bool Logger_StreamDrain(uint32_t timeout_ms) {
+    if (!s_stream || s_state == LOGGER_RECORDING) return false;
+    uint32_t t0 = HAL_GetTick();
+    while (!s_stream_failed && (s_writing >= 0 || s_blk_full[0] || s_blk_full[1])) {
+        Logger_StreamPoll();
+        if (HAL_GetTick() - t0 > timeout_ms) return false;
+    }
+    return !s_stream_failed;
 }
 
 bool Logger_StreamFailed(void) {
