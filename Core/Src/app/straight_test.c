@@ -42,7 +42,7 @@ static uint32_t LogMs(void) {
 // 1: 壁センサーの値を記録する(壁のある通路を走らせて、境界での値や区画の中での変わり方を見る)。
 //    列の上限があるので、FF・I 項・車輪の目標の代わりに壁センサーの4列を入れる。ファイル名は wall_run。
 // 0: 制御の調整用(FF・I 項・車輪の目標を記録する)。ファイル名は trapezoid。
-#define STRAIGHT_TEST_LOG_WALL 1
+#define STRAIGHT_TEST_LOG_WALL 0
 
 static void SetupLogger(void) {
     const ControlDebug *d = App_GetControlDebug();
@@ -59,7 +59,7 @@ static void SetupLogger(void) {
     Logger_AddField("gyro_z", &d->gyro_z_dps);
     Logger_AddField("angle_ref", &d->angle_ref_deg);
     Logger_AddField("angle", &d->angle_deg);
-    Logger_AddField("ang_corr", &d->ang_corr_dps);
+    Logger_AddField("fb_d", &d->fb_d);
     Logger_AddField("wall_ofs", &d->wall_offset_deg);
     Logger_AddField("ad_l", &d->ad_l);
     Logger_AddField("ad_fl", &d->ad_fl);
@@ -79,11 +79,11 @@ static void SetupLogger(void) {
     Logger_AddField("gyro_z", &d->gyro_z_dps);
     Logger_AddField("angle_ref", &d->angle_ref_deg);
     Logger_AddField("angle", &d->angle_deg);
-    Logger_AddField("ang_corr", &d->ang_corr_dps);
+    Logger_AddField("fb_d", &d->fb_d);
     Logger_AddField("ff_l", &d->ff_l);
     Logger_AddField("ff_r", &d->ff_r);
-    Logger_AddField("i_l", &d->i_l);
-    Logger_AddField("i_r", &d->i_r);
+    Logger_AddField("i_s", &d->i_s);
+    Logger_AddField("f_ff", &d->f_ff);
     Logger_AddField("vbat", &d->vbat);
 #endif
     Logger_SetDuration(LogMs());
@@ -144,16 +144,15 @@ void StraightTest_Run(void) {
     printf("motion ~%lu ms, timeout %lu ms, log %lu ms\r\n",
            (unsigned long)MotionMs(), (unsigned long)TimeoutMs(),
            (unsigned long)LogMs());
-    printf("KP=%.4f KI=%.4f [V]\r\n", VELOCITY_KP, VELOCITY_KI);
-    printf("ANGULAR: %s ANGULAR_KP=%.2f ANGLE_KP=%.2f\r\n",
-           ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", ANGULAR_KP, ANGLE_KP);
+    printf("VS: KP=%.2f KI=%.1f (I max %.2f V)\r\n", DRIVE_VS_KP, DRIVE_VS_KI, DRIVE_VS_I_LIMIT_V);
+    printf("ANGULAR: %s K_THETA=%.3f K_OMEGA=%.3f\r\n",
+           ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", DRIVE_VD_K_THETA, DRIVE_VD_K_OMEGA);
     printf("POSITION: %s POSITION_KP=%.2f\r\n",
            POSITION_CONTROL_ENABLE ? "ON" : "OFF", POSITION_KP);
     printf("WALL: %s WALL_KP_DEG=%.3f max %.1f deg REF L=%d R=%d\r\n",
            WALL_CONTROL_ENABLE ? "ON" : "OFF", WALL_KP_DEG, WALL_OFFSET_MAX_DEG, WALL_REF_L, WALL_REF_R);
-    printf("FF L: fric=%.3f gain=%.5f acc=%.6f / R: fric=%.3f gain=%.5f acc=%.6f [V]\r\n",
-           VELOCITY_FF_FRIC_L, VELOCITY_FF_GAIN_L, VELOCITY_FF_ACC_L,
-           VELOCITY_FF_FRIC_R, VELOCITY_FF_GAIN_R, VELOCITY_FF_ACC_R);
+    printf("MODEL: a=%.3f V0=%.3f b=%.3f c=%.4f D=%.3f [V]\r\n",
+           MODEL_A, MODEL_V0, MODEL_B, MODEL_C, MODEL_D);
 
     if (FailSafe_IsTripped()) FailSafe_Halt(); // 起動時の低電圧など
 
@@ -165,6 +164,7 @@ void StraightTest_Run(void) {
         HAL_Delay(STRAIGHT_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
         // 機体が止まっている間に、ジャイロのゼロ点を測り直す(起動時の補正からずれていることがある)
         printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
+        App_ResetGyroAngle(); // 置いた向きを 0° にする(向きの基準を決めるのは走りの始めだけ)
 
         RunOnce();
         printf("done: %lu samples x %lu fields (recordable %lu ms)\r\n",
@@ -207,8 +207,8 @@ static void SetupSweepLogger(void) {
     Logger_AddField("pwm_r", &d->pwm_r);
     Logger_AddField("ff_l", &d->ff_l);
     Logger_AddField("ff_r", &d->ff_r);
-    Logger_AddField("i_l", &d->i_l);
-    Logger_AddField("i_r", &d->i_r);
+    Logger_AddField("i_s", &d->i_s);
+    Logger_AddField("f_ff", &d->f_ff);
     Logger_AddField("gyro_z", &d->gyro_z_dps);
     Logger_AddField("angle_ref", &d->angle_ref_deg);
     Logger_AddField("angle", &d->angle_deg);
@@ -277,6 +277,7 @@ void StraightSweep_Run(void) {
     ModeUI_WaitHandStart();
     HAL_Delay(STRAIGHT_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
     printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
+    App_ResetGyroAngle(); // 置いた向きを 0° にする(往復の途中では決め直さない)
 
     // 最初の位置合わせ(左と後ろに壁があること)
     App_SetPositionHold(true);

@@ -41,7 +41,7 @@ static void SetupLogger(void) {
     Logger_AddField("gyro_z", &d->gyro_z_dps);
     Logger_AddField("angle_ref", &d->angle_ref_deg); // 目標の向き(angle と同じ基準)
     Logger_AddField("angle", &d->angle_deg);
-    Logger_AddField("ang_corr", &d->ang_corr_dps);
+    Logger_AddField("fb_d", &d->fb_d);
     // 前後のずれ。旋回では目標の距離が0のままなので、そのまま位置の誤差になる
     // (位置の補正 = −POSITION_KP × dist。列の上限のため pos_corr は記録しない)
     Logger_AddField("dist", &d->dist_mm);
@@ -53,8 +53,8 @@ static void SetupLogger(void) {
     Logger_AddField("pwm_r", &d->pwm_r);
     Logger_AddField("ff_l", &d->ff_l);
     Logger_AddField("ff_r", &d->ff_r);
-    Logger_AddField("i_l", &d->i_l);
-    Logger_AddField("i_r", &d->i_r);
+    Logger_AddField("i_s", &d->i_s);
+    Logger_AddField("f_ff", &d->f_ff);
     Logger_AddField("vbat", &d->vbat);
     Logger_SetDuration(LogMs());
 }
@@ -119,14 +119,13 @@ void PivotTest_Run(void) {
                                      PIVOT_TEST_OMEGA_DPS);
     printf("PIVOT TEST: +%.0f deg then -%.0f deg, omega=%.0f dps, alpha=%.0f dps^2\r\n",
            PIVOT_TEST_ANGLE_DEG, PIVOT_TEST_ANGLE_DEG, s_omega_dps, PIVOT_TEST_ALPHA_DPS2);
-    printf("ANGULAR: %s ANGULAR_KP=%.2f ANGLE_KP=%.2f, GYRO_Z_SIGN=%.0f\r\n",
-           ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", ANGULAR_KP, ANGLE_KP, GYRO_Z_SIGN);
+    printf("ANGULAR: %s K_THETA=%.3f K_OMEGA=%.3f, GYRO_Z_SIGN=%.0f\r\n",
+           ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", DRIVE_VD_K_THETA, DRIVE_VD_K_OMEGA, GYRO_Z_SIGN);
     printf("POSITION: %s POSITION_KP=%.2f\r\n",
            POSITION_CONTROL_ENABLE ? "ON" : "OFF", POSITION_KP);
     // 書き込んだプログラムの設定をログと突き合わせられるように出しておく
-    printf("TREAD=%.2f mm, PIVOT_FF_FRIC CCW L=%.2f R=%.2f / CW L=%.2f R=%.2f V\r\n",
-           TREAD_WIDTH_MM, PIVOT_FF_FRIC_CCW_L, PIVOT_FF_FRIC_CCW_R,
-           PIVOT_FF_FRIC_CW_L, PIVOT_FF_FRIC_CW_R);
+    printf("TREAD=%.2f mm, PIVOT_VD_FRIC CCW=%.2f CW=%.2f V, B_OMEGA=%.4f, D=%.3f V\r\n",
+           TREAD_WIDTH_MM, PIVOT_VD_FRIC_CCW, PIVOT_VD_FRIC_CW, MODEL_B_OMEGA, MODEL_D);
 
     if (FailSafe_IsTripped()) FailSafe_Halt(); // 起動時の低電圧など
 
@@ -138,6 +137,7 @@ void PivotTest_Run(void) {
         HAL_Delay(PIVOT_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
         // 機体が止まっている間に、ジャイロのゼロ点を測り直す(起動時の補正からずれていることがある)
         printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
+        App_ResetGyroAngle(); // 置いた向きを 0° にする(向きの基準を決めるのは走りの始めだけ)
 
         RunOnce();
         printf("done: %lu samples x %lu fields (recordable %lu ms)\r\n",

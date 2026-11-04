@@ -319,7 +319,8 @@ static bool Pivot(float angle_deg) {
 
 // 尻当て(BlueEyes の set_position)。真ん中から後ろの壁に押し当てて向きと位置をそろえ、真ん中へ戻る。
 // 押し当てている間は向きと位置の補正を止め、両輪を同じ速さで押す(機体が壁にそろうのを打ち消さないため)。
-// 押し当て終わったら制御を有効にし直し、その向き・位置を新しい基準にする(目標の距離は0になる)。
+// 押し当て終わったら制御を有効にし直し、その位置を新しい基準にする(目標の距離は0になる)。
+// 向きは決め直さない(2026-11-04)。壁にそろって変わった向きは、有効にし直した後に旋回の FB が走りの始めの基準へ戻す。
 static bool SetPosition(DrivePos *dp) {
     Ev(LOG_EV_SETPOS, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     App_SetWallControl(false);
@@ -330,7 +331,7 @@ static bool SetPosition(DrivePos *dp) {
     App_ControlLoop_SetEnabled(false);
     App_SetWallPush(false);
     DelayWatching(SEARCH_SETPOS_SETTLE_MS);
-    App_ControlLoop_SetEnabled(true); // ここ(壁に当たった所)が目標の距離0、今の向きが目標の向き
+    App_ControlLoop_SetEnabled(true); // ここ(壁に当たった所)が目標の距離0。目標の向きは走りの始めの基準のまま
 
     dp->ref_mm = SEARCH_SETPOS_FRONT_MM;
     StartStraightTo(dp->ref_mm, 0.0f);
@@ -822,7 +823,7 @@ static void PrepareStart(const char *log_name) {
     HAL_Delay(SEARCH_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
     s_gyro_offset = App_RecalibrateGyroZ(GYRO_RECAL_MS);
     printf("gyro z offset: %.1f\r\n", s_gyro_offset);
-    App_ResetGyroAngle(); // スタートの向きを 0° にする(ログの向きを読みやすくするため)
+    App_ResetGyroAngle(); // スタートの向きを 0° にする(向きの基準を決めるのはここだけ)
 
     // ログを流すファイルを作る(先に領域を確保するので、少し時間がかかることがある)
     SetupLogger(log_name);

@@ -40,9 +40,9 @@ static void PrintStats(const char *head, uint32_t elapsed_ms) {
 
 void PartyMode_Run(void) {
     printf("PARTY: keep heading (gyro) and position (encoders), log streamed to SD until STOP\r\n");
-    printf("ANGULAR: %s ANGULAR_KP=%.2f ANGLE_KP=%.2f, limit %.0f dps\r\n",
-           ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", ANGULAR_KP, ANGLE_KP,
-           ANGULAR_CORR_LIMIT_RAD_S * 180.0f / 3.14159265f);
+    printf("ANGULAR: %s K_THETA=%.3f V/rad K_OMEGA=%.3f V/(rad/s), limit %.1f V\r\n",
+           ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", DRIVE_VD_K_THETA, DRIVE_VD_K_OMEGA,
+           DRIVE_VD_FB_LIMIT_V);
 
     if (FailSafe_IsTripped()) FailSafe_Halt(); // 起動時の低電圧など
 
@@ -55,6 +55,7 @@ void PartyMode_Run(void) {
         // 機体が止まっている間に、ジャイロのゼロ点を測り直す(向きがゆっくり回っていかないように)
         float gyro_offset = App_RecalibrateGyroZ(GYRO_RECAL_MS);
         printf("gyro z offset: %.1f\r\n", gyro_offset);
+        App_ResetGyroAngle(); // 今の向きを 0° にする(保つ向きの基準)
 
         SetupLogger();
         char path[SDCARD_PATH_MAX];
