@@ -25,6 +25,7 @@ void App_StartStraight(float distance_mm, float v_max, float v_end, float accel)
 void App_StartStraightAD(float distance_mm, float v_max, float v_end, float accel, float decel);
 
 // 台形プロファイルで超信地旋回する(その場で回る。止まって終わる)。
+// 台形が終わった後、ジャイロの角度が目標に合うまで(最長 PIVOT_SETTLE_TIMEOUT_MS)完了にしない。
 // angle_deg: 正=反時計回り(左)、負=時計回り(右)。
 // 実際の開始は次のtick。完了はApp_IsMotionDone()で見る。制御が有効でないと進まない。
 void App_StartPivot(float angle_deg, float omega_max_dps, float alpha_dps2);
@@ -40,23 +41,10 @@ bool App_IsMotionDone(void);
 // 超信地旋回の間は変わらない。探索で区画の境界・真ん中に着いたかを見るのに使う。
 float App_GetTargetDistance(void);
 
-// 直進中に見つけた最後の壁切れ(横の壁がなくなった瞬間)。side(NULL可): 0 左 / 1 右、
-// pos_ref_mm(NULL可): その瞬間の目標の距離。戻り値は見つけた数(増えたら新しい壁切れ)。
-uint32_t App_GetWallEdge(uint8_t *side, float *pos_ref_mm);
-
 // 位置の制御(前後の位置を保つ)を効かせるかどうか。起動時は true。
 // false の間は目標の距離を今の距離に合わせ続けるので、true に戻しても補正は跳ばない。
 // (宴会芸モードのように、向きだけ保ちたいときに false にする)
 void App_SetPositionHold(bool en);
-
-// 尻当て用。true の間は向きと位置の補正を止め(目標の向き・距離は今の値に合わせ続ける)、
-// 並進の FB だけで動かす(旋回の FF・FB は止め，左右に同じ電圧をかける)。壁に押し当てたとき、機体が壁にそろう向きを打ち消さないため。
-void App_SetWallPush(bool en);
-
-// 壁の制御を使うかどうか(起動時は true)。WALL_CONTROL_ENABLE が 1 のときだけ効く。
-// 探索では BlueEyes と同じく、区画の境界から境界までの直進(1区画)だけで使い、
-// 真ん中から・真ん中までの半区画と尻当てでは止める(真ん中ではセンサーが柱のあたりを見るため)。
-void App_SetWallControl(bool en);
 
 // 速度PIDとモータ出力の有効/無効。起動時は無効。
 // 無効中もオドメトリ更新は続ける(PIDとモータ出力だけ止める)。
@@ -125,7 +113,6 @@ typedef struct {
     float angle_ref_deg;    // 目標の向き(angle_deg と同じ基準。止まってもリセットしない)
     float f_ff;             // 旋回の FF のうち，タイヤが横にこする分 F[V]
     float ad_l, ad_fl, ad_fr, ad_r; // 壁センサーの値(IR 点灯 − 消灯の差。ad_* を float にしたもの)
-    float wall_offset_deg;  // 壁の制御のオフセット[deg](目標の向き = 迷路の軸の向き + これ)
     // 6軸(機体の座標: x 前、y 左、z 上。logic/state_estimation/imu)。制御には使わず、ログに残すだけ。
     // 加速度[m/s²]は重力を含む(止まって水平なら acc_z が約 +9.8)。ジャイロ Z は gyro_z_dps と同じなので入れない
     float acc_x, acc_y, acc_z;

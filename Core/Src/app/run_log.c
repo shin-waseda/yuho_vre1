@@ -33,7 +33,6 @@ void RunLog_Setup(const char *dir, const char *file, uint32_t decimation) {
     Logger_AddField("angle_ref", &d->angle_ref_deg);
     Logger_AddField("angle", &d->angle_deg);
     Logger_AddField("fb_d", &d->fb_d);
-    Logger_AddField("wall_ofs", &d->wall_offset_deg);
     // 壁センサー・電池
     Logger_AddField("ad_l", &d->ad_l);
     Logger_AddField("ad_fl", &d->ad_fl);

@@ -5,7 +5,7 @@
 #include "app/control_loop.h"
 #include "app/failsafe.h"
 #include "app/logger.h"
-#include "app/search_run.h" // MazeRun_StartSequence(連続の試験の位置合わせ)
+#include "app/search_run.h" // MazeRun_StartSequence(後ろの壁から真ん中へ進む)
 #include "interface/led.h"
 
 // 走行条件: 区画数ぶんを 最高速度・加速度 で走って止まる。
@@ -60,7 +60,6 @@ static void SetupLogger(void) {
     Logger_AddField("angle_ref", &d->angle_ref_deg);
     Logger_AddField("angle", &d->angle_deg);
     Logger_AddField("fb_d", &d->fb_d);
-    Logger_AddField("wall_ofs", &d->wall_offset_deg);
     Logger_AddField("ad_l", &d->ad_l);
     Logger_AddField("ad_fl", &d->ad_fl);
     Logger_AddField("ad_fr", &d->ad_fr);
@@ -149,8 +148,6 @@ void StraightTest_Run(void) {
            ANGULAR_CONTROL_ENABLE ? "ON" : "OFF", DRIVE_VD_K_THETA, DRIVE_VD_K_OMEGA);
     printf("POSITION: %s POSITION_KP=%.2f\r\n",
            POSITION_CONTROL_ENABLE ? "ON" : "OFF", POSITION_KP);
-    printf("WALL: %s WALL_KP_DEG=%.3f max %.1f deg REF L=%d R=%d\r\n",
-           WALL_CONTROL_ENABLE ? "ON" : "OFF", WALL_KP_DEG, WALL_OFFSET_MAX_DEG, WALL_REF_L, WALL_REF_R);
     printf("MODEL: a=%.3f V0=%.3f b=%.3f c=%.4f D=%.3f [V]\r\n",
            MODEL_A, MODEL_V0, MODEL_B, MODEL_C, MODEL_D);
 
@@ -184,7 +181,8 @@ void StraightTest_Run(void) {
 
 // ---- 直進の連続の試験(速さと加速度を上げながら、行って戻る)----
 // 両側と両端に壁のある通路(STRAIGHT_TEST_SECTIONS + 1 区画)の端の区画に、通路の向きに置いて手かざしで始める。
-// 毎回、尻当て(start_sequence)で真ん中にそろえてから STRAIGHT_TEST_SECTIONS 区画走って止まり、180° 回って次へ
+// 最初は後ろの壁に尾を付けて置き、真ん中へ進んでから STRAIGHT_TEST_SECTIONS 区画走って止まり、180° 回って次へ
+// (尻当て・壁の制御はしない。2026-11-04)
 // (行きと帰りを交互にくり返すので置き直さない)。加速度ごとに、選んだ速さの範囲を順に上げる。各組み合わせで
 // STRAIGHT_SWEEP_REPEAT 回(2 なら行きと帰り)。1回ごとに SD に sweep_NNNN で保存する。
 // 限界を見るため、PWM・FF・I 項・車輪の目標・前の壁センサー(止まった所で前の壁までの距離が分かる)を記録する。
@@ -212,7 +210,6 @@ static void SetupSweepLogger(void) {
     Logger_AddField("gyro_z", &d->gyro_z_dps);
     Logger_AddField("angle_ref", &d->angle_ref_deg);
     Logger_AddField("angle", &d->angle_deg);
-    Logger_AddField("wall_ofs", &d->wall_offset_deg);
     Logger_AddField("ad_l", &d->ad_l);
     Logger_AddField("ad_fl", &d->ad_fl);
     Logger_AddField("ad_fr", &d->ad_fr);
@@ -221,8 +218,8 @@ static void SetupSweepLogger(void) {
     Logger_SetDuration(LogMs());
 }
 
-// 止まっている所で 180° 回り、尻当てで真ん中・通路の向きにそろえる(通路の端の区画で使う)。打ち切ったら false
-static bool TurnAroundAndAlign(void) {
+// 止まっている所(通路の端の区画の真ん中)で 180° 回る。尻当てはしない。打ち切ったら false
+static bool TurnAround(void) {
     App_SetPositionHold(true);
     App_SetTargetVelocity(0.0f);
     App_ControlLoop_SetEnabled(true);
@@ -234,9 +231,8 @@ static bool TurnAroundAndAlign(void) {
         if (HAL_GetTick() - t0 > 3000u) return false;
     }
     DelayWatching(100);
-    bool ok = MazeRun_StartSequence();
     App_ControlLoop_SetEnabled(false);
-    return ok;
+    return true;
 }
 
 static void SweepHalt(const char *why, uint8_t no) {
@@ -269,7 +265,7 @@ void StraightSweep_Run(void) {
     if (a1 < a0) a1 = a0;
     printf("STRAIGHT SWEEP: %d sections, speed %.0f..%.0f mm/s, accel %.0f..%.0f mm/s^2, x%u each\r\n",
            STRAIGHT_TEST_SECTIONS, kSpeeds[v0], kSpeeds[v1], kAccels[a0], kAccels[a1], STRAIGHT_SWEEP_REPEAT);
-    printf("put at an end cell of a corridor (%d cells, walls on both sides and both ends), facing along it. hand: START\r\n",
+    printf("put at an end cell of a corridor (%d cells), facing along it, with the tail on the end wall. hand: START\r\n",
            STRAIGHT_TEST_SECTIONS + 1);
     if (FailSafe_IsTripped()) FailSafe_Halt();
 
@@ -279,7 +275,7 @@ void StraightSweep_Run(void) {
     printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
     App_ResetGyroAngle(); // 置いた向きを 0° にする(往復の途中では決め直さない)
 
-    // 最初の位置合わせ(左と後ろに壁があること)
+    // 後ろの壁に付けて置いた所から、端の区画の真ん中へ進む
     App_SetPositionHold(true);
     App_SetTargetVelocity(0.0f);
     App_ControlLoop_SetEnabled(true);
@@ -294,7 +290,7 @@ void StraightSweep_Run(void) {
                 no++;
                 if (!first) {
                     DelayWatching(STRAIGHT_SWEEP_PAUSE_MS);
-                    if (!TurnAroundAndAlign()) SweepHalt("turn around", no);
+                    if (!TurnAround()) SweepHalt("turn around", no);
                 }
                 first = false;
                 s_accel = kAccels[ai];

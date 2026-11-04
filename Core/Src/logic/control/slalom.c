@@ -144,7 +144,3 @@ SlalomOffsets Slalom_SmallTurnOffsets(const SlalomParams *p) {
     SlalomOffsets o = { pre0 + pre_adj, post0 + post_adj, pre_adj, post_adj };
     return o;
 }
-
-float Slalom_FrontRefSum(float pre_adj_mm) {
-    return SLALOM_FRONT_REF_SUM_AT_PRE0 + SLALOM_FRONT_SUM_PER_MM * pre_adj_mm;
-}

@@ -75,7 +75,4 @@ typedef struct {
 
 SlalomOffsets Slalom_SmallTurnOffsets(const SlalomParams *p);
 
-// 前壁補正の閾値(FL + FR)。曲がり始めが前の調整分だけ動くので、その位置で見える値にする。
-float Slalom_FrontRefSum(float pre_adj_mm);
-
 #endif

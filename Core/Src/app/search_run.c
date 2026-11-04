@@ -18,13 +18,14 @@
 #include "app/run_log.h"
 
 // 探索走行。流れは BlueEyes の searchB_dijkstra と同じ:
-//   start_sequence(右90° → 尻当て → 左90° → 尻当て)でスタート区画の真ん中に合わせる
+//   後ろの壁に尾を付けて置いた所から、区画の真ん中まで進む(尻当てはしない)
 //   → スタート区画の壁を地図に書いて経路を計算 → 半区画加速して最初の境界へ
 //   → 境界ごとに: 壁を読んで地図を更新し、経路を計算し直し、次の動きをする
 //       直進: 止まらずに次の境界まで
 //       左右: 真ん中で止まる → 超信地旋回 → 半区画加速
-//       180°: 真ん中で止まる → (後ろと横に壁があれば尻当てを2回) → 半区画加速
-//   → ゴール・スタートでは真ん中で止まって 180°(尻当てあり)
+//       180°: 真ん中で止まる → 超信地旋回 → 半区画加速
+//   → ゴール・スタートでは真ん中で止まって 180°
+// 壁で位置・向きを直す補正(壁の制御・壁切れ・前壁・尻当て)は使わない(2026-11-04)。壁センサーは壁の有無を読むだけ。
 // 違い: 地図の更新と経路の計算は SearchPlanner_Step() でまとめて行う。BlueEyes は計算の間に
 // 13mm(CALC_OFFSET_DIST)等速で進む区間を取っているが、ここでは計算の間に進んだ分を次の動きの
 // 距離から差し引く(目標の距離の絶対値で区画の境界・真ん中を決めている)ので、働きは同じ。
@@ -191,64 +192,6 @@ static bool WaitTargetDistance(float target_mm) {
     return true;
 }
 
-// ---- 壁切れ補正 ----
-// 直進中に新しい壁切れがあれば、その位置から、目標の距離の基準(境界の位置)のずれを求める。
-// boundary0 は、この直進で通る境界のうち最初のもの(目標の距離)。壁切れは、どれかの境界を
-// WALL_EDGE_POS_L/R_MM 過ぎた所で起きるはずなので、一番近い境界からのずれを補正の量にする。
-// 補正したら true を返し、*corr にその量を書く(+ なら機体は思っていたより後ろにいる → 先の基準を先へ)。
-typedef struct {
-    uint32_t seq;     // 見た壁切れの数(App_GetWallEdge)
-    float boundary0;  // 最初の境界の目標の距離(補正するたびに一緒にずらす)
-} EdgeCorr;
-
-static void EdgeCorr_Begin(EdgeCorr *ec, float boundary0) {
-    ec->seq = App_GetWallEdge(NULL, NULL);
-    ec->boundary0 = boundary0;
-}
-
-static bool EdgeCorr_Check(EdgeCorr *ec, float *corr) {
-    uint8_t side;
-    float pos;
-    uint32_t seq = App_GetWallEdge(&side, &pos);
-    if (seq == ec->seq) return false;
-    ec->seq = seq;
-    // 壁が切れる位置は左右で違う(side: 0 左, 1 右)
-    float edge_mm = (side == 1u) ? WALL_EDGE_POS_R_MM : WALL_EDGE_POS_L_MM;
-    // 一番近い境界(boundary0 + 1区画 × k)を選ぶ
-    float k = floorf((pos - edge_mm - ec->boundary0) / SECTION_MM + 0.5f);
-    if (k < 0.0f) k = 0.0f;
-    float expected = ec->boundary0 + k * SECTION_MM + edge_mm;
-    float c = pos - expected;
-    if (c > WALL_EDGE_WINDOW_MM || c < -WALL_EDGE_WINDOW_MM) return false; // 予想から外れすぎ(使わない)
-    if (c > WALL_EDGE_MAX_CORR_MM) c = WALL_EDGE_MAX_CORR_MM;
-    if (c < -WALL_EDGE_MAX_CORR_MM) c = -WALL_EDGE_MAX_CORR_MM;
-    Ev(LOG_EV_EDGE_CORR, (float)side, WALL_EDGE_CORR_ENABLE ? c : 0.0f, expected, pos, 0.0f);
-    if (!WALL_EDGE_CORR_ENABLE) return false;
-    ec->boundary0 += c;
-    *corr = c;
-    return true;
-}
-
-static void StartStraightTo(float target_mm, float v_end);
-
-// 目標の距離が *target − before に届くまで待つ。途中の壁切れで *target を直す(探索の1区画の直進用)。
-// 直したら、*target − before(壁を読む所)で v_end になるようにプロファイルを今の速さから引き直す(区画の中で
-// 加速・減速するため。最短走行の FastStraightTo と同じ)。before は壁を境界の手前で読むための分(SEARCH_WALL_READ_BEFORE_MM)。
-static bool WaitTargetDistanceEdge(float *target, EdgeCorr *ec, float before, float v_end) {
-    uint32_t t0 = HAL_GetTick();
-    while (App_GetTargetDistance() < *target - before) {
-        CheckFailSafe();
-        PollLog();
-        float c;
-        if (EdgeCorr_Check(ec, &c)) {
-            *target += c;
-            StartStraightTo(*target - before, v_end);
-        }
-        if (HAL_GetTick() - t0 > SEARCH_STEP_TIMEOUT_MS) return false;
-    }
-    return true;
-}
-
 static bool WaitMotionDone(void) {
     uint32_t t0 = HAL_GetTick();
     while (!App_IsMotionDone()) {
@@ -272,7 +215,7 @@ static void DelayWatching(uint32_t ms) {
 // ---- 動き ----
 // ref_mm: 機体の基準点(今いる真ん中、または次に壁を読む境界)の目標の距離。
 // 距離は目標の距離の絶対値で決めるので、壁を読む・経路を計算する間に進んだ分が積み重ならない。
-// 尻当てで制御を有効にし直すと目標の距離は0に戻るので、ref_mm もそれに合わせる。
+// 壁で位置を直す補正(尻当て・壁切れ・前壁)はやめた(2026-11-04)ので、走りの始めから目標の距離を積むだけ。
 
 typedef struct {
     float ref_mm;
@@ -292,7 +235,7 @@ static void StartStraightTo(float target_mm, float v_end) {
     StartStraightToV(target_mm, v_max, v_end, s_search_accel);
 }
 
-// 小回りの速さのまま直進する(曲がる前後のオフセット・前壁補正の範囲)
+// 小回りの速さのまま直進する(曲がる前後のオフセット)
 static void StartTurnStraightTo(float target_mm) {
     StartStraightToV(target_mm, s_search_turn_v, s_search_turn_v, s_search_accel);
 }
@@ -300,7 +243,6 @@ static void StartTurnStraightTo(float target_mm) {
 // 真ん中で止まる(既に真ん中にいれば何もしない。BlueEyes の half_sectionD)。追記の時間が来ていれば追記する。
 static bool StopAtCenter(DrivePos *dp) {
     if (dp->at_center) return true;
-    App_SetWallControl(false); // 半区画では壁の制御を使わない(BlueEyes の half_sectionD と同じ)
     dp->ref_mm += HALF_SECTION_MM;
     Ev(LOG_EV_STOP_CENTER, dp->ref_mm, 0.0f, 0.0f, 0.0f, 0.0f);
     StartStraightTo(dp->ref_mm, 0.0f);
@@ -317,66 +259,20 @@ static bool Pivot(float angle_deg) {
     return true;
 }
 
-// 尻当て(BlueEyes の set_position)。真ん中から後ろの壁に押し当てて向きと位置をそろえ、真ん中へ戻る。
-// 押し当てている間は向きと位置の補正を止め、両輪を同じ速さで押す(機体が壁にそろうのを打ち消さないため)。
-// 押し当て終わったら制御を有効にし直し、その位置を新しい基準にする(目標の距離は0になる)。
-// 向きは決め直さない(2026-11-04)。壁にそろって変わった向きは、有効にし直した後に旋回の FB が走りの始めの基準へ戻す。
-static bool SetPosition(DrivePos *dp) {
-    Ev(LOG_EV_SETPOS, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-    App_SetWallControl(false);
-    App_SetWallPush(true);
-    App_SetTargetVelocity(-SEARCH_SETPOS_BACK_V_MM_S);
-    DelayWatching(SEARCH_SETPOS_BACK_MS); // 決めた時間だけ下がる(壁に当たった後も押し続ける)
-    App_SetTargetVelocity(0.0f);
-    App_ControlLoop_SetEnabled(false);
-    App_SetWallPush(false);
-    DelayWatching(SEARCH_SETPOS_SETTLE_MS);
-    App_ControlLoop_SetEnabled(true); // ここ(壁に当たった所)が目標の距離0。目標の向きは走りの始めの基準のまま
+// 真ん中で 180° 向きを変える(探索の行き止まり・ゴール・スタート、最短走行のゴール)。真ん中にいること。
+// 補正をやめた(2026-11-04)ので、尻当てはせず、その場で超信地旋回するだけ。
+static bool TurnBack(void) {
+    return Pivot(180.0f);
+}
 
-    dp->ref_mm = SEARCH_SETPOS_FRONT_MM;
+// 走り始め: 機体は後ろの壁に尾を付けて手で置く(押し当てはしない。2026-11-04)。
+// そこから SEARCH_START_FRONT_MM 進んだ所を区画の真ん中とする。横の位置と向きは置いたまま。
+static bool StartSequence(DrivePos *dp) {
+    dp->ref_mm += SEARCH_START_FRONT_MM;
     StartStraightTo(dp->ref_mm, 0.0f);
     if (!WaitMotionDone()) return false;
     dp->at_center = true;
-    Ev(LOG_EV_SETPOS, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     return true;
-}
-
-// 180°向きを変える(BlueEyes の turn_back の真ん中の部分)。真ん中にいること。
-// 前と右に壁があれば左90°→尻当てを2回、前と左に壁があれば右90°→尻当てを2回、なければその場で180°。
-static bool TurnBack(DrivePos *dp, MazePos pos, Direction heading) {
-    bool front = WallMap_HasWall(&s_map, pos, heading, WALL_VIEW_KNOWN);
-    bool right = WallMap_HasWall(&s_map, pos, Dir_Turn(heading, 1), WALL_VIEW_KNOWN);
-    bool left = WallMap_HasWall(&s_map, pos, Dir_Turn(heading, -1), WALL_VIEW_KNOWN);
-
-    if (front && right) {
-        return Pivot(90.0f) && SetPosition(dp) && Pivot(90.0f) && SetPosition(dp);
-    }
-    if (front && left) {
-        return Pivot(-90.0f) && SetPosition(dp) && Pivot(-90.0f) && SetPosition(dp);
-    }
-    return Pivot(180.0f);
-}
-
-// ゴール(探索のゴール・スタート，最短走行のゴール)で 180° 向きを変える。真ん中にいること。
-// 壁が一つでもあれば、尻当てで向きと位置をそろえる(2026-10-10)。
-//   前と右 / 前と左: TurnBack と同じ(90° → 尻当てを2回)
-//   右だけ: 左90° → 尻当て(右の壁が後ろになる) → 左90°。左だけ: 右90° → 尻当て → 右90°
-//   前だけ: 180° → 尻当て(前の壁が後ろになる)。壁がなければその場で 180°
-static bool TurnBackAtGoal(DrivePos *dp, MazePos pos, Direction heading) {
-    bool front = WallMap_HasWall(&s_map, pos, heading, WALL_VIEW_KNOWN);
-    bool right = WallMap_HasWall(&s_map, pos, Dir_Turn(heading, 1), WALL_VIEW_KNOWN);
-    bool left = WallMap_HasWall(&s_map, pos, Dir_Turn(heading, -1), WALL_VIEW_KNOWN);
-
-    if (front && (right || left)) return TurnBack(dp, pos, heading);
-    if (right) return Pivot(90.0f) && SetPosition(dp) && Pivot(90.0f);
-    if (left) return Pivot(-90.0f) && SetPosition(dp) && Pivot(-90.0f);
-    if (front) return Pivot(180.0f) && SetPosition(dp);
-    return Pivot(180.0f);
-}
-
-// BlueEyes の start_sequence。スタート区画(左右と後ろに壁がある)で、右90° → 尻当て → 左90° → 尻当て。
-static bool StartSequence(DrivePos *dp) {
-    return Pivot(-90.0f) && SetPosition(dp) && Pivot(90.0f) && SetPosition(dp);
 }
 
 // ---- 区画の真ん中で回る(RUN の SEARCH_SPIN。壁センサーのモデル用)----
@@ -402,7 +298,6 @@ static bool SpinAndWait(float angle_deg) {
 // 区画の壁(4方向とも分かっていること)をイベントに残す。打ち切ったら false
 static bool SpinAtCenter(DrivePos *dp, MazePos pos, Direction heading) {
     if (!StopAtCenter(dp)) return false;
-    App_SetWallControl(false);
     uint8_t walls = 0;
     for (uint8_t d = 0; d < 4u; d++) {
         if (WallMap_HasWall(&s_map, pos, (Direction)d, WALL_VIEW_KNOWN)) walls |= (uint8_t)(1u << d);
@@ -438,25 +333,14 @@ static WallObservation ReadWalls(WallSensorValues *sv) {
 // BlueEyes の half_sectionA、境界からなら1区画 = one_sectionU)。読んだ後も機体は同じ速さで境界へ進み続け、
 // その間に次の動きを決める(dp->ref_mm は境界の位置のまま)。
 static bool GoToNextBoundary(DrivePos *dp, uint8_t cells, WallObservation *obs, WallSensorValues *sv) {
-    // 壁の制御は境界から境界までの1区画だけ(真ん中からの半区画加速では使わない)
-    App_SetWallControl(!dp->at_center);
-    bool from_boundary = !dp->at_center;
-    float boundary0 = dp->ref_mm; // 境界から走るなら、今いる境界
     dp->ref_mm += dp->at_center ? HALF_SECTION_MM + SECTION_MM * (float)(cells - 1)
                                 : SECTION_MM * (float)cells;
     // 壁を読む所(境界の SEARCH_WALL_READ_BEFORE_MM 手前)までに小回りの速さにしておく。曲がるかどうかはそこで決まり、
-    // すぐ曲がり始めることがある(前壁補正)ので、そこからでは減速が間に合わない(2026-10-08 に、境界で小回りの速さに
+    // すぐ曲がり始めることがあるので、そこからでは減速が間に合わない(2026-10-08 に、境界で小回りの速さに
     // なるようにしていたら、読む所ではまだ速く、300mm/s 用の角速度のまま 370mm/s で曲がって壁に寄った)。
     // 読んだ後は、次の指令が出るまで小回りの速さのまま進む。
     StartStraightTo(dp->ref_mm - SEARCH_WALL_READ_BEFORE_MM, s_search_turn_v);
-    if (from_boundary) {
-        // 境界から境界へ走る間は、壁切れで次の境界の位置を直す
-        EdgeCorr ec;
-        EdgeCorr_Begin(&ec, boundary0);
-        if (!WaitTargetDistanceEdge(&dp->ref_mm, &ec, SEARCH_WALL_READ_BEFORE_MM, s_search_turn_v)) return false;
-    } else {
-        if (!WaitTargetDistance(dp->ref_mm - SEARCH_WALL_READ_BEFORE_MM)) return false;
-    }
+    if (!WaitTargetDistance(dp->ref_mm - SEARCH_WALL_READ_BEFORE_MM)) return false;
     *obs = ReadWalls(sv);
     dp->at_center = false;
     return true;
@@ -471,7 +355,6 @@ static bool s_search_slalom = true; // 探索で曲がるとき、スラロー�
 
 static float s_slalom_omega_dps = SLALOM_OMEGA_DPS; // 選んだ速さに合わせた角速度・角加速度
 static float s_slalom_alpha_dps2 = SLALOM_ALPHA_DPS2;
-static float s_front_ref_sum = SLALOM_FRONT_REF_SUM_AT_PRE0; // 前壁補正の閾値(ComputeSlalomOffsets で計算する)
 static RunProfile s_known_prof; // 探索の既知の区間をまとめて走るときの速さ(ComputeSlalomOffsets で計算する)
 static RunProfile ComputeFastTurns(void);
 
@@ -489,10 +372,8 @@ static void ComputeSlalomOffsets(void) {
     SlalomOffsets o = Slalom_SmallTurnOffsets(&p);
     s_slalom_pre_mm = o.pre_mm;
     s_slalom_post_mm = o.post_mm;
-    s_front_ref_sum = Slalom_FrontRefSum(o.pre_adj_mm); // 曲がり始めが動いた分、前壁補正の閾値も動かす
-    printf("slalom: v=%.0f omega=%.0f alpha=%.0f -> pre %.1f (adj %+.1f) post %.1f (adj %+.1f) mm, front ref %.0f\r\n",
-           p.v_mm_s, p.omega_dps, p.alpha_dps2, s_slalom_pre_mm, o.pre_adj_mm, s_slalom_post_mm, o.post_adj_mm,
-           s_front_ref_sum);
+    printf("slalom: v=%.0f omega=%.0f alpha=%.0f -> pre %.1f (adj %+.1f) post %.1f (adj %+.1f) mm\r\n",
+           p.v_mm_s, p.omega_dps, p.alpha_dps2, s_slalom_pre_mm, o.pre_adj_mm, s_slalom_post_mm, o.post_adj_mm);
 
     // 既知の区間をまとめて走るとき(TryKnownRun)の設定。最短走行の部品を使うので、その変数に探索の値を入れる
     // (最短走行は走る前に自分の値を入れ直すので、探索・帰り道の始めにここで上書きしてよい)。
@@ -504,47 +385,17 @@ static void ComputeSlalomOffsets(void) {
     s_known_prof = ComputeFastTurns();
 }
 
-// 境界にいる(走っている)ときに呼ぶ。right: 右(時計回り)に曲がる。
-// 前壁補正: 曲がる区画の奥に壁があれば、距離で決めた曲がり始めの位置(start)の前後
-// SLALOM_FRONT_WINDOW_MM の間で、FL + FR が閾値(s_front_ref_sum)に届いた瞬間まで待つ。
-// 届かなければ範囲の終わりまで待つ。前に壁がなければ start まで待つ。打ち切ったら false。
-// v・accel は小回りの速さとそこまでの加速度、ref_sum は閾値(最短走行・既知の区間も同じ待ち方をする)。
-static bool WaitSlalomStartV(float start, bool front_wall, float v, float accel, float ref_sum) {
-    if (!SLALOM_FRONT_ENABLE || !front_wall) {
-        StartStraightToV(start, v, v, accel);
-        return WaitTargetDistance(start);
-    }
-    float lo = start - SLALOM_FRONT_WINDOW_MM;
-    float hi = start + SLALOM_FRONT_WINDOW_MM;
-    StartStraightToV(hi, v, v, accel); // 範囲の終わりまで同じ速さで進めておく
-    if (!WaitTargetDistance(lo)) return false;
-    uint32_t t0 = HAL_GetTick();
-    bool by_sensor = false;
-    uint32_t sum = 0;
-    while (App_GetTargetDistance() < hi) {
-        CheckFailSafe();
-        PollLog();
-        sum = (uint32_t)ad_fl + ad_fr;
-        if ((float)sum >= ref_sum) {
-            by_sensor = true;
-            break;
-        }
-        if (HAL_GetTick() - t0 > SEARCH_STEP_TIMEOUT_MS) return false;
-    }
-    Ev(LOG_EV_FRONT_TRIG, App_GetTargetDistance() - start, (float)sum, by_sensor ? 1.0f : 0.0f, 0.0f, 0.0f);
-    return true;
-}
-
-// 探索の小回り(探索の小回りの速さと閾値)
-static bool WaitSlalomStart(float start, bool front_wall) {
-    return WaitSlalomStartV(start, front_wall, s_search_turn_v, s_search_accel, s_front_ref_sum);
+// 境界にいる(走っている)ときに呼ぶ。距離で決めた曲がり始めの位置(start)まで、小回りの速さ v で進んで待つ。
+// 前の壁で曲がり始めをずらす前壁補正はやめた(2026-11-04)。打ち切ったら false(最短走行・既知の区間も同じ待ち方をする)。
+static bool WaitSlalomStartV(float start, float v, float accel) {
+    StartStraightToV(start, v, v, accel);
+    return WaitTargetDistance(start);
 }
 
 static bool SlalomTurn(DrivePos *dp, bool right, WallObservation *obs, WallSensorValues *sv) {
-    App_SetWallControl(false); // 曲がる区画では壁の制御を使わない
     Ev(LOG_EV_TURN_KIND, 0.0f, right ? 1.0f : 0.0f, s_slalom_pre_mm, s_slalom_post_mm, 0.0f);
     float start = dp->ref_mm + s_slalom_pre_mm;
-    if (!WaitSlalomStart(start, obs->front)) return false; // obs はこの(曲がる)区画の壁
+    if (!WaitSlalomStartV(start, s_search_turn_v, s_search_accel)) return false;
     App_StartSlalom(right ? -90.0f : 90.0f, s_slalom_omega_dps, s_slalom_alpha_dps2);
     if (!WaitMotionDone()) return false;
     // 曲がっている間の道のりも目標の距離に足されているので、曲がり終わった所から後ろのオフセットぶん進む
@@ -632,8 +483,6 @@ static uint16_t s_band_total = 0;
 // 走り出す前の準備(探索・最短走行・帰り道で共通): 制御を有効にし、記録を始める。今いる所(区画の真ん中)が基準になる。
 static void StartRunBegin(DrivePos *dp) {
     App_SetPositionHold(true);
-    App_SetWallPush(false);
-    App_SetWallControl(false); // 使うのは境界から境界までの直進の間だけ
     Logger_Start(); // ここから記録(手かざしで始めた走りの始まり)
     Ev(LOG_EV_MODE, (float)ModeUI_CurrentMode(), 0.0f, 0.0f, 0.0f, 0.0f);
     Ev(LOG_EV_RUN_TYPE, s_run_type, s_run_kind, 0.0f, 0.0f, 0.0f);
@@ -663,7 +512,7 @@ static void StartRunBegin(DrivePos *dp) {
     dp->at_center = true;
 }
 
-// 走り出す前の準備(探索・最短走行で共通): StartRunBegin の後、start_sequence で真ん中に合わせる。
+// 走り出す前の準備(探索・最短走行で共通): StartRunBegin の後、後ろの壁に付けて置いた所から真ん中へ進む。
 static bool StartRun(DrivePos *dp) {
     StartRunBegin(dp);
     return StartSequence(dp);
@@ -758,7 +607,7 @@ static bool SearchLoop(const DrivePos *dp_start, WallObservation obs, WallSensor
                 }
                 break;
             case ACTION_TURN_BACK:
-                ok = StopAtCenter(&dp) && TurnBack(&dp, pos, heading)
+                ok = StopAtCenter(&dp) && TurnBack()
                   && GoToNextBoundary(&dp, 1, &obs, &sv);
                 break;
             case ACTION_STOP:
@@ -778,7 +627,7 @@ static bool SearchLoop(const DrivePos *dp_start, WallObservation obs, WallSensor
                     App_ControlLoop_SetEnabled(false);
                     return true;
                 }
-                ok = TurnBackAtGoal(&dp, s_planner.pos, s_planner.heading);
+                ok = TurnBack();
                 if (!ok) break;
                 LED_SetDirectPattern(LED_DIRECT_ALL);
                 DelayWatching(SEARCH_GOAL_WAIT_MS);
@@ -794,7 +643,6 @@ static bool SearchLoop(const DrivePos *dp_start, WallObservation obs, WallSensor
                 break;
         }
         if (!ok) {
-            App_SetWallPush(false);
             Ev(LOG_EV_TIMEOUT, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
             App_SetTargetVelocity(0.0f);
             DelayWatching(300);
@@ -883,10 +731,8 @@ static void PrintSettings(const MazePos *goals, uint8_t goal_count) {
     printf("goal (%u,%u) x%u%s, turn %.0f dps\r\n",
            goals[0].x, goals[0].y, goal_count, SEARCH_USE_TEST_GOAL ? " [TEST GOAL]" : "",
            SEARCH_TURN_OMEGA_DPS);
-    printf("WALL: %s WALL_KP_DEG=%.3f max %.1f deg, TH L=%d R=%d F=%d, SETPOS front %.0f mm\r\n",
-           WALL_CONTROL_ENABLE ? "ON" : "OFF", WALL_KP_DEG, WALL_OFFSET_MAX_DEG,
-           WALL_TH_L, WALL_TH_R, WALL_TH_FRONT_SUM,
-           SEARCH_SETPOS_FRONT_MM);
+    printf("WALL TH L=%d R=%d F=%d (no wall corrections), start front %.0f mm\r\n",
+           WALL_TH_L, WALL_TH_R, WALL_TH_FRONT_SUM, SEARCH_START_FRONT_MM);
 }
 
 // 探索が終わった後: ゴールまで行けていれば地図を flash に残し(最短走行のモードで使う。BlueEyes の
@@ -1017,23 +863,11 @@ static bool s_run_large_ok = false;
 typedef RunTurnSpec FastTurn;
 
 static FastTurn s_fast_turn[RUN_TYPE_COUNT];
-static float s_fast_front_ref_sum = SLALOM_FRONT_REF_SUM_AT_PRE0; // 最短走行の小回りの前壁補正の閾値(ComputeFastTurns で計算する)
 
 // 旋回の形を計算し、経路の計算に使う RunProfile も作る(計算は logic の RunProfile_ForSpeeds。maze_sim と同じ)
 static RunProfile ComputeFastTurns(void) {
     RunProfile prof = RunProfile_ForSpeeds(s_fast_v, s_fast_accel, s_fast_small_v, s_fast_turn);
     prof.decel = FastDecel(); // 速度帯で減速度を決めたとき(FAST_BANDS)も、経路の時間の計算を走りに合わせる
-
-    // 小回りの前壁補正の閾値は、探索(ComputeSlalomOffsets)と同じく、小回りの速さでの前の調整分から決める
-    SlalomParams sp = {
-        .v_mm_s = SLALOM_V_MM_S,
-        .omega_dps = SLALOM_OMEGA_DPS,
-        .alpha_dps2 = SLALOM_ALPHA_DPS2,
-        .angle_deg = 90.0f,
-    };
-    Slalom_ScaleToSpeed(&sp, s_fast_small_v);
-    s_fast_front_ref_sum = Slalom_FrontRefSum(Slalom_SmallTurnOffsets(&sp).pre_adj_mm);
-    printf("fast front ref %.0f (small v=%.0f)\r\n", s_fast_front_ref_sum, s_fast_small_v);
 
     static const RunType kTurns[] = { RUN_SMALL90_R, RUN_LARGE90_R, RUN_LARGE180_R };
     static const char *const kNames[] = { "small90", "large90", "large180" };
@@ -1053,157 +887,62 @@ static float NextTurnSpeed(const RunList *list, uint16_t i) {
     return RunType_IsTurn(next) ? s_fast_turn[next].v_mm_s : 0.0f;
 }
 
-// 最短走行の直進。start から end まで走る(v_exit の速さで着く。0 なら止まる)。
-// 壁の制御は探索と同じく、境界から境界までの間だけ使う(中心から境界・境界から中心の半区画では使わない。
-// 1区画の直進でも、境界から境界なら使う)。
-// 途中の壁切れで、終わりの位置(と、その先の基準)を直す。直したら、プロファイルを新しい終わりへ引き直す。
-// at_center: 始まりが区画の中心なら true(最初の境界は半区画先)、境界なら false。
-// end は境界・中心より少し(半区画未満)手前でもよい(探索の既知の区間の終わり・前壁補正の範囲の手前の端)。
+// 最短走行の直進。目標の距離が end になるまで走る(v_exit の速さで着く。0 なら止まる)。
+// 壁の制御・壁切れ補正はやめた(2026-11-04)。
+// end は境界・中心より少し(半区画未満)手前でもよい(探索の既知の区間の終わり)。
 static void StartFastStraightTo(float target_mm, float v_end) {
     float d = target_mm - App_GetTargetDistance();
     if (d < 1.0f) d = 1.0f;
     App_StartStraightAD(d, s_fast_v, v_end, s_fast_accel, FastDecel());
 }
 
-static bool FastStraightTo(float start, float *end, float v_exit, bool at_center) {
-    App_SetWallControl(false);
-    StartFastStraightTo(*end, v_exit);
-    // 終わりが中心か境界か(半区画の数が奇数なら、始まりと入れ替わる)。中心で終わるなら、最後の半区画では使わない
-    long halves = lroundf((*end - start) / HALF_SECTION_MM);
-    bool end_center = (halves % 2L) ? !at_center : at_center;
-    float wall_from = at_center ? start + HALF_SECTION_MM : start;
-    float wall_tail = end_center ? HALF_SECTION_MM : 0.0f;
-    EdgeCorr ec;
-    EdgeCorr_Begin(&ec, at_center ? start + HALF_SECTION_MM : start);
+static bool FastStraightTo(float end, float v_exit) {
+    StartFastStraightTo(end, v_exit);
     uint32_t t0 = HAL_GetTick();
     while (1) {
         CheckFailSafe();
         PollLog();
-        float pos = App_GetTargetDistance();
-        App_SetWallControl(pos >= wall_from && pos < *end - wall_tail);
-        float c;
-        if (EdgeCorr_Check(&ec, &c)) {
-            *end += c;
-            StartFastStraightTo(*end, v_exit); // 今の速さから引き直す
-        }
-        if (v_exit > 0.0f ? (pos >= *end) : App_IsMotionDone()) break;
+        if (v_exit > 0.0f ? (App_GetTargetDistance() >= end) : App_IsMotionDone()) break;
         if (HAL_GetTick() - t0 > SEARCH_STEP_TIMEOUT_MS) return false;
         if (v_exit <= 0.0f) HAL_Delay(1);
     }
-    App_SetWallControl(false);
     return true;
-}
-
-// 指令の列をたどるときの、今いる所(前壁補正で、曲がる区画の奥の壁を地図から引くため)。
-// at_center なら cell の中心、そうでなければ cell の heading 側の境界にいる。
-// valid が false なら(迷路の外へ出た・中心で小回りが来たなど、たどれなくなったら)前壁補正を使わない。
-typedef struct {
-    MazePos cell;
-    Direction heading;
-    bool at_center;
-    bool valid;
-} RunTrack;
-
-static void RunTrack_Step(RunTrack *tr, Direction d) {
-    if (!MazePos_Step(tr->cell, d, &tr->cell)) tr->valid = false;
-}
-
-// 半区画ずつ進む(中心 → 境界、境界 → 次の区画の中心)
-static void RunTrack_Straight(RunTrack *tr, uint8_t halves) {
-    for (uint8_t k = 0; k < halves; k++) {
-        if (!tr->at_center) RunTrack_Step(tr, tr->heading);
-        tr->at_center = !tr->at_center;
-    }
-}
-
-// 旋回の後: 小回りは曲がった区画の出口の境界、大回りは最後の区画の中心(RunType_TurnMoves の最後の1つは次の直進に入る)
-static void RunTrack_Turn(RunTrack *tr, RunType type) {
-    Direction moves[5];
-    uint8_t n = RunType_TurnMoves(type, tr->heading, moves);
-    if (n == 0u) {
-        tr->valid = false;
-        return;
-    }
-    if (RunType_IsLarge(type)) {
-        if (!tr->at_center) tr->valid = false;
-        for (uint8_t k = 0; k + 1u < n; k++) RunTrack_Step(tr, moves[k]);
-        tr->at_center = true;
-    } else {
-        if (tr->at_center) tr->valid = false;
-        RunTrack_Step(tr, tr->heading); // 曲がる区画へ入る
-        tr->at_center = false;
-    }
-    tr->heading = moves[n - 1u];
-}
-
-// 境界にいて、次に小回りで曲がる区画の奥に壁があるか(探索の obs->front と同じ。地図で分かっている壁だけ)
-static bool RunTrack_FrontWall(const RunTrack *tr) {
-    if (!tr->valid || tr->at_center) return false;
-    MazePos x;
-    if (!MazePos_Step(tr->cell, tr->heading, &x)) return false;
-    return WallMap_HasWall(&s_map, x, tr->heading, WALL_VIEW_SEARCH);
-}
-
-// 次の指令(i + 1)が前に壁のある小回りなら、前壁補正の範囲の手前の端(曲がり始め − SLALOM_FRONT_WINDOW_MM)が
-// 境界よりどれだけ手前か(探索で境界の手前で壁を読み、範囲の手前側も使えるのと同じにする)。それ以外は 0
-static float FrontWindowLead(const RunList *list, uint16_t i, const RunTrack *tr) {
-    if (!SLALOM_FRONT_ENABLE || !FAST_FRONT_ENABLE || i + 1u >= list->count) return 0.0f;
-    RunType next = (RunType)list->items[i + 1u].type;
-    if (!RunType_IsTurn(next) || RunType_IsLarge(next) || !RunTrack_FrontWall(tr)) return 0.0f;
-    float lead = SLALOM_FRONT_WINDOW_MM - s_fast_turn[next].pre_mm;
-    return (lead > 0.0f) ? lead : 0.0f;
 }
 
 // v_final: 最後の直進(次が STOP)の終わりの速さ。0 なら止まる(最短走行)。探索の既知の区間では、スラロームの速さで
 //   走り続けたまま次の区画へ入る。end_before: そのとき、最後の直進の終わりのこれだけ手前で待つのをやめる
 //   (探索で壁を境界の手前で読むため。その所までに v_final にする)。*ref_mm は終わり(境界)の位置になる。
-// start: 走り始めの区画(その中心にいる)と向き。前壁補正で、曲がる区画の奥の壁を地図(s_map)から引くのに使う。
-static bool RunList_Drive(const RunList *list, RunTrack start_track, float *ref_mm, float v_final, float end_before) {
-    RunTrack tr = start_track;
-    tr.at_center = true; // スタートは区画の中心
+// スタートは区画の中心。
+static bool RunList_Drive(const RunList *list, float *ref_mm, float v_final, float end_before) {
     for (uint16_t i = 0; i < list->count; i++) {
         RunType type = (RunType)list->items[i].type;
         Ev(LOG_EV_RUN_CMD, (float)i, (float)type, (float)list->items[i].halves, 0.0f, 0.0f);
         if (type == RUN_STOP) break;
 
         if (type == RUN_STRAIGHT) {
-            float start = *ref_mm;
-            float end = start + HALF_SECTION_MM * (float)list->items[i].halves;
-            bool start_center = tr.at_center;
-            RunTrack_Straight(&tr, list->items[i].halves); // 半区画ごとに、中心と境界が入れ替わる
+            float end = *ref_mm + HALF_SECTION_MM * (float)list->items[i].halves;
             bool last = (i + 1u >= list->count) || (list->items[i + 1u].type == RUN_STOP);
             if (last && v_final > 0.0f) {
-                float end_read = end - end_before;
-                if (!FastStraightTo(start, &end_read, v_final, start_center)) return false;
-                *ref_mm = end_read + end_before; // 壁切れで直した分も含めた終わり(境界)
+                if (!FastStraightTo(end - end_before, v_final)) return false;
             } else {
-                // 次が前に壁のある小回りなら、前壁補正の範囲の手前の端で待つのをやめる(その所までに旋回の速さにする)
-                float lead = FrontWindowLead(list, i, &tr);
-                float end_wait = end - lead;
-                if (!FastStraightTo(start, &end_wait, NextTurnSpeed(list, i), start_center)) return false;
-                *ref_mm = end_wait + lead; // 壁切れで直した分も含めた終わり
+                if (!FastStraightTo(end, NextTurnSpeed(list, i))) return false;
             }
+            *ref_mm = end;
             continue;
         }
 
         // 旋回: 前のオフセット → 曲がる → 後ろのオフセット(どれも旋回の速さで)
-        // FAST_FRONT_ENABLE なら、小回りは探索と同じく、曲がる区画の奥に壁があれば前壁補正で曲がり始める(大回りでは使わない)
         const FastTurn *t = &s_fast_turn[type];
         int q = RunType_QuarterTurns(type); // 時計回りが正
         float kind = RunType_IsLarge(type) ? ((t->angle_deg > 90.0f) ? 2.0f : 1.0f) : 0.0f;
         Ev(LOG_EV_TURN_KIND, kind, (q > 0) ? 1.0f : 0.0f, t->pre_mm, t->post_mm, 0.0f);
-        App_SetWallControl(false);
-        bool front = FAST_FRONT_ENABLE && !RunType_IsLarge(type) && RunTrack_FrontWall(&tr);
         float start = *ref_mm + t->pre_mm;
-        if (!WaitSlalomStartV(start, front, t->v_mm_s, s_fast_accel, s_fast_front_ref_sum)) return false;
+        if (!WaitSlalomStartV(start, t->v_mm_s, s_fast_accel)) return false;
         App_StartSlalom(-90.0f * (float)q, t->omega_dps, t->alpha_dps2);
         if (!WaitMotionDone()) return false;
         *ref_mm = App_GetTargetDistance() + t->post_mm;
-        RunTrack_Turn(&tr, type); // 小回りは境界から境界、大回りは中心から中心
-        // 次も前に壁のある小回りなら、前壁補正の範囲の手前の端で待つのをやめる
-        float lead = FrontWindowLead(list, i, &tr);
         StartStraightToV(*ref_mm, t->v_mm_s, t->v_mm_s, s_fast_accel);
-        if (!WaitTargetDistance(*ref_mm - lead)) return false;
+        if (!WaitTargetDistance(*ref_mm)) return false;
     }
     return true;
 }
@@ -1230,15 +969,11 @@ static bool RunFastSlalom(const RunList *list) {
     DrivePos dp;
     if (!StartRun(&dp)) return false;
     float ref = dp.ref_mm;
-    RunTrack start_track = { { MAZE_START_X, MAZE_START_Y }, DIR_NORTH, true, true }; // RouteEnd と同じ
-    bool ok = RunList_Drive(list, start_track, &ref, 0.0f, 0.0f);
+    bool ok = RunList_Drive(list, &ref, 0.0f, 0.0f);
     if (ok) {
         dp.ref_mm = ref;
         dp.at_center = true;
-        MazePos pos;
-        Direction heading;
-        RouteEnd(&pos, &heading);
-        ok = TurnBackAtGoal(&dp, pos, heading); // ゴールの真ん中で 180°(壁があれば尻当て)
+        ok = TurnBack(); // ゴールの真ん中で 180°
     }
     if (ok) {
         LED_SetDirectPattern(LED_DIRECT_ALL);
@@ -1246,7 +981,6 @@ static bool RunFastSlalom(const RunList *list) {
         LED_SetDirectPattern(LedIdlePattern());
     } else {
         Ev(LOG_EV_TIMEOUT, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-        App_SetWallPush(false);
         App_SetTargetVelocity(0.0f);
         DelayWatching(300);
         printf("fast run: timeout\r\n");
@@ -1269,12 +1003,10 @@ static float PrintRunList(const char *name, const RunList *list, bool ok, const 
     return total;
 }
 
-// 真ん中から真ん中まで cells 区画まっすぐ走って止まる。壁の制御は、境界から境界までの間
-// (最初と最後の半区画を除く)だけ使う。
+// 真ん中から真ん中まで cells 区画まっすぐ走って止まる。
 static bool FastStraight(DrivePos *dp, uint8_t cells) {
-    float start = dp->ref_mm;
-    float end = start + SECTION_MM * (float)cells;
-    if (!FastStraightTo(start, &end, 0.0f, true)) return false; // 中心から中心へ(壁切れで終わりを直す)
+    float end = dp->ref_mm + SECTION_MM * (float)cells;
+    if (!FastStraightTo(end, 0.0f)) return false;
     dp->ref_mm = end;
     dp->at_center = true;
     return true;
@@ -1285,8 +1017,6 @@ static bool RunFast(void) {
     DrivePos dp;
     if (!StartRun(&dp)) return false;
 
-    MazePos pos = { MAZE_START_X, MAZE_START_Y };
-    Direction heading = DIR_NORTH;
     uint8_t cells = 0; // まとめて走る直進の区画数
     bool ok = true;
 
@@ -1295,7 +1025,6 @@ static bool RunFast(void) {
         Ev(LOG_EV_ROUTE_CMD, (float)i, (float)act.type, (float)act.cells, 0.0f, 0.0f);
         if (act.type == ACTION_FORWARD) {
             cells += act.cells;
-            for (uint8_t k = 0; k < act.cells; k++) MazePos_Step(pos, heading, &pos);
         } else if (act.type == ACTION_STOP) {
             if (cells > 0) ok = FastStraight(&dp, cells);
             cells = 0;
@@ -1305,19 +1034,16 @@ static bool RunFast(void) {
             if (cells > 0) ok = ok && FastStraight(&dp, cells);
             int q = Action_QuarterTurns((ActionType)act.type);
             ok = ok && Pivot((q == 1) ? -90.0f : (q == -1) ? 90.0f : 180.0f);
-            heading = Dir_Turn(heading, q);
-            MazePos_Step(pos, heading, &pos);
             cells = 1;
         }
     }
-    if (ok) ok = TurnBackAtGoal(&dp, pos, heading); // ゴールの真ん中で 180°(壁があれば尻当て)
+    if (ok) ok = TurnBack(); // ゴールの真ん中で 180°
     if (ok) {
         LED_SetDirectPattern(LED_DIRECT_ALL);
         DelayWatching(SEARCH_GOAL_WAIT_MS);
         LED_SetDirectPattern(LedIdlePattern());
     } else {
         Ev(LOG_EV_TIMEOUT, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-        App_SetWallPush(false);
         App_SetTargetVelocity(0.0f);
         DelayWatching(300);
         printf("fast run: timeout\r\n");
@@ -1440,7 +1166,7 @@ static bool ReturnToStart(MazePos pos, Direction heading, const MazePos *goals, 
     s_search_slalom = true;
 
     DrivePos dp;
-    StartRunBegin(&dp); // 尻当てはしない(ゴールで 180° 回ったときに済ませている)
+    StartRunBegin(&dp); // ゴールの真ん中から(後ろの壁から真ん中へ進む動きはしない)
     WallObservation obs = WallsFromMap(pos, heading);
     WallSensorValues sv = { 0, 0, 0, 0 };
     return SearchLoop(&dp, obs, sv);
@@ -1906,11 +1632,8 @@ static bool TryKnownRun(DrivePos *dp, MazePos c0, Direction h0, WallObservation 
 
     *used = true;
     Ev(LOG_EV_KNOWN_RUN, (float)(m + 1u), (float)s_known_list.count, use_large ? 1.0f : 0.0f, (float)e.x, (float)e.y);
-    float ref = dp->ref_mm - HALF_SECTION_MM; // P の真ん中
-    // P は C0 の1つ手前の区画(迷路の外なら、前壁補正の区画を引けないので使わない)
-    RunTrack start_track = { c0, h0, true, true };
-    start_track.valid = MazePos_Step(c0, Dir_Opposite(h0), &start_track.cell);
-    if (!RunList_Drive(&s_known_list, start_track, &ref, s_search_turn_v, SEARCH_WALL_READ_BEFORE_MM)) return false;
+    float ref = dp->ref_mm - HALF_SECTION_MM; // P(C0 の1つ手前の区画)の真ん中
+    if (!RunList_Drive(&s_known_list, &ref, s_search_turn_v, SEARCH_WALL_READ_BEFORE_MM)) return false;
     dp->ref_mm = ref; // E の入口の境界
     dp->at_center = false;
     s_planner.pos = e;

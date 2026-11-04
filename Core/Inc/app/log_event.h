@@ -5,6 +5,7 @@
 // PC の tools/get_log.py は、このファイルの「LOG_EV_名前 = 番号, // a:名前 b:名前 ...」の行を読んで、
 // CSV に "ev_text" 列(例: "STEP x=1 y=0 ...")を足す。行の形を変えないこと(1行に1つ、// の後に中身の名前)。
 // 番号は増やすだけにして、使っている番号は変えない(昔のログを読めるように)。
+// WALL_CTRL・WALL_USE・EDGE_CORR・FRONT_TRIG・SETPOS は、壁の補正をやめた(2026-11-04)ので今は出さない(昔のログ用に残す)。
 typedef enum {
     LOG_EV_NONE = 0,
     // ---- 操作・状態 ----
@@ -29,6 +30,7 @@ typedef enum {
     LOG_EV_SLALOM = 22,       // a:angle b:omega c:alpha d:v
     LOG_EV_MOTION_DONE = 23,  // a:motion
     LOG_EV_SET_VELOCITY = 24, // a:v
+    LOG_EV_PIVOT_SETTLE = 25, // a:ok b:err_deg c:ms
     // ---- 動き(search_run などが出す、意味のある単位) ----
     LOG_EV_TURN_KIND = 30,    // a:kind b:right c:pre d:post
     LOG_EV_SETPOS = 31,       // a:phase
@@ -67,6 +69,8 @@ typedef enum {
 //   w0〜w3 は続く区画を2つずつ(下位8bit が先、上位8bit が次)入れた値。1つで8区画、全部で MAZE_SIZE² / 8 個。
 //   (CSV は有効数字6桁なので、1つの値は 16bit まで)
 // LOG_EV_SETPOS の phase: 0 始め, 1 終わり。LOG_EV_MOTION_DONE の motion: 0 直進, 1 超信地旋回, 2 スラローム。
+// LOG_EV_PIVOT_SETTLE: 超信地旋回の台形が終わった後の合わせ込みの結果。ok は 1 合った / 0 打ち切った、
+//   err_deg は終わった時の角度の差(目標 − ジャイロ)、ms は台形が終わってからの時間。この後に MOTION_DONE が入る。
 // LOG_EV_RUN_TYPE の kind: 0 探索の曲がり方(0 PIVOT, 1 SMALL), 1 最短走行(0 PIVOT, 1 SMALL, 2 LARGE)。
 //   2 最短走行の後の帰り道(長い走行のモード。type は 1)。
 // LOG_EV_LONG_RUN: 長い走行のモードで、何番目(1〜)・段・段の中の番号・速さ(探索: 直進とスラローム、最短走行: 直進と小回り)。

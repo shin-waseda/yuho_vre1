@@ -3202,3 +3202,33 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
   - 残っていること: ACCEL_CONFIG0 の値の意味と，左 = センサーの +x は yuho-sysid でもまだ確かめていない．SPI で読む量が 6 → 12byte になった分の tick の時間は測っていない．
     ログビューアの列の組(`yc.plot_groups`)には入れていない．
   - 結果: ビルドも実機もまだ(未確認)．
+
+### 2026-11-04 壁で位置・向きを直す補正をコードごと消した(`feature/remove-corrections`，`feature/six-axis-imu` から)
+
+- 方針(ユーザー): 補正は「甘え」．モデルがきちんとしていれば補正なしで走れるはずなので，ジャイロとエンコーダだけで走らせる．
+- **消したもの**(ユーザーの依頼．スイッチで切るのではなくコードごと):
+  - 壁の制御: `logic/control/wall_control.c/h`，`App_SetWallControl`，目標の向きのオフセット(`wall_offset_deg`．ログの `wall_ofs` 列も)，`WALL_KP_*` などの定数．
+  - 壁切れ補正: `search_run` の `EdgeCorr`・`WaitTargetDistanceEdge`，`App_GetWallEdge`，`WALL_EDGE_POS_*` などの定数．
+    壁切れの検出とイベント `LOG_EV_WALL_EDGE` は残した(後でログから推定のずれを測るため．補正には使わない)．
+  - スラロームの前壁補正: `WaitSlalomStartV` の待ち方，`Slalom_FrontRefSum`，`SLALOM_FRONT_*`・`FAST_FRONT_ENABLE`．曲がり始めは距離だけで決める．
+    最短走行の `RunTrack`(前壁補正のために区画をたどっていたもの)も消し，`RunList_Drive`・`FastStraightTo` を簡単にした．
+  - 尻当て: `SetPosition`，`App_SetWallPush`(押し当て中の FB の切り替え)，`SEARCH_SETPOS_*`．
+- **代わりの動き**:
+  - 走り始め(`StartSequence`，`MazeRun_StartSequence`): 機体は後ろの壁に尾を付けて手で置き，`SEARCH_START_FRONT_MM`(40mm．尻当ての記録の値)進んだ所を区画の真ん中とする．横の位置と向きは置いたまま．
+  - 区画の真ん中での 180°(行き止まり・ゴール・スタート，最短走行のゴール): その場で超信地旋回するだけ(`TurnBack()`)．
+  - 直進の往復の試験: 最初だけ後ろの壁から真ん中へ進み，端では 180° 回るだけ．スラロームの試験: 1本ずつは後ろの壁から，往復は最初の1本だけ後ろの壁から．
+- 残したもの: `WALL_REF_L/R`(`tools/turn_sim.py`・`yc.TurnLog` が読む)，`WALL_EDGE_MIN_WALL_MM`，イベントの番号(WALL_CTRL・WALL_USE・EDGE_CORR・FRONT_TRIG・SETPOS は出さなくなったが，昔のログ用に残す)．
+- 気づいたこと(直していない): ログビューアの `yuho_viewer_config.m` は軌道の基準に尻当て(SETPOS)を使う(無ければ最初の STEP)．`yc.plot_groups` に `wall_ofs` が残っている．
+  `docs/mode_tree.md` などの尻当ての説明も古いまま．
+- 結果: ビルドも実機もまだ(未確認)．
+
+### 2026-11-04 超信地旋回はジャイロの角度が合うまで終わりにしない(`feature/remove-corrections` のまま)
+
+- 方針(ユーザー): 一旦，超信地旋回は台形が終わった後もジャイロの角度が目標に合うまで FB で合わせる．
+- 合わせ方(ユーザーが選んだ): 台形が終わった後だけ，旋回の FB に角度の差の積分(`PIVOT_SETTLE_KI` = 124 V/(rad·s)，上限 1.0 V)を足す．
+  積分がないと，摩擦(≈ 0.9 V)に K_θ·e が勝てない所(e ≈ 6°．計算)で止まる．
+- 合った: |θ_ref − θ| ≤ 0.5° かつ |ω| ≤ 5 dps．300 ms で合わなければ諦めて次へ進む．どちらも積分を捨てて `App_IsMotionDone()` を true にし，
+  イベント `LOG_EV_PIVOT_SETTLE`(25．a:ok b:err_deg c:ms)の後に `MOTION_DONE` を入れる．新しい指令・`App_SetTargetVelocity`・フェイルセーフで合わせ込みはやめる．
+- 変えたファイル: `control_loop.c`(`UpdatePivotSettle`)，`params.h`(`PIVOT_SETTLE_*`)，`log_event.h`，`control_loop.h` のコメント．
+- 仮に決めた値: K_I，積分の上限，|ω| ≤ 5 dps(ユーザーが決めたのは 0.5° と 300 ms)．PIVOT のログで合わせ直す．
+- 結果: ビルドも実機もまだ(未確認)．

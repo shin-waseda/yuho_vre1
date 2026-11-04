@@ -14,7 +14,6 @@
 #include "logic/state_estimation/gyro_fusion.h"
 #include "logic/control/drive_model.h"
 #include "logic/control/velocity_profile.h"
-#include "logic/control/wall_control.h"
 
 #endif
 
