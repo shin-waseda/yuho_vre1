@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""yuho の PC ツール(turn_sim.py / log_viewer.py)で共通に使う部品。
+"""yuho の PC ツール(turn_sim.py など)で共通に使う部品。
 
 - read_params(): Core/Inc/params.h の #define を読み、数の値にして返す(他の名前を使った式も計算する)。
 - VelocityProfile: 機体の logic/control/velocity_profile.c と同じ台形(同じ式・同じ刻み)。

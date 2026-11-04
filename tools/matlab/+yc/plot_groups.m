@@ -1,5 +1,5 @@
 function [groups, default_cols, hidden] = plot_groups()
-%PLOT_GROUPS 同じ段に描く列の組(上から順。log_viewer.py の GROUPS と同じ)
+%PLOT_GROUPS 同じ段に描く列の組(上から順。消した log_viewer.py の GROUPS と同じだった)
 %   groups: {段の名前, {列, ...}; ...}
 groups = {
     '速度 [mm/s]',        {'target', 'vl', 'vr', 'vl_ref', 'vr_ref'}

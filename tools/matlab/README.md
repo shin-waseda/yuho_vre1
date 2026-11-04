@@ -1,6 +1,7 @@
 # tools/matlab — ログの確認とスラロームの係数合わせ(MATLAB 版)
 
-Python のツール(`tools/turn_sim.py`，`tools/log_viewer.py`，`get_log.py --plot-file`)の MATLAB 版です．
+Python のツール(`tools/turn_sim.py`，`get_log.py --plot-file`)の MATLAB 版と，ログビューア(配布版の `mouse_log_viewer` を yuho の設定で開く窓口)です．
+Python のログビューア(`tools/log_viewer.py`)は 2026-11-04 に消した．
 UART での受信と保存は今までどおり `tools/get_log.py` を使います(MATLAB は保存された `.csv` / `.bin` を読むだけ)．
 
 計算は Python 版と同じです(`params.h` と `log_event.h` を読み，機体の `slalom.c`・`velocity_profile.c` と同じ台形で計算する)．
