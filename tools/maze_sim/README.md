@@ -3,350 +3,115 @@
 yuho の迷路 logic 層(`Core/Src/logic/maze/*.c`，`Core/Src/logic/command.c`)を PC で動かして確かめるツールです．
 **ファームウェアと同じソースと `params.h` をそのままコンパイルする**ので，シミュレータで見ている動きは実機の探索ロジックそのものです．
 
-- **CLI**(`maze_sim`)：1つの迷路の結果を文字で表示する／たくさんの迷路でまとめて試して集計する
-- **GUI**(`gui.py`)：探索の様子と，探索の後の最短走行を pygame で表示する
+画面・迷路の一覧・まとめて試す・迷路図の変換は，公開版の **mouse maze sim**(別のリポジトリ)を使います．
+このフォルダには yuho をそれにつなぐ部分と，C の CLI があります．
 
-ファームウェアのビルドとは関係ありません(PC の gcc でコンパイルします)．
+| 使うもの | 中身 |
+|---|---|
+| `msim.py gui` / `gui.py` | 画面(mouse maze sim．ブラウザに開く) |
+| `msim.py batch` / `run` | まとめて試す / 1つの迷路の結果(mouse maze sim) |
+| `build/maze_sim` | C の CLI(`--verbose` で1区画ごとの地図，最短走行の経路を本当の迷路で走らせる確かめ) |
+
+画面・迷路の一覧・迷路図の変換の使い方は，mouse maze sim の README を見てください．ここには yuho で使うときのことだけを書きます．
 
 ## 必要なもの
 
 | もの | 用途 | 確認方法 |
 |---|---|---|
-| gcc(mingw64，64bit) | CLI と GUI 用 DLL のビルド | `gcc -dumpmachine` → `x86_64-w64-mingw32` |
+| mouse maze sim | 画面，まとめて試す | 下の「はじめに」 |
+| gcc(mingw64，64bit) | yuho の logic 層のビルド | `gcc -dumpmachine` → `x86_64-w64-mingw32` |
 | Git Bash | `*.sh` の実行 | |
-| Python 3(64bit) | GUI | `python --version` |
-| pygame | GUI | `python -c "import pygame"` |
-
-pygame がなければ `pip install pygame` で入ります．
-Python と gcc のビット数(64bit)が揃っていないと，GUI が DLL を読み込めません．
+| Python 3(64bit)，ブラウザ | 画面 | |
 
 ## はじめに
 
-プロジェクトのルート(`yuho/`)で，Git Bash から実行します．
+1. mouse maze sim を置き，yuho から見えるようにする(どちらか)
+   - `pip install -e <mouse maze sim のフォルダ>`
+   - `tools/maze_sim/mazesim.local` の1行目にそのフォルダを書く(git に入れない)．環境変数 `MAZESIM_PATH` でもよい
+2. プロジェクトのルート(`yuho/`)で動かす
 
 ```sh
-sh tools/maze_sim/build.sh          # CLI と GUI 用 DLL をビルド
-sh tools/maze_sim/fetch_mazes.sh    # 大会の迷路を取ってくる(任意．ネットにつながる)
+python tools/maze_sim/gui.py                        # 前回開いた迷路(なければ乱数の迷路)
+python tools/maze_sim/gui.py --random 7             # シード7の乱数迷路
+python tools/maze_sim/gui.py --opt algo=adachi --opt scope=full
+python tools/maze_sim/msim.py batch --random 300    # 乱数300迷路でまとめて試す
+python tools/maze_sim/msim.py batch --list alljapan --type CM   # 同梱の全日本のクラシック(公式図から)
+python tools/maze_sim/msim.py fetch                 # mazefiles の迷路を取ってくる(~/.mazesim/mazefiles)
+sh tools/maze_sim/build.sh                          # C の CLI をビルド
 ```
 
-- ビルド結果は `tools/maze_sim/build/` にできます(git には入りません)．
-- 大会の迷路は [micromouseonline/mazefiles](https://github.com/micromouseonline/mazefiles) の classic(16×16)522 個を `tools/maze_sim/mazes/` に置きます．リポジトリにライセンスの記載がないので，**取ってきたファイルは git に入れません**．別の PC では，もう一度 `fetch_mazes.sh` を実行してください．
+- `msim.py` は mouse maze sim のコマンドに `--mouse tools/maze_sim/mouse.json` を付けて渡すだけです(`list`，`fetch`，`image`，`image-batch`，`verify` もそのまま使える)．
+- logic 層や `params.h` を書き換えた場合，次に起動したときに yuho の部分が**自動でビルドし直されます**(`build/msim_yuho_<ハッシュ>.dll`)．
+- 公式図から変換した迷路(前の `my_mazes/`)は mouse maze sim の `mazes/` に同梱しました．新しい迷路図は `msim.py image-batch tools/maze_sim/maze_file` で
+  `~/.mazesim/mazes/` に変換されます(同梱に足すときは `--out <mouse maze sim>/mazes`)．
+- お気に入り・最近開いた迷路は `~/.mazesim/prefs.json` に移りました(前の `maze_prefs.json` は読みません)．
 
-## GUI
+## yuho のオプション
+
+画面では，右の欄の「探索」で，選択肢のあるもの(`algo`，`scope`)を選び(数字キー 1 / 2 と下の表のキーでも)，
+数字のもの(`search`，`run`，コスト)は入力欄に打ち込んで Enter で決めます．コマンドでは `--opt 名前=値`．
+
+| 名前 | 値 | キー | 意味 | 前の GUI のオプション |
+|---|---|---|---|---|
+| `algo` | `dijkstra` / `adachi` | A | 探索のアルゴリズム | `--algo` |
+| `scope` | `round` / `oneway` / `full` | O | 探索の行き先(往復・片道・全面．機体の RUN → SEARCH の SCOPE) | `--scope` |
+| `search` | `V,TURN_V,ACCEL` | | 探索の速さ(直進の最高速度，小回りの速さ，加速度)．既定は `params.h` の `SEARCH_V_MM_S`，`SLALOM_V_MM_S`，`SEARCH_ACCEL_MM_S2` | `--search` |
+| `run` | `VMAX,ACCEL,SMALL90,LARGE90,LARGE180` | | 最短走行の速さ(直進の最高速度，加速度，旋回3種の速さ)．既定は `params.h` の `RUN_*`．探索はやり直さない | (前は `--band`) |
+| `goal_cost` | `S,T90,T180,K` | | 行きのコスト(下の「コスト」) | `--goal` |
+| `back_cost` | `S,T90,T180,K` | | 帰りのコスト | `--back` |
 
 ```sh
-python tools/maze_sim/gui.py                    # 前回開いた迷路(なければ乱数の迷路)
-python tools/maze_sim/gui.py --random 7         # シード7の乱数迷路
-python tools/maze_sim/gui.py tools/maze_sim/mazes/alljapan-045-2024-exp-fin.txt   # 全日本2024決勝
-python tools/maze_sim/gui.py --algo adachi --speed 16
-python tools/maze_sim/gui.py --goal 1,0,2,0 --back 1,0,2,3
+python tools/maze_sim/msim.py batch --random 300 --opt run=3000,5000,600,850,850   # 速さを変えたとき，時間で選ぶ経路がどう変わるか
 ```
 
-起動時は一時停止しています．**SPACE** で再生します．
-logic 層や `params.h` を書き換えた場合，次に起動したときに DLL が**自動でビルドし直されます**(`build.sh` を実行し直す必要はありません)．
+### 時間の数え方(msim の画面とコマンド)
 
-### オプション
+maze_sim はアルゴリズムの確認だけなので，時間は**計算上の速さの運動だけ**で数えます．滑り，ログで合わせた補正，尻当て・待ち・超信地旋回の時間は数えません
+(時間で選ぶ経路など，時間に依存するアルゴリズムを確かめるための時間です．実機の時間とは合いません)．
 
-| オプション | 意味 | 既定値 |
-|---|---|---|
-| `迷路ファイル` | classic 形式の迷路ファイル | 前回開いた迷路 |
-| `--random N` | 乱数の迷路のシード | (前回の迷路がなければ 1) |
-| `--algo dijkstra\|adachi` | 探索のアルゴリズム | dijkstra |
-| `--goal S,T90,T180,K` | 行きのコスト(下の「コスト」を参照) | `params.h` |
-| `--back S,T90,T180,K` | 帰りのコスト | `params.h` |
-| `--speed N` | 1秒あたりに進む区画数 | 8 |
-| `--scope round\|oneway\|full` | 探索の行き先(往復・片道・全面．機体の RUN → SEARCH の SCOPE と同じ) | round |
-| `--search V,TV,ACCEL` | 探索の直進の速さ・スラロームの速さ・加速度(探索の時間の見積もりに使う) | `params.h` |
-| `--pivot` | 探索で曲がるとき，スラロームでなく超信地旋回(機体の TURN 2) | スラローム |
-| `--band N` | 最短走行の速度帯(`params.h` の `FAST_BANDS` の N 番目) | 3 |
-| `--plant-no-build` | X で plant_sim を走らせる前にビルドし直さない | ビルドし直す |
-| `--plant-opt "..."` | X で plant_sim にそのまま渡すオプション(例 `"--no-crash-stop"`) | なし |
-
-### キー操作
-
-| キー | 動作 |
+| 動き | 数え方 |
 |---|---|
-| SPACE / P | 再生・一時停止 |
-| S / → | 1区画だけ進める |
-| F | 最後まで一気に進める |
-| R | 同じ迷路で最初から |
-| L | 迷路の一覧を開く(下の「迷路の選び方」を参照) |
-| M | 今の迷路をお気に入りに登録 / 解除 |
-| N / B | 次 / 前の迷路(一覧の同じ分類の中で．乱数ならシード) |
-| A | 足立法 ⇔ Dijkstra を切り替えて最初から |
-| O | 探索の行き先を 往復 → 片道 → 全面 と切り替えて最初から |
-| K | 最短走行の速度帯を次の帯にする(探索が終わっていれば，経路と時間を計算し直す) |
-| X | 今の迷路と探索の設定で plant_sim を走らせ，機体と同じ形式のログを残す(下の「機体と同じ形式のログ」を参照) |
-| Z | 最後にできた plant_sim のログを `log_viewer` で開く |
-| C | 区画の数字の表示を切り替え |
-| T | まだ見ていない壁(灰色)の表示を切り替え |
-| ↑ / ↓ | 速さを2倍 / 半分(最短走行の再生中は，再生の速さ = 実時間の何倍か) |
-| G | 最短走行を再生 / 一時停止(終わっていれば最初から．探索が終わった後) |
-| V | 表示・再生する最短走行の経路を切り替え(下の「最短走行の表示」を参照) |
-| ESC / Q | 終わる |
+| 最短走行の直進 | 台形加速(加速度 = 減速度．入りと出は前後の旋回の速さ，スタートとゴールは 0) |
+| 最短走行の旋回 | 理想の円弧の長さ ÷ 旋回の速さ(小回りは半径 1/2 区画の 90°，大回り 90° は半径 1 区画，大回り 180° は半区画 + 柱を回る半円 + 半区画)．前後のオフセットなし |
+| 探索の直進 | 境目から境目まで台形加速．区画の境目はいつも小回りの速さで通る(真ん中からなら止まった状態から半区画) |
+| 探索の左右 | 小回りの円弧 ÷ 小回りの速さ．真ん中にいるときは，その場で回って(時間 0)半区画加速 |
+| 探索の 180°，ゴール・スタート | 真ん中まで半区画で止まる．その場で回る時間は 0 |
 
-最短走行の再生中は，SPACE / P も再生の一時停止になります．
+最短走行は logic 層の `RunProfile_Default()` の形に `run` の速さを入れたもの，探索は `yuho_mouse.c` の `SearchTime_*` です．
 
-### 画面の見方
+右の欄の yuho の行: 段階(`to goal` → `to start` → `done`．全面探索は `full search` → `to start` → `done`)，探索の行き先，区画の数字の意味，
+探索の時間(`time:`．ゴールに止まった・最短経路が決まった時刻も)，探索の後の経路のコスト(`= optimal` なら真の最短)．
 
-| 表示 | 意味 |
+最短走行の経路は2つです(**V** で切り替え．それぞれ「探索で分かった壁だけ」と「迷路を全部知っていたら(all walls)」)．
+
+| 名前 | 経路 |
 |---|---|
-| 赤い線 | 見つけた壁 |
-| 灰色の線 | まだ見ていない本当の壁(T で消せる) |
-| 緑の区画 | 4方向の壁がすべて分かった区画 |
-| 茶の区画 / 青の区画 | ゴール / スタート |
-| 水色の丸と黄色の棒 | 機体と向き |
-| 青い線 | 機体が通った跡 |
-| 黄・橙・紫の太線 | 探索が終わった後の最短走行の経路．黄が直進，橙が小回り，紫が大回り(V で切り替え) |
-| 区画の数字 | プランナーが最後に計算した値．行きはゴールまで，帰りはスタートまで，全面探索では今の行き先(最短経路になりうる，まだ見ていない区画)まで(右の `numbers:` 欄に出る)．Dijkstra はコスト(4つの向きのうち最小)，足立法は歩数 |
+| `time-optimal` | **走行時間が最短**の経路(時間 Dijkstra．下の「最短走行(走行時間)」) |
+| `cost + large` | **コストが最短**の経路を，大回りに置き換えたもの(機体の最短走行と同じ選び方) |
 
-右の欄には，探索の設定(`search:`)，フェーズ(`to goal` → `to start` → `done`．全面探索は `full search` → `to start` → `done`)，位置，直前の指令，移動した区画数(行き＋帰り)，**探索の時間の見積もり**(`time:`．下の「探索の時間」を参照)が出ます．
-ゴールに止まると，機体と同じくその場で 180° 向きを変えてから帰り始めます．片道はゴールで終わります．
-探索が終わると，最短経路のコストと，迷路を全部知っていた場合の最短のコストが出ます．一致すれば `= optimal` です．
+`msim.py batch` の行の後ろには，yuho が出す数値の平均が出ます: `search_s`(探索の時間)，`goal_s`(ゴールに止まった・最短経路が決まった時刻)，
+`cost_optimal`(コストが真の最短と同じだった割合)，`cost_ratio`(見つけた経路 ÷ 真の最短)．
 
-### 最短走行の表示
+## C の CLI(build/maze_sim)
 
-探索が終わると，右の欄に最短走行の経路が3つ出ます(`>` が表示中のもの．**V** で切り替え)．時間は選んでいる速度帯(`band`．**K** で切り替え)の速さで見積もります．
-
-| 表示 | 経路 |
-|---|---|
-| `time-optimal` | 探索で分かった壁だけで，**走行時間が最短**の経路(時間 Dijkstra．下の「最短走行(走行時間)」を参照) |
-| `cost + large` | 探索で分かった壁だけで**コストが最短**の経路を，大回りに置き換えたもの(比べる相手) |
-| `all walls known` | 迷路を全部知っていた場合の，走行時間が最短の経路(探索の限界の目安) |
-
-`time-optimal` が `all walls known` と同じ時間なら緑になります．`(accel!)` は加速度が足りない所がある経路です．
-
-**G** で再生すると，機体が経路の上を実時間で動き，時刻・倍率・速度・今の指令が出ます．
-
-- 直進は台形加速(入りと出は前後の旋回の速度，スタートとゴールは 0)，旋回は一定の速さで動きます．指令ごとの時間は C の logic 層が求めた値です．
-- **経路の形は表示用の固定の形**です(小回りは半径 1/2 区画，大回り 90° は半径 1 区画の円弧，大回り 180° は柱を回る半円)．速度のパラメータによらず，実機のスラロームの軌道とは一致しません．
-
-## 迷路の選び方
-
-迷路は2か所から読みます．
-
-| フォルダ | 中身 | git |
-|---|---|---|
-| `my_mazes/` | **自分で追加した迷路**(公式の迷路図から変換したもの)．主役 | 入れる |
-| `mazes/` | `fetch_mazes.sh` で取ってきた mazefiles の迷路．「インポート」にまとめる | 入れない |
-
-### 一覧の構成
-
-```
-迷路の一覧
-├ ★ お気に入り
-├ 最近開いた迷路
-├ 全日本            ← my_mazes/ の迷路をファイル名で分類
-├ 学生大会
-├ 地区大会
-├ 自分で追加: その他  ← 命名に合わない自分の迷路
-└ インポート(mazefiles) ▶
-    ├ 全日本 / 学生大会 / 全日本(別名・重複あり) / 地区大会
-    ├ APEC / UK / MINOS(UK) / 米国 / 台湾 / 韓国 / ポルトガル / ブラジル / スペイン / シンガポール・香港 / ヨーロッパ・世界大会
-    └ テスト・練習用 / その他
-```
-
-### 自分の迷路のファイル名の決まり
-
-公式の迷路図のファイル名 `MM<年>[_<地区>]_<種目>` をそのまま使います(`maze_file/` に集めた図の命名)．
-
-| ファイル名 | 一覧での表示 |
-|---|---|
-| `MM2025CM` | 全日本 / 2025 クラシック |
-| `MM2025MM` | 全日本 / 2025 マイクロマウス [32×32] |
-| `MM2025MS` | 全日本 / 2025 マイクロマウス セミファイナル |
-| `MM2025_touhoku_CM` | 地区大会 / 2025 東北 クラシック |
-| `MM2024_touhoku_CF` | 地区大会 / 2024 東北 クラシック フレッシュマン |
-| `MM2025_students_MM` | 学生大会 / 2025 マイクロマウス |
-| `MM2023_hokushinetsu_MM_CM` | 地区大会 / 2023 北陸信越 マイクロマウス／クラシック(共通の迷路) |
-
-| 部分 | 書き方 |
-|---|---|
-| 地区 | `chubu`(中部)，`chubuf`(中部初級者)，`east`(東日本)，`hokushinetsu`(北陸信越)，`kanazawa`(金沢草の根)，`kansai`(関西)，`kyusyu` / `kyushu`(九州)，`touhoku`(東北)，`student` / `students`(学生大会)．なければ全日本．表にない地区名はそのまま表示します |
-| 種目 | `CM`(クラシック)，`MM`(マイクロマウス)，`MS`(マイクロマウス セミファイナル)，`CF`(クラシック フレッシュマン)，`SC`(支部サーキット)．表にない略号(例：`MC`)はそのまま表示します |
-
-同じ分類の中は，新しい年 → 地区 → 種目(クラシック → フレッシュマン → マイクロマウス → セミファイナル → サーキット)の順に並びます．
-地区名や種目を追加するときは，`maze_catalog.py` の `OWN_REGIONS` / `OWN_TYPES` に1行足します．
-
-インポートした迷路は命名がばらばらなので，ファイル名から大会を推定して分けています(外れることもあります)．
-「全日本(別名・重複あり)」は古い命名(`japan2017ef` など)のファイルで，「全日本」と同じ迷路が入っていることがあります．
-
-### 32×32(ハーフサイズ)の迷路
-
-全日本の `MM`(マイクロマウス ファイナル)は 32×32 です．テキストには変換しますが，**シミュレータ(`params.h` の `MAZE_SIZE` = 16)は未対応**です．
-一覧では `[32×32]` が付いて灰色になり，プレビューは見られますが開けません．CLI の `--paths` でも既定では除きます(`--all-sizes` で含める)．
-
-### ゴール
-
-迷路ファイルの区画の真ん中に `G` があれば，**その区画をゴールとして探索します**(CLI・GUI とも)．
-`G` がなければ `params.h` の `MAZE_GOALS`(中央の4区画)を使います．
-地区大会の `MM` やフレッシュマン(`CF`)はゴールが中央の 2×2 でないことが多いので，この仕組みが必要です(例：東北 2024 の MM は (3,12) の1区画)．
-
-### GUI の迷路の一覧(L キー)
-
-1. **L** で一覧を開きます．今の迷路があれば，その分類の中で今の迷路を選んだ状態で開きます．
-2. **↑ / ↓**(10 行ずつなら **PageUp / PageDown**)で選び，**→ / Enter** で中に入ります(`▶` の付いた「インポート」はさらに中に分類があります)．移動キーは**押し続けると連続で動きます**(一覧の中だけ)．
-3. 迷路を選ぶと，**左にプレビュー**(全部の壁とゴール)が出ます．**→ / Enter** で開きます．
-4. **M** でお気に入りに登録 / 解除(★ が付きます)．**← / BackSpace** で1つ上へ戻り，**ESC / L** で閉じます．
-
-お気に入りと最近開いた迷路は `tools/maze_sim/maze_prefs.json` に保存します(git には入れません)．自分の迷路は `my:` を付けて覚えるので，インポートに同じ名前があっても区別されます．
-引数なしで GUI を起動すると，最後に開いた迷路が開きます．
-
-### CLI から選ぶ
-
-```sh
-python tools/maze_sim/maze_catalog.py                                         # 一覧
-python tools/maze_sim/maze_catalog.py --paths regional --type CM              # 自分の地区大会のクラシック
-python tools/maze_sim/maze_catalog.py --paths alljapan --year 2025            # 自分の全日本の2025年
-python tools/maze_sim/maze_catalog.py --paths imported/alljapan --round final # インポートの全日本の決勝
-python tools/maze_sim/maze_catalog.py --paths favorites                       # お気に入り
-
-# 選んだ迷路でまとめて試す
-tools/maze_sim/build/maze_sim $(python tools/maze_sim/maze_catalog.py --paths regional --type MM)
-```
-
-| オプション | 意味 |
-|---|---|
-| `--paths KEY` | 一覧の `[...]` に出ているキー．`alljapan`，`student`，`regional`，`mine_other`，`favorites`，`recent`，`imported`(インポート全部)，`imported/<分類>`(例：`imported/uk`) |
-| `--year Y` | その年だけ |
-| `--type T` | 自分の迷路の種目(`CM` / `MM` / `MS` / `CF` / `SC`) |
-| `--round final\|qual` | インポートの迷路の決勝 / 予選 |
-| `--all-sizes` | 16×16 以外(32×32)も含める |
-
-## 迷路を追加する(公式の迷路図から)
-
-大会の公式の迷路図(PNG / JPEG など)を読み取って，classic 形式の迷路ファイルにします．Pillow と numpy を使います(OpenCV は不要)．
-
-### たくさんの迷路図をまとめて変換する(ふつうはこちら)
-
-公式サイトから集めた迷路図を `tools/maze_sim/maze_file/` に置き(ファイル名は上の決まりのとおり)，まとめて変換します．Claude などを使わず，このスクリプトだけで完結します．
-
-```sh
-python tools/maze_sim/maze_batch.py tools/maze_sim/maze_file
-```
-
-```
-[44/92] OK    MM2025CM.png -> MM2025CM.txt
-[45/92] OK    MM2025MM.png -> MM2025MM.txt
-[80/92] CHECK MM2025_east_SC.png -> MM2025_east_SC.txt  図の向きを自動で決められなかった(規定に合う向きがない)。...
-
-OK 91  CHECK 1  ERROR 0  SKIP 0
-report: tools/maze_sim/build/maze_batch_report.csv
-```
-
-- 迷路ファイルは `my_mazes/<画像の名前>.txt` にできます．名前の空白や記号は `_` に置き換えます．
-- **変換済みのものは飛ばします**(`SKIP`)．図を足してから何度実行しても，新しいものだけが変換されます．作り直すときは `--force`．
-- 結果の一覧は `build/maze_batch_report.csv` です(大きさ・ゴール・状態など．Excel でも文字化けしません)．
-- 対応する画像は png / jpg / jpeg / bmp / gif / tif / webp(透明度付きも可)です．PDF は `pip install pymupdf` を入れると1ページ目を読みます．
-- `maze_file/`(元の画像)は git に入れません．
-
-| 状態 | 意味 | すること |
-|---|---|---|
-| `OK` | 気になる点なし | 念のため GUI で開いて確認 |
-| `CHECK` | 外周の欠け，向きが決まらない，ゴールの印が変 など | 確認用の画像を見て，必要なら1枚用のコマンドで作り直す |
-| `ERROR` | 迷路が見つからない など | 1枚用のコマンドで `--crop` などを試す |
-| `SKIP` | 変換済み | |
-
-支部サーキット競技(`SC`)はスタートの規定に合わないので，`CHECK` になるのが正常です．
-
-### 1枚ずつ変換する
-
-```sh
-python tools/maze_sim/maze_from_image.py tools/maze_sim/maze_file/MM2025_touhoku_CM.png
-python tools/maze_sim/maze_from_image.py 図.png --name MM2025_touhoku_CM --rotate 180 --force   # 作り直す
-```
-
-確認用の画像 `tools/maze_sim/build/<名前>_check.png` ができます．元の図に，読み取った壁を**緑**，自信のない壁を**橙**で重ねたものです．
-
-### 読み取った後に確認すること
-
-1. `CHECK` / `CHECK:` が出たら，**確認用の画像**で緑の線が図の壁と重なっているかを見ます．
-2. GUI で開いて探索させ，おかしな所がないか見ます(F で最後まで進めて，最短経路まで出るか)．
-
-| `CHECK:` の内容 | よくある原因と対処 |
-|---|---|
-| 外周の壁が欠けている | 外枠の位置がずれています．`--crop X0,Y0,X1,Y1`(外枠の四隅の画素位置)で指定します |
-| スタート区画の東に壁がない / 北に壁がある | 図の向きが違います(スタートが左下にない)．`--rotate 90` / `180` / `270` で回します |
-| 壁と点線の区別がはっきりしない | 点線の補助線が濃い図です．確認用の画像で全体を確かめ，必要なら `--threshold` を指定します |
-| ゴールの印が長方形に並んでいない / 数がおかしい | `G` 以外の文字を拾ったか，文字を読み落としました．確認用の画像で確かめます |
-
-#### 公式図の歩数と照らし合わせる(maze_verify.py)
-
-公式図の下には「西回り 45歩28折 南回り 43歩32折」のように最短経路の歩数が印刷されています．
-読み取った迷路から最短歩数を計算し，印刷された歩数の小さい方と一致すれば，経路に関わる壁は正しく読めています．
-
-```sh
-python tools/maze_sim/maze_verify.py                 # 全部の迷路の最短歩数(歩 = スタートからゴールに入るまでの区画数)
-python tools/maze_sim/maze_verify.py --sheet         # 図の下の文字と計算した歩数を並べた画像を build/verify_sheet_NN.png に作る
-python tools/maze_sim/maze_verify.py --same MM2025_students_MM MM2021CM   # 2つの迷路の壁が同じか比べる
-```
-
-`--sheet` の画像を開いて，黄色の帯の数字(計算した最短)と，その下の図の数字を見比べます．
-`--same` は，図に「過去の出題：2021全日本CM」のように書かれているとき，同じ迷路の別の図と比べるのに使います(mazefiles のファイルもパスで指定できます)．
-
-2020〜2025 年の公式図 92 枚で確かめた結果:
-
-- 77 枚は印刷された歩数と一致しました(4 枚は歩数の記載なし)．
-- **印刷された歩数は「西回り・南回り」など代表的な経路のもので，全体の最短とは限りません**．計算の方が 2〜4 歩短い図が 8 枚ありましたが，どれも読み取りの誤りではありませんでした(北や東から回る経路が載っていない)．
-- 中部 2022 の CM と MM は**同じ文言が印刷されていて**，どちらかはコピーの直し忘れです．
-- 「過去の出題」で同じ迷路の図どうし(および mazefiles)を比べた 16 組は，すべて完全に一致しました．
-
-合わないときは，確認用の画像(`build/<名前>_check.png`)と `--same` で確かめてください．
-
-#### 図の向きについて
-
-迷路図は**スタートが左下になる向き**で集めてください(公式図はふつうこの向きです)．
-
-- そのままの向きでスタート区画の規定(東に壁があり，北が開いている)を満たせば，回しません．
-- 満たさないときは，他の向きから規定を満たすものを探して回します(`rotated 90` と出ます)．1つに決まらなければ `CHECK` になり，候補の角度を表示します．
-- **図が回っていても，左下の角がたまたま規定を満たすと見分けられず，`OK` のまま間違った向きになります**．
-
-### オプション
-
-| オプション | 意味 |
-|---|---|
-| `--name NAME` | 保存する名前(既定は画像のファイル名) |
-| `--size N\|auto` | 1辺の区画数(既定 auto：16 か 32 を図から判定) |
-| `--rotate 90\|180\|270\|auto` | 読み取った迷路を時計回りに回す．`auto` は一括変換と同じ方法で向きを決める(一括変換の既定) |
-| `--crop X0,Y0,X1,Y1` | 外枠の位置を画素で指定する |
-| `--invert` | 白い壁・黒い背景の図のとき |
-| `--threshold T` | 壁とみなす「途切れのなさ」(0〜1)．既定は図ごとに自動で決める |
-| `--force` | 同じ名前のファイルを上書きする |
-
-### しくみ
-
-[akiaki96/maze_sim_py_c_v2](https://github.com/akiaki96/maze_sim_py_c_v2) の `parse_maze_image.py` と同じ考え方を，公式図向けに強化しています．
-
-1. 灰色にして，大津の方法で「壁(濃い色)」と「床」に分けます(透明度付きの画像は白い背景に重ねてから)．
-2. **いちばん長く途切れない縦線**を外枠の左右，その間を端から端まで続く横線を上下とします．タイトルや「ロボット名＿＿」の下線を外枠と間違えないためです．
-3. 格子線(柱・点線)の並び方から **16×16 か 32×32 か**を判定します．
-4. 外枠を N 等分した位置の近くで，壁の画素が最も多い列(行)を格子線とします．
-5. 区画の境目ごとに，両端の柱を除いた真ん中の部分が**長さ方向にどれだけ途切れずに濃いか**を調べます．壁はほぼ 1.0 に集まり，点線の補助線は図によって(縦と横でも) 0.2〜0.9 にばらつくので，**1.0 側から見て最初に現れる分布のすき間**を閾値にします．
-6. 区画の中に文字がある区画をゴールとします(スタートの ↑ は除く)．3×3 のゴールの四隅にだけ `G` を書く図や，`GOAL` の4文字の図にも対応しています．
-
-確かめたこと：
-
-- 公式図 92 枚(2020〜2025 年)を変換し，91 枚が `OK`(残り1枚は支部サーキット)．
-- 全日本 2024・2025 のクラシックは，mazefiles のデータと**完全に一致**．2023 は1か所だけ違いましたが，元の図では読み取りの方が正しく，mazefiles 側の誤りでした．
-- 既存の迷路から公式図に似せた画像(黒・赤の壁，点線，柱，JPEG のノイズ，ぼかし，拡大縮小)を作り，全日本 61 迷路 × 4 種類の描き方ですべて一致．
-
-## CLI
+`msim.py run` / `batch` と同じ探索を C だけで行い，yuho だけの内訳を出します．
+時間の数え方は画面と同じ(上の「時間の数え方」．`ideal_time.c` を共有)で，同じ迷路・同じ速さなら同じ時間になります．迷路ファイルの形式と，迷路の `G`(ゴール)の扱いは mouse maze sim と同じです(この CLI は 16×16 だけ)．
 
 ### 1つの迷路
 
 ```sh
 tools/maze_sim/build/maze_sim --random 5                 # 乱数の迷路
-tools/maze_sim/build/maze_sim tools/maze_sim/mazes/alljapan-045-2024-exp-fin.txt
+tools/maze_sim/build/maze_sim ~/.mazesim/mazefiles/alljapan-045-2024-exp-fin.txt
 tools/maze_sim/build/maze_sim --random 5 --verbose       # 1区画ごとに地図を表示
-tools/maze_sim/build/maze_sim my_mazes/MM2023CM.txt --scope full --search 600,500,2000   # 全面探索(機体の 600/500)
+tools/maze_sim/build/maze_sim <mouse maze sim>/mazes/MM2023CM.txt --scope full --search 600,500,2000   # 全面探索(機体の 600/500)
 ```
 
 出力の順番:
 
-0. `search: ... | fast run: band ...`：探索の設定と，最短走行の速度帯
+0. `search: ... | fast run: ...`：探索の行き先と速さ，最短走行の速さ
 1. `=== maze ===`：本当の迷路(`^` がスタートの機体，`G` がゴール)
 2. `reached goal ...`：ゴールに着くまでに動いた区画数と時刻(全面探索は `shortest route decided ...`：最短経路が決まった所)．
-   続く `search time: ...` は探索の時間の見積もりと内訳(直進，スラローム，超信地旋回，尻当て，ゴールでの待ち，既知の区間)
+   続く `search time: ...` は探索の時間(運動だけ)
 3. `=== explored map ===`：探索で分かった地図．数字はゴールまでのコスト，`.` と `:` は未知の壁，`*` は分かっている壁だけでは行けない区画
 4. `=== fastest-run route ===`：コストが最短の経路(区画ごとの指令の列．`FORWARD x3`，`RIGHT` など)
 5. `=== fastest-run commands (route above, large turns) ===`：4 の経路を大回りに置き換えた最短走行の指令と，指令ごとの時間
@@ -365,7 +130,8 @@ tools/maze_sim/build/maze_sim my_mazes/MM2023CM.txt --scope full --search 600,50
 
 ```sh
 tools/maze_sim/build/maze_sim --batch 300                          # 乱数の迷路(シード1〜300)
-tools/maze_sim/build/maze_sim tools/maze_sim/mazes/alljapan-*.txt  # ファイルが2つ以上ならまとめて
+tools/maze_sim/build/maze_sim ~/.mazesim/mazefiles/alljapan-*.txt  # ファイルが2つ以上ならまとめて
+tools/maze_sim/build/maze_sim $(python tools/maze_sim/msim.py list --paths alljapan --type CM)  # 同梱の全日本のクラシック
 ```
 
 ```
@@ -378,17 +144,17 @@ dijkstra goal 1,7,50,0 back 1,7,50,3 | 61 mazes, 0 failed, optimal  24, moves 11
 | `failed` | 失敗した迷路の数 | 0 |
 | `optimal` | 真の最短を見つけた迷路の数 | 多い |
 | `moves` | 探索で動いた区画数の平均(行き＋帰り．全面探索の「行き」は最短経路が決まるまで) | 少ない |
-| `search` / `goal` | 探索の時間の見積もりの平均 / ゴールに止まった(全面探索は最短経路が決まった)時刻の平均 | 短い |
+| `search` / `goal` | 探索の時間の平均 / ゴールに止まった(全面探索は最短経路が決まった)時刻の平均 | 短い |
 | `cost ratio` | 見つけた経路 ÷ 真の最短 の平均 | 1 に近い |
 | `run time` | 最短走行の時間の平均．`small` / `large` はコストが最短の経路を小回りだけ / 大回りに置き換えて走った時間，`time-opt` は走行時間が最短の経路の時間 | 短い |
 | `best` / `optimal`(run time の中) | 迷路を全部知っていた場合の時間の平均 / それと同じ時間だった迷路の数 | `time-opt` が `best` に近い / 多い |
 
-`mazes/` の中の `001.txt` と `001-anomaly-test.txt` は，ゴールに到達できないテスト用の迷路なので，`FAILED` になるのが正しい動作です．
+mazefiles の `001.txt` と `001-anomaly-test.txt` は，ゴールに到達できないテスト用の迷路なので，`FAILED` になるのが正しい動作です．
 
 ### コストの比較(sweep.sh)
 
 ```sh
-sh tools/maze_sim/sweep.sh 300     # 乱数300迷路で比較(約1.5分)．mazes/ があれば全日本の迷路でも比較
+sh tools/maze_sim/sweep.sh 300     # 乱数300迷路で比較(約1.5分)．~/.mazesim/mazefiles があれば全日本の迷路でも比較
 ```
 
 試したい組み合わせがあれば，`sweep.sh` の `for` の値を書き換えてください．
@@ -401,59 +167,9 @@ sh tools/maze_sim/sweep.sh 300     # 乱数300迷路で比較(約1.5分)．mazes
 | `--goal S,T90,T180,K` / `--back S,T90,T180,K` | 行き・帰りのコスト |
 | `--known-back K` | 帰りの既知区画の上乗せだけを変える |
 | `--scope round\|oneway\|full` | 探索の行き先(往復・片道・全面．既定 round) |
-| `--search V,TV,ACCEL` | 探索の直進の速さ・スラロームの速さ・加速度(既定は `params.h`) |
-| `--pivot` | 探索で曲がるとき超信地旋回 |
-| `--band N` | 最短走行の速度帯(`FAST_BANDS` の N 番目．既定 3) |
+| `--search V,TURN_V,ACCEL` | 探索の速さ(直進の最高速度，小回りの速さ，加速度．既定は `params.h`) |
+| `--run VMAX,ACCEL,SMALL90,LARGE90,LARGE180` | 最短走行の速さ(既定は `params.h` の `RUN_*`) |
 | `--sizes` | 構造体の大きさを表示して終わる |
-
-## 機体と同じ形式のログ(plant_sim を呼ぶ)
-
-maze_sim は区画単位の判断だけをたどるので，車輪の速さ・ジャイロ・壁センサーの値は持っていません．
-それらも入った**機体と同じ形式のログ**が欲しいときは，`--plant-log` で plant_sim(実機のファームウェアを PC で動かし，車輪・ジャイロ・壁センサーまで再現するシミュ．sim の worktree の `tools/plant_sim`)を同じ迷路・同じ探索の設定で走らせます．
-
-```sh
-tools/maze_sim/build/maze_sim my_mazes/MM2023CM.txt --scope full --search 600,500,2000 --plant-log plant_logs/MM2023CM_full
-```
-
-フォルダにできるもの:
-
-| ファイル | 中身 |
-|---|---|
-| `search/search_NNNN.bin` / `.csv` | 機体の SD と同じログ(YLOG2)と，`tools/get_log.py --bin2csv` で作った CSV．`log_viewer` や MATLAB の `yc.load_log` でそのまま開ける |
-| `truth.csv` | plant_sim の本当の状態(位置・向き・横滑り角など．10ms ごと) |
-| `flash.bin` | 探索で残した地図(plant_sim で続けて最短走行を走らせるとき用) |
-| `plant_stdout.txt` / `plant_stderr.txt` | ファームウェアの printf / plant_sim の表示(終わった理由など) |
-
-- CLI では迷路ファイルを1つ渡したときだけ使えます(乱数の迷路・まとめて試すときは使えません)．
-- **GUI では X キー**で，今の迷路(乱数の迷路も)と今の探索の設定(`search:` の欄．O キーの行き先も)で走らせます．
-  ログは `tools/maze_sim/build/plant_logs/<迷路>_<行き先>_<日時>/` にでき(git に入れない)，右の欄の `plant:` に進み具合と結果が出ます．
-  走っている間も GUI は動かせます．終わったら **Z キー**で `log_viewer` が開きます．plant_sim の表示はコンソールに出ます．
-- 探索の速さ(`--search`)は，機体で選べる値(`params.h` の `SPEED_SELECT_*`)にしてください．機体の RUN → SEARCH の操作(MAP 1 → SCOPE → ALGO → SPEED → ACCEL → SLALOM → TURN → 手かざし)をその値から作ります．
-- plant_sim は機体のファームウェアそのものなので，ゴールは `params.h` の `MAZE_GOALS`，コストは `params.h` の値です(迷路ファイルの `G` や `--goal` / `--back` は使われません．違うときは警告が出ます)．
-- 走らせる前に plant_sim の `build.sh` でビルドし直します(今の `yuho` のファームウェアで走らせるため．約 20 秒)．省くなら `--plant-no-build`．
-- plant_sim は壁に当たると止まります．最後まで走らせたいときは `--plant-opt "--no-crash-stop"`．
-- plant_sim の場所は，`--plant-exe`，環境変数 `YUHO_PLANT_SIM`，`tools/maze_sim/plant_sim.local` の1行目(git に入れない．例 `M:/User/Desktop/school/club/sim/tools/plant_sim/build/plant_sim.exe`)の順に探します．
-
-## 探索の時間
-
-`search_time.c` が，機体の探索(`app/search_run.c` の `SearchLoop`)が指令ごとにする動きを，`params.h` の値と選んだ速さ(`--search`)でたどって時間を足します．ファームウェアは使いません．
-
-| 動き | 数え方 |
-|---|---|
-| スタート | 右90° → 尻当て → 左90° → 尻当て(`StartSequence`) |
-| 直進 | 境界から境界まで台形加速．境界はいつもスラロームの速さで通る(真ん中からは止まった状態から) |
-| 左右 | スラローム(前のオフセット + 曲がる道のり + 後ろのオフセット を同じ速さで)．超信地旋回を選んだとき・真ん中にいるときは，真ん中で止まる → 回る → 半区画加速 |
-| 180° | 真ん中で止まる → 前と横に壁があれば 90° と尻当てを2回，なければその場で 180° → 半区画加速 |
-| ゴール・スタート | 真ん中で止まる → 壁があれば尻当て(`TurnBackAtGoal`) → `SEARCH_GOAL_WAIT_MS` 待つ |
-| 既知の区間 | 先の区画の壁が分かっていれば，機体と同じ先読み(`SearchPlanner_KnownRun`)でまとめて最短走行の指令の列で走る時間 |
-| 超信地旋回 | 台形の角速度(`SEARCH_TURN_*`)＋前後の待ち |
-| 尻当て | 下がる時間＋待ち＋真ん中まで進む |
-
-数えないもの: 手を離してから走り出すまでの待ち，区画ごとの計算(走りながら行う)，前壁補正・壁切れ補正による位置のずれ．
-GUI と CLI は 1 区画ずつ進めますが，既知の区画では壁が変わらないので，まとめて走るときと通る道は同じです(時間はまとめて走ったとして数えます)．
-
-2026-10-10 に，探索のログ(`logs/search/search_0018_dup1`〜`0032_dup1`，15 本)を区画ごとに再生して比べると，見積もりは実測と **−0.3〜+1.7%** で合いました．
-600〜700mm/s のスラロームは，前壁補正で曲がり始めが平均 10〜14mm 早まるので，見積もりの方が 1 回あたり約 15ms 長く出ます．
 
 ## コスト
 
@@ -487,65 +203,38 @@ Dijkstra は，1区画進むごとに次のコストを足して，合計が最�
 
 ### 時間の数え方
 
-- 速さは**選んだ速度帯**(`--band`，GUI は **K**．`params.h` の `FAST_BANDS`)．機体の最短走行と同じ `RunProfile_ForSpeeds` で，旋回の形・前後のオフセットも機体と同じです．
-- 直進は台形加速(帯の加速度・減速度・最高速度)．入りと出の速度は前後の旋回の速度で，スタートとゴールは 0 です．
-- 旋回は種類ごとに一定の速度で，曲線の部分は**機体が実際に曲がる時間**(角速度の上げ下げを含む = 角度/ω + ω/α)です．前後のオフセットは旋回の速さのまま走ります．
-- **速度は直進の間だけで変えます**．そのため，小回りの直後に大回りが来るときは間に半区画の直進が入り，そこで加速します．
-- スタートはスタート区画の中心で静止，ゴールは最初に入ったゴールの区画の中心で静止します．
-- 2026-10-10 に，最短走行のログ(`logs/search/fast_*`，最後まで走った 25 本)と比べて直しました．前は曲線の部分を理想の円弧の長さで数え，オフセットの中でも加速するとしていたので，見積もりが実測より 5〜12% 短く出ていました．直した後は 0〜−1.5% です(残りは主に，ログのイベントが 5ms の行に並ぶための遅れ)．
+上の「時間の数え方(msim の画面とコマンド)」のとおり，計算上の速さの運動だけです(logic 層の `RunProfile_Default()` の形に `run` / `--run` の速さを入れる)．
+**速度は直進の間だけで変えます**．そのため，小回りの直後に大回りが来るときは間に半区画の直進が入り，そこで加速します．
+スタートはスタート区画の中心で静止，ゴールは最初に入ったゴールの区画の中心で静止します．
 
 ### 時間 Dijkstra
 
 ノードは「これから旋回を始める位置(小回りは境目，大回りは区画の中心)× 向き × 旋回の種類」，辺は「旋回 1 つ + その後の直進」です．ゴール側から逆向きに広げるので，迷路のどこからでもゴールまでの最短時間が求まります．
 機体の最短走行は経路を**コスト**(Dijkstra)で選ぶので，`time-optimal` は「時間で選んだらどうなるか」の比較用です．
 
-## 迷路ファイルの形式
-
-micromouseonline/mazefiles の classic 形式と同じです．北(上)から 33 行(16×16 の場合)．
-
-```
-o---o---o---o ...
-|       |
-o   o---o   o ...
-| S |
-o---o---o---o ...
-```
-
-- 角は `o` か `+`，横の壁は `---`，縦の壁は `|` です．
-- 区画の真ん中の `G` はゴールです(なければ `params.h` の `MAZE_GOALS`)．スタートは常に `params.h` の `MAZE_START_X/Y`(左下)で，`S` は読み飛ばします．
-- シミュレータが読めるのは 16×16(1行目が 65 文字)だけです．32×32 のファイル(1行目が 129 文字)は読み込みません．
-- CLI が表示する `=== maze ===` の 33 行をそのまま保存しても読めます．
-
 ## ファイル構成
 
 | ファイル | 役割 |
 |---|---|
-| `maze_sim.c` | CLI |
-| `sim_core.c` / `sim_core.h` | CLI と GUI で共有する部分(迷路の生成・読み込み，壁の観測，指令の実行，最短走行の速度帯) |
-| `search_time.c` / `search_time.h` | 探索の時間の見積もり(機体の探索の動きを `params.h` の値でたどる) |
-| `plant_bridge.c` / `plant_bridge.h` | `--plant-log`: plant_sim を呼んで機体と同じ形式のログを残す |
-| `plant_sim.local` | この PC の plant_sim の場所(git に入れない) |
-| `sim_api.c` | GUI 用 DLL の窓口．中で logic 層の `SearchPlanner` を動かす |
-| `sim_lib.py` | DLL を ctypes で読み込む．ソースが変わっていたら自動で再ビルドする |
-| `gui.py` | pygame での描画と操作 |
-| `run_motion.py` | 最短走行の指令を表示用の固定の形にして，再生の位置と速度を求める |
-| `maze_catalog.py` | 迷路の分類(大会・年・予選/決勝)，お気に入り，最近開いた迷路 |
-| `maze_from_image.py` | 公式の迷路図(画像)から迷路ファイルを作る(1枚) |
-| `maze_batch.py` | フォルダの迷路図をまとめて変換する |
-| `maze_verify.py` | 変換した迷路を，公式図に印刷された歩数や同じ迷路の別の図と照らし合わせる |
-| `my_mazes/` | 自分で追加した迷路(git に入れる) |
+| `mouse.json` | mouse maze sim に渡す yuho の設定(ビルドするソース，インクルード) |
+| `yuho_mouse.c` | mouse maze sim の窓口(`msim.h`)の yuho の実装．中で logic 層の `SearchPlanner` を動かす．時間は運動だけで数える |
+| `msim.py` / `gui.py` | yuho の設定で mouse maze sim を動かす |
+| `maze_sim.c` | C の CLI |
+| `sim_core.c` / `sim_core.h` | C の CLI と窓口で共有する部分(迷路の読み込み・乱数の迷路，壁の観測，指令の実行) |
+| `ideal_time.c` / `ideal_time.h` | 時間の数え方(計算上の速さの運動だけ)．C の CLI と窓口で共有する |
+| `mazesim.local` | この PC の mouse maze sim の場所(git に入れない) |
 | `maze_file/` | 公式サイトから集めた迷路図の画像(git に入れない) |
-| `build.sh` | CLI と DLL のビルド |
-| `fetch_mazes.sh` | 大会の迷路の取得 |
+| `build.sh` | C の CLI のビルド |
 | `sweep.sh` | コストの比較 |
 
-GUI の構成は [akiaki96/maze_sim_py_c_v2](https://github.com/akiaki96/maze_sim_py_c_v2)(C のソルバー ＋ Python/pygame の描画)を参考にしています．
+乱数の迷路は C(`sim_core.c`)と mouse maze sim(Python)で同じ作り方なので，同じシードなら同じ迷路です(2026-10-21 に 100 個で結果が一致することを確かめた)．
 
 ## うまくいかないとき
 
 | 症状 | 対処 |
 |---|---|
-| `build.sh` で `cannot open output file build/maze_sim_lib.dll: Permission denied` | GUI が DLL を使用中です．GUI を閉じてから実行してください |
-| GUI が DLL を読み込めない(`OSError`) | Python と gcc のビット数を確認してください(両方 64bit が必要) |
-| `*.sh` で `$'\r': command not found` | 改行が CRLF になっています．`.gitattributes` で `*.sh` は LF に固定してあるので，`git checkout -- tools/maze_sim/*.sh` で直ります |
-| `invalid cost` | `S` が 0，またはコストが 13bit に収まりません |
+| `mouse maze sim not found` | 上の「はじめに」の 1．`mazesim.local` か `pip install -e` |
+| 画面がライブラリを読み込めない(`OSError`) | Python と gcc のビット数を確認してください(両方 64bit が必要) |
+| `*.sh` で `$'
+': command not found` | 改行が CRLF になっています．`.gitattributes` で `*.sh` は LF に固定してあるので，`git checkout -- tools/maze_sim/*.sh` で直ります |
+| `goal_cost must be ...` | `S` が 0，またはコストが 13bit に収まりません |

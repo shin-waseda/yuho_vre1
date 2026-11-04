@@ -1,4 +1,4 @@
-// tools/maze_sim の CLI (maze_sim.c) と GUI 用の DLL (sim_api.c) で共有する部分。
+// tools/maze_sim の CLI (maze_sim.c) と、mouse maze sim につなぐ窓口 (yuho_mouse.c) で共有する部分。
 // 本当の迷路を作る・読む、壁を観測する、指令を本当の迷路で実行する。
 #include "sim_core.h"
 
@@ -8,27 +8,6 @@
 const MazePos kSimGoals[MAZE_GOAL_COUNT] = MAZE_GOALS;
 const MazePos kSimStart = { MAZE_START_X, MAZE_START_Y };
 
-// 機体の FastBand(app/search_run.c)と同じ並び
-typedef struct {
-    float v, accel, decel, small_v;
-    uint8_t type; // 1 SMALL、2 LARGE
-} SimFastBand;
-static const SimFastBand kSimBands[] = FAST_BANDS;
-
-int SimCore_FastBandCount(void) {
-    return (int)(sizeof(kSimBands) / sizeof(kSimBands[0]));
-}
-
-RunProfile SimCore_FastProfile(int band, bool *large) {
-    if (band < 1) band = 1;
-    if (band > SimCore_FastBandCount()) band = SimCore_FastBandCount();
-    const SimFastBand *b = &kSimBands[band - 1];
-    // 機体の ComputeFastTurns と同じ(減速度は帯の値)
-    RunProfile prof = RunProfile_ForSpeeds(b->v, b->accel, b->small_v, NULL);
-    prof.decel = b->decel;
-    if (large != NULL) *large = (b->type == 2u);
-    return prof;
-}
 
 // ------------------------------------------------------------
 // 本当の迷路を作る
