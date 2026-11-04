@@ -1,0 +1,22 @@
+{
+  "name": "yuho",
+  "sources": [
+    "yuho_mouse.c",
+    "sim_core.c",
+    "ideal_time.c",
+    "../../Core/Src/logic/command.c",
+    "../../Core/Src/logic/maze/*.c",
+    "../../Core/Src/logic/control/slalom.c",
+    "../../Core/Src/logic/control/velocity_profile.c"
+  ],
+  "include": ["../../Core/Inc", "."],
+  "depends": [
+    "*.h",
+    "../../Core/Inc/params.h",
+    "../../Core/Inc/global.h",
+    "../../Core/Inc/logic/*.h",
+    "../../Core/Inc/logic/maze/*.h",
+    "../../Core/Inc/logic/control/*.h"
+  ],
+  "cflags": ["-std=c11", "-Wall", "-Wextra", "-O2"]
+}

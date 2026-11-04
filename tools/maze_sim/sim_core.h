@@ -1,7 +1,7 @@
 #ifndef SIM_CORE_H_
 #define SIM_CORE_H_
 
-// tools/maze_sim の CLI (maze_sim.c) と GUI 用の DLL (sim_api.c) で共有する部分。
+// tools/maze_sim の CLI (maze_sim.c) と、mouse maze sim につなぐ窓口 (yuho_mouse.c) で共有する部分。
 // 「本当の迷路」は WallMap で持ち、全部の壁を既知にしておく(WALL_VIEW_KNOWN で読む)。
 
 #include "logic/command.h"
@@ -27,14 +27,6 @@ WallObservation SimCore_Sense(const WallMap *truth, MazePos p, Direction heading
 
 // 指令を本当の迷路で実行する(pos/headingを進める)。壁にぶつかったらfalse。
 bool SimCore_Execute(const WallMap *truth, MazePos *pos, Direction *heading, Action a);
-
-// 最短走行の速度帯(params.h の FAST_BANDS。機体の RUN → TEST → FAST_BANDS と同じ)の数
-int SimCore_FastBandCount(void);
-// band 番目(1〜)の速度帯で走るときの RunProfile(機体の最短走行と同じ旋回の形・オフセット)。
-// large が NULL でなければ、その帯の走り方が大回りあり(LARGE)かを書く。範囲の外の番号は端の帯にする。
-RunProfile SimCore_FastProfile(int band, bool *large);
-// maze_sim の既定の速度帯(10-10 の試走会で2回続けて走れた帯3: 1200mm/s、小回り 600mm/s、SMALL)
-#define SIM_DEFAULT_BAND 3
 
 // プランナー(Dijkstra)が今の目的地へ向けて計算する値を、全部のノードについて out に計算する(区画の値の表示用)。
 // プランナーは今いるノードのコストが決まった所で計算を止めるので、表示にはこちらを使う。

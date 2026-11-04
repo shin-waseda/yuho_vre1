@@ -2997,6 +2997,132 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
   - 次: VS Code に ST 公式の拡張を入れてビルド・書き込み・デバッグを試す．その後，CubeIDE のファイル(`.cproject`，`Debug/`)と使わないファイルの扱い，
     `Debug/yuho.bin` をコミットする決まり，CLAUDE.md の「ビルドと書き込み」を決め直す．コンパイラの版が CubeIDE と違い得るので，最初はいつもの試験で走りを確かめる．
 
+### 2026-10-20 log_viewer を一般化して配布できるようにした(`feature/log-viewer-package`，`master` から)
+
+- **MATLAB の log_viewer を，他のマイクロマウスの人が自分のログで使える形にして，別のリポジトリ `M:/User/Desktop/school/club/log-viewer` に移した**(ユーザーの依頼)．
+  - ユーザーの決定: 相手は他のマイクロマウスの人，対象は log_viewer だけ(plot_log・turn_sim・get_log.py は yuho に残す)，別リポジトリ＋ `.mltbx` で配る，
+    読み込みは差し替えられるように，画面と説明は日本語のまま，yuho も新しい方を使う．途中でハーフ(90 mm)の迷路も足すことになった．
+  - 作り: 本体(`mouse_log_viewer`，`+mlv` パッケージ)は yuho の名前を一つも知らず，機体ごとの違いを設定の struct で受け取る．
+    設定は JSON ではなく MATLAB の関数ファイルにした．読み込み・軌道の基準・壁の取り出しは手順なので，関数ハンドルで渡す必要があるため．
+    - 読み込み: `cfg.readers` を上から試す(内蔵は YLOG と CSV)．自分の形式は先頭に足す．
+    - イベント: 文字の列(`ev_text`)があればそれを，なければ番号の列と中身の列から作る．yuho の `log_event.h` は `mlv.event_table_from_c` で読む．
+    - 迷路: `cfg.maze.kind` が `'classic'`(180 mm，16 区画，柱 12 mm)か `'half'`(90 mm，32 区画，柱 6 mm)．画面でも切り替えられる．
+      柱の大きさ，図の余白，向きの矢印の長さも区画の大きさに合わせて変わる．
+    - 壁: 「壁の層」(線分，分かった行，描き方の名前)の並び．既定は `WALL x= y= dir= wall=` のイベント．
+  - yuho 側: `tools/matlab/yuho_viewer_config.m` に yuho の取り決め(列の組，`log_event.h`，`MAZE_SIZE`，尻当て・STEP の基準と合わせ直し，
+    機体の地図と STEP で読んだ壁)を移し，`log_viewer.m` はそれを渡して `mouse_log_viewer` を呼ぶだけにした．`+yc/load_log.m` などは plot_log・turn_sim のために残した．
+  - 確かめたこと(R2026b Prerelease の `-batch`，log-viewer の `tests/run_tests.m`):
+    - yuho のログ 5 本(search の .bin/.csv，stream の .bin，slalom の .bin/.csv)を `yc.load_log` と `mlv.load_log` で読み，列とイベントの文字がすべて一致した．
+    - search_0003_dup3 の画面を `exportapp` で書き出し，前の log_viewer と並べて見比べた．迷路の種類の選択が増えたことと，チェックボックスの並び
+      (機体の地図が先．先の層が下に描かれるため)以外は同じ．途中のイベントへ飛んだときと，STEP で合わせ直したときの画面も見た．
+    - 合成した最小の例(クラシックとハーフ)で，軌道の終わりの位置と向き，壁の数が合った．自分の読み込みを足す例も通った．`.mltbx` も作れた．
+  - まだ確かめていないこと: マウスとキーでの操作(クリック，ホイール，← →，再生)，`.mltbx` を入れて使えるか，R2026b より前の版で動くか．
+  - 次: ユーザーが画面を触って確かめる．log-viewer のコミットと GitHub への公開はユーザーが決める．
+
+### 2026-10-20 log-viewer: 設定を画面で選ぶ，イベントの線の切り替え，再生を軽く(`feature/log-viewer-package` のまま)
+
+- ユーザーが `mouse_log_viewer` を設定なしで直接開いたら，「速度・壁センサが1段にまとまらない」「読んだ壁が出ない」「再生で機体の点が飛び飛び」となった．
+  - 前の版(master の log_viewer.m，Python の log_viewer.py)と機能を並べたが，なくなった機能はなかった．設定なしだと既定の設定(列の組も壁の層もない)になるのが原因．
+    「壁センサの値から壁判定して表示」は，機体が STEP で残した壁(読んだ壁)のことだった(ユーザー確認)．
+  - **設定を画面で選べるようにした**: `mlv.add_profile(名前, 関数名, フォルダ)` で登録(`setpref` の `mouse_log_viewer` に残る)，画面の上の「設定」で選ぶ．
+    最後に使った設定で開く．読めない設定なら既定で開いて状態の行で知らせる．yuho の `log_viewer` は呼ぶたびに `'yuho'` を登録してそれで開く．
+  - 設定のない人向けには，画面で列をまとめる機能は作らず，作り方の手引き(log-viewer の `docs/config_guide.md`)とひな形(`examples/template/my_mouse_config.m`)を作った(ユーザーの決定)．
+  - **グラフのイベントの縦線を出す・出さない**のチェックボックス「グラフに線」を足した．
+  - **再生が重いわけを測った**(-batch で 1 コマを描き終えるまでの時間．同じ search_0003_dup3)．
+    直す前は 1 コマ約 110 ms(約 9 コマ/秒)．内訳は，時系列のカーソルの `xline` が約 120 ms(普通の `line` にすると約 30 ms)，
+    つまみ(uislider)と時刻・状態の文字(uilabel)を変えるだけでそれぞれ約 75 ms(画面の部品を変えると窓全体を並べ直すため)，迷路の点は約 15 ms．
+    イベントの線・凡例・データの点の数はほとんど効いていなかった．
+    `xline` をやめて普通の線にし，再生中はつまみ・時刻・状態の行・イベントの一覧を 0.2 秒に1回だけ直すようにして，
+    約 43 ms(yuho の設定)/ 55 ms(既定の設定)になった．前の版も同じ作りだったので，前から重かったと考えられる(実際の画面での速さは未確認)．
+  - ついでに直した不具合: 「開いたときに描く列」がどれもログにないと，開くときにエラーになっていた(前の版も同じ)．最初の 4 列を描くようにした．
+  - 確かめ: log-viewer の `tests/run_tests.m` がすべて通った(読み込みの一致，設定の登録・記憶・画面での切り替え，読めない設定，縦線の切り替え，ひな形，手引きの壁の層の例)．
+  - まだ: 実際の画面での再生の滑らかさ，マウスでの切り替えはユーザーが確かめる．
+
+
+### 2026-10-21 log-viewer: 設定がなくても列を1つのグラフにまとめる(`feature/log-viewer-package`)
+
+- ユーザーから「センサ値や目標速度と実際の速度を1つのグラフに描けない」．
+  - 既定の設定(列の組が空)で開いていたと考えられる(この PC の Prerelease では最後の設定が「既定」だった．正式版の状態は未確認)．
+  - 10-20 は「設定のない人は設定を書く」としたが，今回のユーザーの決定で，**名前から自動でまとめる**ことにした．まとめ方は一般化する前の yuho と同じにし，設定ファイルで変えられる形にする．
+  - `cfg.groups` の列を**名前の形(正規表現，全体一致，大文字・小文字を区別しない)**で書けるようにした．ふつうの列の名前はそのまま使える．
+    既定の組 `mlv.default_groups` は yuho の `yc.plot_groups` と同じ段の名前と並びで，`v_l`，`sen_fr`，`ir_r`，`pwm_l` などのよくある名前にも合う．
+  - どの組にも合わない列は，名前の終わり(`_l`/`_r`，`_fl`/`_fr`，`_x`/`_y`/`_z`，`_ref` など)を除いて同じになれば1段にまとめる(`cfg.auto_group`，既定 true)．
+  - 開いたときに描く列 `cfg.default_columns` も名前の形にし，既定を yuho と同じ(速度の目標と左右，角度，壁センサ)にした．
+  - 「この組を足す」の一覧は，開いたログに列がある組だけを出す(`mlv.resolve_groups`)．
+  - 確かめ: log-viewer の `tests/run_tests.m` がすべて通った．yuho のログでは既定の組が yuho の組と一致し，既定の設定で開いても速度・角度・壁センサーの3段になる．`.mltbx` も作り直した．
+  - その後「search で壁を読んでいるのに迷路の壁が増えない」．これも既定の設定で開いていたため(既定では STEP の意味を知らないので壁は 0 本)．画面の「設定」で yuho を選んで直った(ユーザー確認)．
+  - yuho の `tools/matlab/README.md` の「既定の設定で開くと…」を今の動きに合わせた(列の組は出る，地図・読んだ壁・軌道の基準は出ない)．
+  - まだ: 実際の画面での確認はユーザーが行う．
+
+### 2026-10-21 maze_sim を一般化して公開できるようにした(`feature/maze-sim-package`，`feature/log-viewer-package` から)
+
+- **Python の迷路シミュレータ(maze_sim)を，他のマイクロマウスの人が自分の探索の C で使える形にして，別のリポジトリ `M:/User/Desktop/school/club/maze-sim`(mouse maze sim，`mazesim` パッケージ)に移した**(ユーザーの依頼)．
+  - はじめは「MATLAB にして公開」の依頼だったが，ユーザーが「MATLAB にする利点がない」として Python のままにした．
+  - ユーザーの決定: 機体は小さな C の窓口でつなぐ，入れる機能は探索の画面と一括評価・迷路図の変換・最短経路と時間の表示(任意)，
+    公式図から変換した 92 個(前の `my_mazes/`)を同梱する，yuho も公開版を呼ぶ形にする．ハーフ(32×32)は頼まれていないが，窓口に大きさを持たせ，画面も大きさに合わせて描くようにした．
+  - log-viewer の公開のときの決まりに合わせた: 本体は yuho を知らない，日本語のまま，MIT，作者名 sararint でメールは載せない(リポジトリの git config も同じ)．
+  - 作り: 本当の迷路・壁の観測・移動・衝突の判定を Python 側に移し，C の窓口(`include/msim.h`)は「見えた壁(前・右・左) → 次の1手」だけにした．
+    必ず作るのは `msim_api_version`，`msim_reset`，`msim_step` の3つ．作ると画面に出るもの: 地図(`msim_wall`)，区画の数字，状態の行，オプションの申告と途中での変更，
+    結果の数値(まとめて試すと平均)，最短走行の経路(分かった壁だけ / 全部知っていたら)．機体ごとのキーは Python の拡張(`mouse.json` の `extension`)で足す．
+    機体は `mouse.json`(ソース，インクルード，ビルドし直す条件)で表し，ソースが変わると読み込むときに自動でビルドし直す(ファイル名にハッシュを入れ，画面が使っている間でもビルドできる)．
+  - 同梱の例: 足立法(窓口をすべて作った例．16×16 と 32×32)，ひな形(左手法)，yuho のつなぎ方(参考)．
+  - 設定(お気に入り，最近開いた迷路，最後に使った機体)は `~/.mazesim/prefs.json`，自分の迷路は `~/.mazesim/mazes/`，mazefiles は `~/.mazesim/mazefiles/` に移した．
+  - yuho 側: `yuho_mouse.c`(窓口の yuho の実装．前の `sim_api.c` の中身)，`mouse.json`，`yuho_ext.py`(X / Z キーの plant_sim)，`msim.py`(`--mouse` を付けて公開版を呼ぶ)，`gui.py`(`msim.py gui` の近道)．
+    前の GUI のオプションは `--opt` のオプションになった(algo / scope / band / turn / search / goal_cost / back_cost．A / O / K キーはそのまま)．
+    `sim_api.c`，`sim_lib.py`，`maze_catalog.py`，`run_motion.py`，迷路図の変換の3つ，`fetch_mazes.sh`，`my_mazes/` を消した．C の CLI(`maze_sim.c`)と `sweep.sh` は残した(迷路の場所だけ直した)．
+    公開版の場所は `pip install -e`，`tools/maze_sim/mazesim.local`(gitignore)，環境変数 `MAZESIM_PATH` のどれか．
+  - 確かめたこと:
+    - 乱数の迷路の作り方を C から Python へそのまま移し，同じシードで同じ迷路になる．C の CLI と公開版で，乱数 100 迷路(Dijkstra，足立法，全面探索)と同梱の全日本クラシック 6 個の
+      区画数・探索の時間・ゴールの時刻・コストの最短の数と比・最短走行の時間(時間 Dijkstra，大回り)・全部知っていた場合の時間がすべて一致した．
+    - 公開版の `tests/run_tests.py`(yuho の `mouse.json` も追加で試す): 足立法と yuho が乱数 30 迷路と同梱の迷路(SC を除く)を最後まで探索，ひな形がエラーなく動く，
+      画面を dummy で動かして探索・最短走行の再生・経路の切り替え・オプションのキー・迷路の一覧から開く，を PNG で見た．
+    - X キー: 乱数の迷路 7 で，迷路の書き出し → 探索の時間の見積もり(34.5 秒) → plant_sim(`--plant-no-build` 相当) → ログの変換まで通った．
+      plant_sim は 38 秒目に CRASH(reason 4)で止まった．ビルドし直していない plant_sim なので古い可能性がある(今回の範囲外で，調べていない)．
+    - 迷路図の変換: 公式図 MM2024CM を変換し，同梱のものと壁が完全に一致．
+  - まだ確かめていないこと: 実際の画面での操作(キー・再生の見た目)，`pip install -e` で入れたとき，Windows 以外，Z キー(log_viewer を開く)．
+  - 次: ユーザーが画面を触って確かめる．公開版のコミットと GitHub への公開はユーザーが決める．
+
+### 2026-10-21 maze_sim から plant_sim を外し，時間を計算上の速さの運動だけにした(`feature/maze-sim-package` のまま)
+
+- ユーザーの指摘: plant_sim とログ出しは maze_sim に入れないはず．band(速度帯)も分からない．確かめると，band・探索の時間の見積もり(ログで合わせた実機の動き)・plant_sim(X / Z キー，`--plant-log`)は
+  10-11 のコミット `4dfb0f3`(東北地区大会のまとめ)で maze_sim に入っていた．10-09 にユーザーは「maze_sim はアルゴリズムの確認だけ」として走りのパラメータを戻していた．
+  - ユーザーの決定: maze_sim はアルゴリズムの確認だけ．plant_sim のログ出し(X / Z)は消す．時間に依存するアルゴリズムの確認には速さが要るので，速さは「計算上のもの」を使い，
+    **滑りなどは一切考えない**．速さは選べるようにし(既定は `params.h`)，時間は運動だけで数える(尻当て・待ち・超信地旋回は数えない)．
+  - msim(公開版を呼ぶ側)で直したこと:
+    - `yuho_ext.py` を消し，`yuho_mouse.c` から `yuho_plant_log`・`yuho_search_estimate`，`mouse.json` から `plant_bridge.c`・`search_time.c`・拡張，`msim.py` / `gui.py` から `--plant-*` を外した．
+    - オプション `band` と `turn` をやめ，`run`(最短走行の VMAX,ACCEL,SMALL90,LARGE90,LARGE180．既定 `RUN_*`)を足した．`search` は残した(既定 `SEARCH_V_MM_S` など)．
+    - 最短走行は logic 層の `RunProfile_Default()` の形(理想の円弧の長さ，オフセット 0，減速度 = 加速度)に `run` の速さを入れる(前は `RunProfile_ForSpeeds`: 滑りのモデルのオフセットと `*_ADJ` の補正入り)．
+    - 探索の時間は `yuho_mouse.c` の `SearchTime_*`(運動だけ．境目は小回りの速さ，直進は台形加速，小回りは円弧 ÷ 速さ，真ん中で止まる・回るのは 0)．既知の区間をまとめて走る分は数えない．
+  - 確かめ: 警告なしでビルド．小回り 0.236 s(= π/2 × 90 mm ÷ 600 mm/s)・大回り 90° 0.333 s(= π/2 × 180 ÷ 850)．乱数 100 迷路の探索の区画数・コストは前と同じ．
+    `run` を速くすると最短走行の時間が短くなる．公開版の `tests/run_tests.py` が yuho を含めて全部通った．
+  - C の CLI(`maze_sim.c`)は前のまま(`--band`，`search_time.c`，`--plant-log`)．README に「この CLI の時間は前の数え方」と書いた．直すかはユーザーに聞く．
+  - 公開版の `examples/yuho/` も写し直し(`yuho_ext.py` を消した)，`docs/api.md` から yuho の拡張の例への言及を消した．
+
+### 2026-10-21 C の CLI も運動だけの時間にした，画面で数字のオプションを打ち込めるようにした(`feature/maze-sim-package` のまま)
+
+- ユーザーの依頼: CLI も同じ形にする．並進とスラロームの速さを画面で数字で入れられるとよい．
+  - 時間の数え方を `tools/maze_sim/ideal_time.c` / `.h` にまとめ，`yuho_mouse.c` と C の CLI(`maze_sim.c`)で共有した．
+  - CLI: `--band`，`--pivot`，`--plant-log` などの plant_sim のオプションを消し，`--run VMAX,ACCEL,SMALL90,LARGE90,LARGE180` を足した．探索の時間の内訳(尻当て・待ちなど)の表示もやめた．
+    `search_time.c` / `.h`，`plant_bridge.c` / `.h`，`sim_core` の速度帯(`SimCore_FastProfile`，`SIM_DEFAULT_BAND`)を消した．
+  - 公開版の画面: 選択肢のないオプション(数字など)を **E** キーで打ち込める(右の欄の `[E]`．Enter で決める，Esc でやめる，Tab / ↑ / ↓ で別の項目．入力中は説明が出る)．
+    機体が途中で変えられるもの(yuho の `run`)は探索をやり直さず，それ以外は最初から．おかしな値は機体の `msim_reset` のエラーとして理由が出る．
+  - 確かめ: CLI と msim で，乱数 100 迷路の区画数・探索の時間(35.0 s，ゴール 14.9 s)・コスト・最短走行の時間(6.521 / 6.529 s，best 6.224 s)が一致した．
+    公開版の `tests/run_tests.py` に入力の確かめを足した(yuho で `run` を打ち込むと探索をやり直さずに最短走行が 11.207 → 8.747 s，おかしな値は ERROR と理由)．全部通った．
+  - `tools/maze_sim/plant_sim.local` はもう使わない(git に入れないこの PC のファイルなので消していない)．
+
+### 2026-10-21 mouse maze sim: 画面をブラウザにした，探索関数を名前で選べるようにした(公開版．yuho は `feature/maze-sim-package` のまま)
+
+- ユーザーの依頼: pygame の画面は操作性がよくないので，ブラウザで動く画面にする．C の探索関数の名前で選べるようにする(「窓口の形の関数を自動で一覧」をユーザーが選んだ)．
+  - 画面: `python -m mazesim gui` が手元だけ(127.0.0.1)の小さな Web サーバー(Python の標準機能)を立ててブラウザを開く．計算は Python と機体の C，ブラウザは描画と操作だけ．
+    ボタン，オプションの選択欄と入力欄(Enter で決める)，速さのつまみ，区画をクリックで数字と壁，迷路の一覧(分類の木，絞り込み，プレビュー，ダブルクリックで開く，お気に入り)．
+    最短走行の再生の形は `motion.js`(前の `motion.py` を JavaScript に移した)．キー操作も残した．pygame の画面(`gui.py`，`motion.py`)と画面の拡張(extension)は消し，pygame は要らなくなった．
+  - 探索関数: 機体のソースから `MSIM_EXPORT void 名前(const MsimSense *, MsimMove *)` の形の関数を探して一覧にし，画面の「探索関数」とコマンドの `--step` で選ぶ(既定 `msim_step`)．
+    選んだ名前は `msim_reset` の options に `step=名前` で来る．ファームウェアの関数は引数の型が機体ごとに違うので，この形の薄い関数で包む必要はある(ユーザーに説明した)．ひな形に例(`right_hand_step`)を足した．
+  - yuho が使うのは書き込み用と同じ `Core/Src/logic/` のソースと `params.h` であることを確かめた(ユーザーの質問)．`app/search_run.c` の流れ(区画ごとの Step，ゴールでの 180°，片道)は `yuho_mouse.c` が真似ている．
+  - 確かめ: 公開版の `tests/run_tests.py` を書き直した(サーバーの /api で探索・オプション・探索関数・一覧・お気に入り・前後の迷路を試し，画面なしの Chrome で開いて PNG と JavaScript のエラーを見る．
+    わざとエラーを入れたページで，エラーを拾えることも確かめた)．足立法・ひな形・yuho で全部通った．yuho の `msim.py gui` でもサーバーが立つことを確かめた．
+  - 公開版はコミット1つ(`mouse maze sim 1.0.0`，sararint)にまとめ直した．GitHub への push はリポジトリができてから(この PC に gh がない)．
+
 ### 2026-11-03 走行系を機体モデル(yuho_model.md)の形にした(`feature/model-based-control`，`master` から．ワークツリー `yuho-model`)
 
 - **車輪ごとの速度 PID と FF をやめ，システム同定で求めた機体モデルの逆の FF と，並進・旋回に分けた FB にした**(ユーザーの依頼)．

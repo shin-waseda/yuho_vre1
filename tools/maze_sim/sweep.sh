@@ -23,11 +23,12 @@ for K in 0 1 2 4 8; do
     $SIM --batch "$N" --goal "1,0,2,0" --back "1,0,2,$K"
 done
 
-# 大会の迷路(sh tools/maze_sim/fetch_mazes.sh で取ってくる)があれば、全日本の迷路でも比べる
-if ls mazes/alljapan-*.txt >/dev/null 2>&1; then
+# 大会の迷路(python tools/maze_sim/msim.py fetch で ~/.mazesim/mazefiles に取ってくる)があれば、全日本の迷路でも比べる
+MF="${MAZESIM_HOME:-$HOME/.mazesim}/mazefiles"
+if ls "$MF"/alljapan-*.txt >/dev/null 2>&1; then
     echo "--- all-Japan contest mazes ---"
-    $SIM --algo adachi mazes/alljapan-*.txt
-    $SIM mazes/alljapan-*.txt
-    $SIM --goal "1,0,2,0" --back "1,0,2,0" mazes/alljapan-*.txt
-    $SIM --goal "1,0,2,0" --back "1,0,2,3" mazes/alljapan-*.txt
+    $SIM --algo adachi "$MF"/alljapan-*.txt
+    $SIM "$MF"/alljapan-*.txt
+    $SIM --goal "1,0,2,0" --back "1,0,2,0" "$MF"/alljapan-*.txt
+    $SIM --goal "1,0,2,0" --back "1,0,2,3" "$MF"/alljapan-*.txt
 fi
