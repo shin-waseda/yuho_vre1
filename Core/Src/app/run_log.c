@@ -25,14 +25,14 @@ void RunLog_Setup(const char *dir, const char *file, uint32_t decimation) {
     Logger_AddField("pwm_r", &d->pwm_r);
     Logger_AddField("ff_l", &d->ff_l);
     Logger_AddField("ff_r", &d->ff_r);
-    Logger_AddField("i_l", &d->i_l);
-    Logger_AddField("i_r", &d->i_r);
+    Logger_AddField("i_s", &d->i_s);
+    Logger_AddField("f_ff", &d->f_ff);
     // 回転
     Logger_AddField("omega_ref", &d->target_omega_dps);
     Logger_AddField("gyro_z", &d->gyro_z_dps);
     Logger_AddField("angle_ref", &d->angle_ref_deg);
     Logger_AddField("angle", &d->angle_deg);
-    Logger_AddField("ang_corr", &d->ang_corr_dps);
+    Logger_AddField("fb_d", &d->fb_d);
     Logger_AddField("wall_ofs", &d->wall_offset_deg);
     // 壁センサー・電池
     Logger_AddField("ad_l", &d->ad_l);

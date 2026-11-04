@@ -12,9 +12,7 @@
 #include "logic/state_estimation/kinematics.h"
 #include "logic/state_estimation/odometry.h"
 #include "logic/state_estimation/gyro_fusion.h"
-#include "logic/control/pid.h"
-#include "logic/control/velocity_pid.h"
-#include "logic/control/position_pid.h"
+#include "logic/control/drive_model.h"
 #include "logic/control/velocity_profile.h"
 #include "logic/control/wall_control.h"
 

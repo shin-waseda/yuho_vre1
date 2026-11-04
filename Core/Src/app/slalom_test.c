@@ -37,8 +37,12 @@ static void SetupLogger(void) {
     Logger_AddField("angle", &d->angle_deg);
     Logger_AddField("ff_l", &d->ff_l);
     Logger_AddField("ff_r", &d->ff_r);
-    Logger_AddField("i_l", &d->i_l);
-    Logger_AddField("i_r", &d->i_r);
+    Logger_AddField("i_s", &d->i_s);
+    Logger_AddField("f_ff", &d->f_ff);
+    Logger_AddField("fb_d", &d->fb_d);   // ターンの FF が合っていれば 0 付近
+    Logger_AddField("pwm_l", &d->pwm_l); // 電圧が上限に届いたかを見る
+    Logger_AddField("pwm_r", &d->pwm_r);
+    Logger_AddField("vbat", &d->vbat);
     Logger_AddField("ad_l", &d->ad_l); // 曲がった後の横のずれを壁で見る
     Logger_AddField("ad_r", &d->ad_r);
     Logger_SetDuration(SLALOM_TEST_LOG_MS);
@@ -180,8 +184,10 @@ void SlalomTest_Run(void) {
                                  SLALOM_V_MM_S);
     printf("SLALOM TEST (wall control off)\r\n");
     ComputeTurns();
-    printf("ANGULAR_KP=%.2f ANGLE_KP=%.2f, POSITION_KP=%.2f, VELOCITY_KP=%.4f\r\n",
-           ANGULAR_KP, ANGLE_KP, POSITION_KP, VELOCITY_KP);
+    printf("K_THETA=%.3f K_OMEGA=%.3f, POSITION_KP=%.2f, VS_KP=%.2f VS_KI=%.1f\r\n",
+           DRIVE_VD_K_THETA, DRIVE_VD_K_OMEGA, POSITION_KP, DRIVE_VS_KP, DRIVE_VS_KI);
+    printf("MODEL: A+=%.3f A-=%.3f sigma=%.2f mm, B_OMEGA=%.4f, D=%.3f V\r\n",
+           MODEL_A_PLUS, MODEL_A_MINUS, MODEL_SIGMA_M * 1000.0f, MODEL_B_OMEGA, MODEL_D);
 
     if (FailSafe_IsTripped()) FailSafe_Halt(); // 起動時の低電圧など
 
@@ -313,7 +319,7 @@ void SlalomSweep_Run(void) {
 
                 Logger_SetFileName(right ? "s90r" : "s90l");
                 printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
-                App_ResetGyroAngle();
+                if (si == i_from && rep == 0u && dir == 0u) App_ResetGyroAngle(); // 置いた向きを 0° にする(往復の途中では決め直さない)
                 bool ok = RunOnce(&s_turns[0], right);
                 if (!ok) {
                     App_SetTargetVelocity(0.0f);

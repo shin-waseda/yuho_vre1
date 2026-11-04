@@ -8,7 +8,7 @@
 #include "interface/gyro.h"
 #include "interface/battery.h"
 #include "logic/state_estimation/kinematics.h"
-#include "logic/control/velocity_pid.h"
+#include "logic/control/drive_model.h"
 #include "logic/control/velocity_profile.h"
 #include "logic/control/wall_control.h"
 #include "app/failsafe.h"
@@ -16,22 +16,26 @@
 #include "app/log_event.h"
 
 #define DEG_TO_RAD (3.14159265f / 180.0f)
+#define MM_TO_M 0.001f
 
 static Odometry_t s_odo;
-static VelocityPID s_vpid;
+// 並進の FB の積分[m](∫e dt)と，旋回の FF の状態(F)．ISRからのみ触る．
+static float s_vs_integral = 0.0f;
+static DriveModelFF s_model;
 static WheelVelocity s_actual;
 
-// 角度・角速度のループ(外側)。ISRからのみ触る。
+// 目標の向き(旋回の FB で使う)。ISRからのみ触る。
 // 目標の向き[deg] = 迷路の軸の向き + 壁の制御のオフセット。
-// 迷路の軸の向きは、制御が無効の間は今の向きに合わせておき、有効にした時点の向きを基準に
-// プロファイルの角速度を積分して進める。止まってもリセットしない。
+// 迷路の軸の向きは、App_ResetGyroAngle() でジャイロの積分角と一緒に 0 にした時点(走りの始め)を基準に、
+// プロファイルの角速度を積分して進める。制御を止めても、尻当てで押し当てても、今の向きに合わせ直さない
+// (向きのずれを捨てずに、旋回の FB で直す)。
 // 壁の制御のオフセットは、壁に対する横のずれに比例した向きの差。ずれが 0 に戻ればオフセットも 0 に
 // 戻るので、壁で向きを直しても迷路の軸からの向きのずれが残らない。
 static float s_angle_axis_deg = 0.0f;
 static float s_wall_offset_deg = 0.0f;
 static float s_angle_ref_deg = 0.0f;
 
-// 位置のループ(外側、並進方向)。ISRからのみ触る。
+// 位置のループ(並進の FB の外側)。ISRからのみ触る。
 // 目標の距離と進んだ距離[mm]。どちらも制御が無効の間は0にしておき、有効にした時点を基準にする。
 static float s_pos_ref_mm = 0.0f;
 static float s_dist_mm = 0.0f;
@@ -83,7 +87,7 @@ static volatile bool s_start_pending = false;
 static GyroData s_gyro_raw = { 0, 0, 0 };
 static float s_gyro_z_dps = 0.0f;
 static float s_gyro_angle_deg = 0.0f; // ジャイロの積分角(起動からの累積、反時計回り正)
-// メインが立て、ISRが積分角を0にしてから下ろす(ISRの足し込みとぶつからないよう、0にするのはISR)
+// メインが立て、ISRが積分角と迷路の軸の向きを0にしてから下ろす(ISRの足し込みとぶつからないよう、0にするのはISR)
 static volatile bool s_gyro_angle_reset_req = false;
 static GyroOffset s_gyro_offset = { 0.0f, 0.0f, 0.0f };
 
@@ -100,7 +104,8 @@ static bool s_prev_enabled = false;     // ISRからのみ触る
 
 void App_ControlLoop_Init(void) {
     Odometry_Reset(&s_odo);
-    VelocityPID_Init(&s_vpid);
+    s_vs_integral = 0.0f;
+    DriveModel_Reset(&s_model);
     FailSafe_Init();
     s_gyro_offset = ICM_GetOffset(); // ICM_CalibrateBlocking()後に呼ばれる前提
     s_actual.left_mm_s = 0.0f;
@@ -360,11 +365,11 @@ static int16_t VoltageToPWM(float volt, float vbat) {
     return (int16_t)pwm;
 }
 
-// 摩擦FF用の符号。目標0のときは0(止まっている所に摩擦ぶんの電圧をかけない)。
-static float SignOf(float v) {
-    if (v > 0.0f) return 1.0f;
-    if (v < 0.0f) return -1.0f;
-    return 0.0f;
+// x を ±limit に収める
+static float Clamp(float x, float limit) {
+    if (x > limit) return limit;
+    if (x < -limit) return -limit;
+    return x;
 }
 
 // 制御していない(無効・発動中)ときのログ値。実測系は残し、出力系だけ0にする。
@@ -375,9 +380,9 @@ static void ClearOutputDebug(void) {
     s_dbg.pwm_r = 0.0f;
     s_dbg.ff_l = 0.0f;
     s_dbg.ff_r = 0.0f;
-    s_dbg.i_l = 0.0f;
-    s_dbg.i_r = 0.0f;
-    s_dbg.ang_corr_dps = 0.0f;
+    s_dbg.i_s = 0.0f;
+    s_dbg.fb_d = 0.0f;
+    s_dbg.f_ff = 0.0f;
     s_dbg.pos_corr = 0.0f;
 }
 
@@ -398,6 +403,7 @@ void App_ControlTick(void) {
     s_gyro_z_dps = GYRO_Z_SIGN * ((float)s_gyro_raw.z - s_gyro_offset.z) / GYRO_SENSITIVITY_LSB_PER_DPS;
     if (s_gyro_angle_reset_req) {
         s_gyro_angle_deg = 0.0f;
+        s_angle_axis_deg = 0.0f; // 向きの基準を決めるのはここだけ(走りの始め)
         s_gyro_angle_reset_req = false;
     }
     s_gyro_angle_deg += s_gyro_z_dps * CONTROL_DT_S;
@@ -407,7 +413,8 @@ void App_ControlTick(void) {
     bool control_active = s_enabled && !FailSafe_IsTripped();
 
     // ---- 目標の向き ----
-    // 制御が無効の間は今の向きに合わせておくので、有効にした時点の向きが基準になる。
+    // 基準は App_ResetGyroAngle() で決めた走りの始めの向き。制御が無効の間・押し当てている間は進めないだけで、
+    // 今の向きには合わせない。
     // ---- 目標の距離と進んだ距離 ----
     // 制御が無効の間はどちらも0にしておくので、有効にした時点が基準になる。
     if (control_active) {
@@ -415,12 +422,8 @@ void App_ControlTick(void) {
         s_pos_ref_mm += s_target_mm_s * CONTROL_DT_S;
         s_dist_mm += 0.5f * (s_actual.left_mm_s + s_actual.right_mm_s) * CONTROL_DT_S;
         if (!s_position_hold || s_wall_push) s_pos_ref_mm = s_dist_mm; // 位置を保たない間は、今の距離に合わせておく
-        if (s_wall_push) { // 壁に押し当てている間は、壁にそろう向きに任せる
-            s_angle_axis_deg = s_gyro_angle_deg;
-            s_wall_offset_deg = 0.0f;
-        }
+        if (s_wall_push) s_wall_offset_deg = 0.0f; // 押し当てている間は壁の制御を使わない
     } else {
-        s_angle_axis_deg = s_gyro_angle_deg;
         s_wall_offset_deg = 0.0f;
         s_pos_ref_mm = 0.0f;
         s_dist_mm = 0.0f;
@@ -467,8 +470,8 @@ void App_ControlTick(void) {
     }
     s_angle_ref_deg = s_angle_axis_deg + s_wall_offset_deg;
 
-    // ---- 位置のループ(外側、並進方向) ----
-    // v_cmd = v_ref + POSITION_KP×(s_ref − s)。出力は車輪速度の目標になる。
+    // ---- 位置のループ(並進の FB の外側) ----
+    // v_cmd = v_ref + POSITION_KP×(s_ref − s)。出力は並進の FB の目標になる。
     float pos_corr = 0.0f;
     // 角度と同じく、止まっていても常に効かせる(止まっている間も位置を保つ)
     if (POSITION_CONTROL_ENABLE && s_position_hold && !s_wall_push && control_active) {
@@ -477,46 +480,22 @@ void App_ControlTick(void) {
         if (pos_corr < -POSITION_CORR_LIMIT_MM_S) pos_corr = -POSITION_CORR_LIMIT_MM_S;
     }
 
-    // ---- 角度・角速度のループ(外側) ----
-    // ω_cmd = ω_ref + ANGLE_KP×(θ_ref − θ) + ANGULAR_KP×(ω_ref − ω)。出力は車輪速度の目標になる。
+    // ---- 目標(SI) ----
+    // FF はプロファイルの目標だけから計算する(2自由度制御．補正は FB が受け持つ)．
+    float v_ref = s_target_mm_s * MM_TO_M;
+    float a_ref = s_target_acc * MM_TO_M;
+    float v_cmd = (s_target_mm_s + pos_corr) * MM_TO_M; // 並進の FB の目標(位置の補正を含む)
     float omega_ref = s_target_omega_dps * DEG_TO_RAD;
+    float alpha_ref = s_target_alpha_dps2 * DEG_TO_RAD;
     float omega_meas = s_gyro_z_dps * DEG_TO_RAD;
-    float angle_err_deg = s_angle_ref_deg - s_gyro_angle_deg;
-    float ang_corr = 0.0f;
-    // 制御が有効な間は、止まっていても常に効かせる(止まっている間も向きを保つ)
-    if (ANGULAR_CONTROL_ENABLE && !s_wall_push && control_active) {
-        ang_corr = ANGLE_KP * angle_err_deg * DEG_TO_RAD + ANGULAR_KP * (omega_ref - omega_meas);
-        if (ang_corr > ANGULAR_CORR_LIMIT_RAD_S) ang_corr = ANGULAR_CORR_LIMIT_RAD_S;
-        if (ang_corr < -ANGULAR_CORR_LIMIT_RAD_S) ang_corr = -ANGULAR_CORR_LIMIT_RAD_S;
-    }
+    float v_meas = 0.5f * (s_actual.left_mm_s + s_actual.right_mm_s) * MM_TO_M;
 
-    // 止まるべき所で止まったら、車輪速度ループの I 項を捨てて出力0にする(摩擦で止まった後に
-    // PWM が出続けるのを防ぐ)。角度か位置の制御が有効なら、止まっている間も保つので使わない。
-    bool robot_stopped = !ANGULAR_CONTROL_ENABLE && !POSITION_CONTROL_ENABLE
-                      && (s_target_mm_s == 0.0f) && (s_target_acc == 0.0f)
-                      && (s_target_omega_dps == 0.0f) && (s_target_alpha_dps2 == 0.0f)
-                      && (fabsf(s_actual.left_mm_s)  < VELOCITY_STOP_RESET_MM_S)
-                      && (fabsf(s_actual.right_mm_s) < VELOCITY_STOP_RESET_MM_S);
-
+    // 車輪速度の目標(フェイルセーフの速度偏差とログに使う．制御には使わない)
     RobotVelocity target_robot = {
         .linear_mm_s = s_target_mm_s + pos_corr,
-        .angular_rad_s = omega_ref + ang_corr,
-    };
-    WheelVelocity target_wheel = Kinematics_RobotToWheel(target_robot);
-    // FF はプロファイルの目標だけから計算する(2自由度制御。補正は PID が受け持つ)。
-    // 補正を含めると、止まっていて補正がほぼ0のとき、摩擦FFの符号が誤差の揺れで反転してしまう。
-    RobotVelocity target_robot_ff = {
-        .linear_mm_s = s_target_mm_s,
         .angular_rad_s = omega_ref,
     };
-    WheelVelocity target_wheel_ff = Kinematics_RobotToWheel(target_robot_ff);
-    // 加速度も速度と同じ線形変換で車輪ごとに分ける(FFには目標の加速度だけを使う)。
-    RobotVelocity target_robot_acc = {
-        .linear_mm_s = s_target_acc,
-        // 回転は直進より回しにくい(機体の慣性)ので、回転の加速度の FF だけ ANGULAR_FF_ACC_SCALE 倍にする
-        .angular_rad_s = s_target_alpha_dps2 * DEG_TO_RAD * ANGULAR_FF_ACC_SCALE,
-    };
-    WheelVelocity target_wheel_acc = Kinematics_RobotToWheel(target_robot_acc);
+    WheelVelocity target_wheel = Kinematics_RobotToWheel(target_robot);
 
     FailSafeInput fs_in = {
         .battery_v = Battery_GetVoltage(),
@@ -544,7 +523,6 @@ void App_ControlTick(void) {
     s_dbg.gyro_z_dps = s_gyro_z_dps;
     s_dbg.angle_deg = s_gyro_angle_deg;
     s_dbg.angle_ref_deg = s_angle_ref_deg;
-    s_dbg.ang_corr_dps = ang_corr / DEG_TO_RAD;
     // 壁センサー(このtickの先頭で Sensor_ReadAll() が更新した値)。制御が無効の間も記録する
     s_dbg.ad_l = (float)ad_l;
     s_dbg.ad_fl = (float)ad_fl;
@@ -577,69 +555,57 @@ void App_ControlTick(void) {
         s_prev_enabled = false;
         return;
     }
-    if (!s_prev_enabled) {
-        // 有効化の立ち上がり。無効中に溜まった積分項・前回偏差を捨てる。
-        // (目標の向きは、無効の間ずっと今の向きに合わせてあるので、ここでは何もしない)
-        VelocityPID_Reset(&s_vpid);
-        s_prev_enabled = true;
-    }
-
-    // ---- 車輪速度ループ(内側) ----
-    // 2自由度制御: FFは目標(速度・加速度)だけから、PIDは偏差から。単位はどちらも電圧[V]。
-    float ff_l = VELOCITY_FF_FRIC_L * SignOf(target_wheel_ff.left_mm_s)
-               + VELOCITY_FF_GAIN_L * target_wheel_ff.left_mm_s
-               + VELOCITY_FF_ACC_L  * target_wheel_acc.left_mm_s;
-    float ff_r = VELOCITY_FF_FRIC_R * SignOf(target_wheel_ff.right_mm_s)
-               + VELOCITY_FF_GAIN_R * target_wheel_ff.right_mm_s
-               + VELOCITY_FF_ACC_R  * target_wheel_acc.right_mm_s;
-
-    // 超信地旋回(直進の目標が0で、旋回の目標がある)では、タイヤが横にこすれる摩擦を足す。
-    if (s_target_mm_s == 0.0f && s_target_acc == 0.0f && s_target_omega_dps != 0.0f) {
-        // 回る向きで必要な電圧が違うので、向きごとに分ける
-        if (s_target_omega_dps > 0.0f) {
-            // 反時計回り(左回り): 右の車輪が前へ、左が後ろへ
-            ff_l -= PIVOT_FF_FRIC_CCW_L;
-            ff_r += PIVOT_FF_FRIC_CCW_R;
-        } else {
-            // 時計回り(右回り): 左の車輪が前へ、右が後ろへ
-            ff_l += PIVOT_FF_FRIC_CW_L;
-            ff_r -= PIVOT_FF_FRIC_CW_R;
-        }
-    }
-
-    // 尻当てで壁に押し当てている間は、PID の出力の上限を下げる。車輪が壁で止まると速度の偏差が残り続け、
-    // 積分が溜まって PWM が上がり(最大の 6〜7 割)、電池の電圧が下がって低電圧の FailSafe になった(2026-10-09)。
-    // 上限に張り付くと積分は止まる(PID_Update)ので、溜まり続けることもない
-    s_vpid.output_min = s_wall_push ? -SEARCH_SETPOS_PUSH_PID_MAX_V : VELOCITY_PID_OUTPUT_MIN;
-    s_vpid.output_max = s_wall_push ? SEARCH_SETPOS_PUSH_PID_MAX_V : VELOCITY_PID_OUTPUT_MAX;
-    // 押し当てを始めた瞬間に、車輪速度の積分を捨てる。直前の超信地旋回で溜まった積分(前へ回っていた車輪は前向きに
-    // +3V ほど)が残っていると、その車輪は最初の約1秒、下がらずに前向きに押し、片側だけ下がって機体が回り、
-    // 壁にそろわなかった(2026-10-10、search_0017 / back_0011)
+    // 有効化の立ち上がりと，尻当てで押し当てを始めた瞬間に，並進の積分と F の FF を捨てる．
+    // 押し当ての始めに捨てるのは，直前の動きで溜まった積分が残ると，押す力が最初だけずれるため．
     static bool s_prev_wall_push = false;
-    if (s_wall_push && !s_prev_wall_push) VelocityPID_Reset(&s_vpid);
+    if (!s_prev_enabled || (s_wall_push && !s_prev_wall_push)) {
+        s_vs_integral = 0.0f;
+        DriveModel_Reset(&s_model);
+    }
+    s_prev_enabled = true;
     s_prev_wall_push = s_wall_push;
 
-    WheelVelocity out;
-    if (robot_stopped) {
-        // 止まるべき所で止まった。I項を捨てて出力0にし、PWMが残り続けるのを防ぐ。
-        VelocityPID_Reset(&s_vpid);
-        out.left_mm_s = 0.0f;
-        out.right_mm_s = 0.0f;
-    } else {
-        out = VelocityPID_Update(&s_vpid, target_wheel, s_actual, CONTROL_DT_S);
+    // ---- FF(モデルの逆) ----
+    float vs_ff = DriveModel_FF_Vs(v_ref, a_ref, omega_ref);
+    float vd_ff = DriveModel_FF_Vd(&s_model, v_ref, omega_ref, alpha_ref, CONTROL_DT_S);
+
+    // ---- 並進の FB(PI) ----
+    // 尻当てで壁に押し当てている間は，上限を SEARCH_SETPOS_PUSH_FB_MAX_V にし，I 項もそこまで溜められるようにする
+    // (車輪が壁で止まっても押し続け，電池の電圧が下がりすぎない程度に抑える)．
+    float i_limit = s_wall_push ? SEARCH_SETPOS_PUSH_FB_MAX_V : DRIVE_VS_I_LIMIT_V;
+    float fb_limit = s_wall_push ? SEARCH_SETPOS_PUSH_FB_MAX_V : DRIVE_VS_FB_LIMIT_V;
+    float e_v = v_cmd - v_meas;
+    s_vs_integral += e_v * CONTROL_DT_S;
+    float i_term = Clamp(DRIVE_VS_KI * s_vs_integral, i_limit);
+    s_vs_integral = i_term / DRIVE_VS_KI; // 上限に張り付いたら積分を止める
+    float vs_fb = Clamp(DRIVE_VS_KP * e_v + i_term, fb_limit);
+
+    // ---- 旋回の FB(PD．積分なし) ----
+    // 制御が有効な間は，止まっていても常に効かせる(止まっている間も向きを保つ)．
+    // 押し当てている間は止め，左右に同じ電圧をかけて機体が壁にそろうのに任せる．
+    float vd_fb = 0.0f;
+    if (ANGULAR_CONTROL_ENABLE && !s_wall_push) {
+        float angle_err_rad = (s_angle_ref_deg - s_gyro_angle_deg) * DEG_TO_RAD;
+        vd_fb = Clamp(DRIVE_VD_K_OMEGA * (omega_ref - omega_meas) + DRIVE_VD_K_THETA * angle_err_rad,
+                      DRIVE_VD_FB_LIMIT_V);
     }
+    if (s_wall_push) vd_ff = 0.0f;
+
+    float vs = vs_ff + vs_fb;
+    float vd = vd_ff + vd_fb;
 
     if (vbat < VELOCITY_VBAT_MIN_V) vbat = VELOCITY_VBAT_MIN_V;
 
-    s_pwm.left  = VoltageToPWM(ff_l + out.left_mm_s,  vbat);
-    s_pwm.right = VoltageToPWM(ff_r + out.right_mm_s, vbat);
+    s_pwm.left  = VoltageToPWM(vs - vd, vbat);
+    s_pwm.right = VoltageToPWM(vs + vd, vbat);
 
     s_dbg.pwm_l = (float)s_pwm.left;
     s_dbg.pwm_r = (float)s_pwm.right;
-    s_dbg.ff_l = ff_l;
-    s_dbg.ff_r = ff_r;
-    s_dbg.i_l = s_vpid.left.ki  * s_vpid.left.integral;
-    s_dbg.i_r = s_vpid.right.ki * s_vpid.right.integral;
+    s_dbg.ff_l = vs_ff - vd_ff;
+    s_dbg.ff_r = vs_ff + vd_ff;
+    s_dbg.i_s = i_term;
+    s_dbg.fb_d = vd_fb;
+    s_dbg.f_ff = s_model.f_ff;
 
     Motor_Drive(s_pwm.left, s_pwm.right);
 }

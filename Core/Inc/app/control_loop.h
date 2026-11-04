@@ -7,7 +7,7 @@
 #include "logic/state_estimation/odometry.h"
 #include "interface/gyro.h"
 
-// VelocityPID/Odometry/フェイルセーフの初期化とジャイロオフセットの取り込み。
+// 並進・旋回の制御/Odometry/フェイルセーフの初期化とジャイロオフセットの取り込み。
 // ICM_CalibrateBlocking()の後、HAL_TIM_Base_Start_IT(&htim6)の前に、
 // main()から1回呼ぶこと。
 void App_ControlLoop_Init(void);
@@ -50,7 +50,7 @@ uint32_t App_GetWallEdge(uint8_t *side, float *pos_ref_mm);
 void App_SetPositionHold(bool en);
 
 // 尻当て用。true の間は向きと位置の補正を止め(目標の向き・距離は今の値に合わせ続ける)、
-// 車輪速度のループだけで動かす。壁に押し当てたとき、機体が壁にそろう向きを打ち消さないため。
+// 並進の FB だけで動かす(旋回の FF・FB は止め，左右に同じ電圧をかける)。壁に押し当てたとき、機体が壁にそろう向きを打ち消さないため。
 void App_SetWallPush(bool en);
 
 // 壁の制御を使うかどうか(起動時は true)。WALL_CONTROL_ENABLE が 1 のときだけ効く。
@@ -98,8 +98,9 @@ float App_GetGyroAngle_deg(void);
 // 測り直したゼロ点[LSB]を返す。割り込みが動いていないなどで測れなければ、元のゼロ点を返す。
 float App_RecalibrateGyroZ(uint32_t ms);
 
-// ジャイロの積分角(App_GetGyroAngle_deg)を0に戻す(次のtickでISRが0にするまで待つ)。
-// 制御を無効にしているときに呼ぶこと(有効な間に呼ぶと、目標の向きとの差が急に変わる)。
+// ジャイロの積分角(App_GetGyroAngle_deg)と目標の向き(迷路の軸の向き)を0に戻す(次のtickでISRが0にするまで待つ)。
+// 向きの基準を決めるのはこれだけなので、手で置いて走り出す前(走りの始め)に1回呼ぶ。走りの途中では呼ばない。
+// 制御を無効にしているときに呼ぶこと。
 void App_ResetGyroAngle(void);
 
 // ログ用。App_ControlTick()が毎tick更新する値(すべてfloat)。
@@ -112,16 +113,17 @@ typedef struct {
     float pos_corr;    // 位置のループの補正量[mm/s](目標速度に足した分)
     float x_mm;        // オドメトリのX[mm]
     float vl, vr;      // 実車輪速度[mm/s]
-    float vl_ref, vr_ref; // 車輪速度の目標[mm/s](角速度の補正を含む。車輪速度ループに渡す値)
+    float vl_ref, vr_ref; // 車輪速度の目標[mm/s](位置の補正を含む。フェイルセーフの速度偏差に使う)
     float pwm_l, pwm_r;
-    float ff_l, ff_r;  // FF項[V] (速度FF + 加速度FF)
-    float i_l, i_r;    // PIDのI項[V]
+    float ff_l, ff_r;  // 車輪ごとの FF[V](V_s,ff ∓ V_d,ff．モデルの逆)
+    float i_s;         // 並進の FB の I 項[V]
+    float fb_d;        // 旋回の FB[V](V_d に足した分)
     float vbat;        // フィルタ後の電池電圧[V]
     float target_omega_dps; // 目標角速度(プロファイル)
     float gyro_z_dps;       // ジャイロの角速度
     float angle_deg;        // ジャイロの積分角(起動からの累積)
     float angle_ref_deg;    // 目標の向き(angle_deg と同じ基準。止まってもリセットしない)
-    float ang_corr_dps;     // 角速度ループの補正量(目標角速度に足した分)
+    float f_ff;             // 旋回の FF のうち，タイヤが横にこする分 F[V]
     float ad_l, ad_fl, ad_fr, ad_r; // 壁センサーの値(IR 点灯 − 消灯の差。ad_* を float にしたもの)
     float wall_offset_deg;  // 壁の制御のオフセット[deg](目標の向き = 迷路の軸の向き + これ)
 } ControlDebug;

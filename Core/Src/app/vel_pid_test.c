@@ -30,8 +30,8 @@ static void SetupLogger(void) {
     Logger_AddField("pwm_r", &d->pwm_r);
     Logger_AddField("ff_l", &d->ff_l);
     Logger_AddField("ff_r", &d->ff_r);
-    Logger_AddField("i_l", &d->i_l);
-    Logger_AddField("i_r", &d->i_r);
+    Logger_AddField("i_s", &d->i_s);
+    Logger_AddField("f_ff", &d->f_ff);
     Logger_AddField("vbat", &d->vbat);
     Logger_SetDuration(VEL_PID_TEST_TOTAL_MS);
 }
@@ -64,9 +64,9 @@ static void RunOnce(void) {
 void VelPIDTest_Run(void) {
     printf("VEL PID TEST: 0 -> %.1f mm/s (%d ms) -> 0, total %d ms\r\n",
            VEL_PID_TEST_TARGET_HIGH_MM_S, VEL_PID_TEST_STEP_MS, VEL_PID_TEST_TOTAL_MS);
-    printf("KP=%.4f KI=%.4f KD=%.4f [V]\r\n", VELOCITY_KP, VELOCITY_KI, VELOCITY_KD);
-    printf("FF L: fric=%.3f gain=%.5f / R: fric=%.3f gain=%.5f [V]\r\n",
-           VELOCITY_FF_FRIC_L, VELOCITY_FF_GAIN_L, VELOCITY_FF_FRIC_R, VELOCITY_FF_GAIN_R);
+    printf("VS: KP=%.2f KI=%.1f (I max %.2f V)\r\n", DRIVE_VS_KP, DRIVE_VS_KI, DRIVE_VS_I_LIMIT_V);
+    printf("MODEL: a=%.3f V0=%.3f b=%.3f c=%.4f D=%.3f [V]\r\n",
+           MODEL_A, MODEL_V0, MODEL_B, MODEL_C, MODEL_D);
 
     if (FailSafe_IsTripped()) FailSafe_Halt(); // 起動時の低電圧など
 
@@ -78,6 +78,7 @@ void VelPIDTest_Run(void) {
         HAL_Delay(VEL_PID_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
         // 機体が止まっている間に、ジャイロのゼロ点を測り直す(起動時の補正からずれていることがある)
         printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
+        App_ResetGyroAngle(); // 置いた向きを 0° にする(向きの基準を決めるのは走りの始めだけ)
 
         RunOnce();
         printf("done: %lu samples x %lu fields (recordable %lu ms)\r\n",
