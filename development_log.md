@@ -3174,3 +3174,11 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
   - 尻当て(`SetPosition`)は残っている．押し当てで壁にそろって変わった向きは，有効にし直した後に旋回の FB(±1.5V)が走りの始めの基準へ戻す．
     距離を 0 にし直す処理と，壁の制御・壁切れはそのまま．
   - 結果: ビルドも実機もまだ(未確認)．
+
+### 2026-11-04 ブランチと worktree を整理した(`master`)
+
+- `feature/model-based-control` と `feature/maze-sim-package`(`feature/log-viewer-package` を含む)を，未コミットの分をコミットしてから `master` へ `--no-ff` でマージした(ユーザーの依頼．未ビルドのまま)．
+  開発日記の衝突は両方を残し，日付の順に並べた．プッシュはしていない．
+- worktree `yuho-model` は外した．走行系の続きは yuho 本体で行う．
+- 残した worktree: `sim`(`feature/plant-model-fit`．クラッシュしうる迷路シミュレータ)，`yuho-sysid`(`feature/system-identification`．同定のやり方の検討)．
+- 気づいたこと(直していない): `tools/matlab/study/` の study1・3・4 は，消した `VELOCITY_FF_*`・`VELOCITY_KP` を `params.h` から読むので，今の master では動かない．
