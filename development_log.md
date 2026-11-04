@@ -3182,3 +3182,11 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
 - worktree `yuho-model` は外した．走行系の続きは yuho 本体で行う．
 - 残した worktree: `sim`(`feature/plant-model-fit`．クラッシュしうる迷路シミュレータ)，`yuho-sysid`(`feature/system-identification`．同定のやり方の検討)．
 - 気づいたこと(直していない): `tools/matlab/study/` の study1・3・4 は，消した `VELOCITY_FF_*`・`VELOCITY_KP` を `params.h` から読むので，今の master では動かない．
+- 続き(ユーザーの依頼):
+  - Python のログビューア `tools/log_viewer.py` を消した(MATLAB の配布版 `mouse_log_viewer` に一本化)．
+  - plant_sim(クラッシュしうる迷路シミュレータ)を別リポジトリ `M:/User/Desktop/school/club/plant-sim`(ブランチ main，リモートなし)へ分けた．
+    worktree `sim` の未コミットの分を `feature/plant-model-fit` にコミット(2ad7aa2)してから，`tools/plant_sim` を一番上に，
+    `docs/plant_sim_*.md` と `tools/maze_sim/sim_core.c/h`(そのブランチの版)を写した．ファームウェアは `fw_root.local` か `YUHO_FW` で yuho を指す
+    (前は無ければ `../..` を使ったが，止まるようにした)．`build/`(走らせた結果・迷路)と `fw_root.local` も写した．worktree `sim` は外した．
+  - 残った worktree は `yuho`(master．モデルで動く機体)と `yuho-sysid`(同定のやり方の検討)．
+  - plant_sim は今の master(モデルの FF+FB，`pid.c` などを消した)でビルドできるか，機体のモデルと合うかは確かめていない．
