@@ -30,6 +30,16 @@ void App_StartStraightAD(float distance_mm, float v_max, float v_end, float acce
 // 実際の開始は次のtick。完了はApp_IsMotionDone()で見る。制御が有効でないと進まない。
 void App_StartPivot(float angle_deg, float omega_max_dps, float alpha_dps2);
 
+// 区画の真ん中で前の壁に向いて止まっている所で、前の壁センサーが基準(FRONT_ALIGN_REF_*)になるよう、
+// その場で前後と向きを合わせる(止まって終わる)。合わせた分は目標の距離と目標の向きにも入る。
+// 実際の開始は次のtick。完了はApp_IsMotionDone()で見る(最長 FRONT_ALIGN_TIMEOUT_MS)。結果は LOG_EV_FRONT_ALIGN。
+void App_StartFrontAlign(void);
+
+// 目標の位置に対する推定の位置のずれ[mm](2次元。目標の向きに対して)。位置のループは前後のずれを、
+// 横のずれの FB は横のずれを、いつも消そうとしている。
+float App_GetPositionError(void); // 前後(+ なら目標が前)
+float App_GetLateralError(void);  // 横(+ なら機体が左)
+
 // スラローム(並進しながら曲がる)。今の並進の目標速度をそのまま保ち、角速度だけを台形で動かして
 // angle_deg 回る(正=反時計回り)。走っている最中(直進のプロファイルが終わって等速のとき)に呼ぶこと。
 // 実際の開始は次のtick。完了(回り終わった)はApp_IsMotionDone()で見る。並進の速さは回った後も保つ。
@@ -110,7 +120,8 @@ typedef struct {
     float target_omega_dps; // 目標角速度(プロファイル)
     float gyro_z_dps;       // ジャイロの角速度
     float angle_deg;        // ジャイロの積分角(起動からの累積)
-    float angle_ref_deg;    // 目標の向き(angle_deg と同じ基準。止まってもリセットしない)
+    float angle_ref_deg;    // 目標の向き(angle_deg と同じ基準。止まってもリセットしない。横のずれのずらしは含まない)
+    float lat_err_mm;       // 横のずれ[mm](目標の位置に対する推定の位置。目標の向きの左 +)
     float f_ff;             // 旋回の FF のうち，タイヤが横にこする分 F[V]
     float ad_l, ad_fl, ad_fr, ad_r; // 壁センサーの値(IR 点灯 − 消灯の差。ad_* を float にしたもの)
     // 6軸(機体の座標: x 前、y 左、z 上。logic/state_estimation/imu)。制御には使わず、ログに残すだけ。

@@ -259,10 +259,53 @@ static bool Pivot(float angle_deg) {
     return true;
 }
 
+// 真ん中で前の壁に向いて止まっている所で、前の壁で前後と向きを合わせる。合わせた所を区画の真ん中とする
+static bool FrontAlign(DrivePos *dp) {
+    DelayWatching(SEARCH_TURN_WAIT_MS);
+    App_StartFrontAlign();
+    if (!WaitMotionDone()) return false;
+    dp->ref_mm = App_GetTargetDistance();
+    return true;
+}
+
+// 止まったまま、目標の位置に対する2次元の前後のずれが小さくなるのを待つ(エンコーダとジャイロで見たずれ。壁は使わない)。
+// 位置のループはいつも2次元の前後のずれを消そうとしているので、待つだけでその分前後に動く。
+// 90° 回った後なら、それまでの横のずれを消すことになる。目標の距離は動かさないので、dp->ref_mm(区画の真ん中)はそのまま
+static bool AlongSync(void) {
+    DelayWatching(SEARCH_TURN_WAIT_MS);
+    Ev(LOG_EV_ALONG_SYNC, App_GetPositionError(), App_GetLateralError(), 0.0f, 0.0f, 0.0f);
+    uint32_t t0 = HAL_GetTick();
+    while (fabsf(App_GetPositionError()) > ALONG_SYNC_TOL_MM) {
+        CheckFailSafe();
+        PollLog();
+        if (HAL_GetTick() - t0 > ALONG_SYNC_TIMEOUT_MS) break; // 小さくならなくても次へ進む
+        HAL_Delay(1);
+    }
+    return true;
+}
+
 // 真ん中で 180° 向きを変える(探索の行き止まり・ゴール・スタート、最短走行のゴール)。真ん中にいること。
-// 補正をやめた(2026-11-04)ので、尻当てはせず、その場で超信地旋回するだけ。
-static bool TurnBack(void) {
-    return Pivot(180.0f);
+// 前壁合わせを切っているとき(SEARCH_FRONT_ALIGN_ENABLE 0): 前後のずれを消す → 左へ 90° → 前後のずれ(それまでの横のずれ)
+// を消す → 左へ 90°
+// (SEARCH_TURN_BACK_SPLIT 0 なら、その場で 180° 回るだけ)。
+// 前壁合わせを使うとき: walls は今の区画の壁(今の向きから見て)。超信地旋回で位置がずれて壁に当たらないよう(2026-11-04)、
+// 前の壁で合わせる → 横の壁のほうへ 90° → その壁(前になる)で合わせる → 90°(横の壁は左を先に使う)。
+// 壁がない所は合わせを飛ばす(どこにも壁がなければ、その場で 180° 回るだけ)。
+static bool TurnBack(DrivePos *dp, WallObservation walls) {
+    if (!SEARCH_FRONT_ALIGN_ENABLE) {
+        if (!SEARCH_TURN_BACK_SPLIT) return Pivot(180.0f);
+        return AlongSync() && Pivot(90.0f) && AlongSync() && Pivot(90.0f);
+    }
+    if (walls.front && !FrontAlign(dp)) return false;
+    float side = walls.left ? 90.0f : walls.right ? -90.0f : 0.0f;
+    if (side == 0.0f) return Pivot(180.0f);
+    return Pivot(side) && FrontAlign(dp) && Pivot(side);
+}
+
+// 壁を見ない 180°(最短走行のゴール。壁の観測を持っていない)
+static bool TurnBackNoWalls(DrivePos *dp) {
+    WallObservation none = { false, false, false };
+    return TurnBack(dp, none);
 }
 
 // 走り始め: 機体は後ろの壁に尾を付けて手で置く(押し当てはしない。2026-11-04)。
@@ -607,7 +650,7 @@ static bool SearchLoop(const DrivePos *dp_start, WallObservation obs, WallSensor
                 }
                 break;
             case ACTION_TURN_BACK:
-                ok = StopAtCenter(&dp) && TurnBack()
+                ok = StopAtCenter(&dp) && TurnBack(&dp, obs)
                   && GoToNextBoundary(&dp, 1, &obs, &sv);
                 break;
             case ACTION_STOP:
@@ -627,7 +670,7 @@ static bool SearchLoop(const DrivePos *dp_start, WallObservation obs, WallSensor
                     App_ControlLoop_SetEnabled(false);
                     return true;
                 }
-                ok = TurnBack();
+                ok = TurnBack(&dp, obs);
                 if (!ok) break;
                 LED_SetDirectPattern(LED_DIRECT_ALL);
                 DelayWatching(SEARCH_GOAL_WAIT_MS);
@@ -973,7 +1016,7 @@ static bool RunFastSlalom(const RunList *list) {
     if (ok) {
         dp.ref_mm = ref;
         dp.at_center = true;
-        ok = TurnBack(); // ゴールの真ん中で 180°
+        ok = TurnBackNoWalls(&dp); // ゴールの真ん中で 180°
     }
     if (ok) {
         LED_SetDirectPattern(LED_DIRECT_ALL);
@@ -1037,7 +1080,7 @@ static bool RunFast(void) {
             cells = 1;
         }
     }
-    if (ok) ok = TurnBack(); // ゴールの真ん中で 180°
+    if (ok) ok = TurnBackNoWalls(&dp); // ゴールの真ん中で 180°
     if (ok) {
         LED_SetDirectPattern(LED_DIRECT_ALL);
         DelayWatching(SEARCH_GOAL_WAIT_MS);

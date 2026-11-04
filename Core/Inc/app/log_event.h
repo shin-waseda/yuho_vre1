@@ -31,6 +31,8 @@ typedef enum {
     LOG_EV_MOTION_DONE = 23,  // a:motion
     LOG_EV_SET_VELOCITY = 24, // a:v
     LOG_EV_PIVOT_SETTLE = 25, // a:ok b:err_deg c:ms
+    LOG_EV_FRONT_ALIGN = 26,  // a:ok b:err_mm c:err_deg d:ms
+    LOG_EV_ALONG_SYNC = 27,   // a:along_mm b:lat_mm
     // ---- 動き(search_run などが出す、意味のある単位) ----
     LOG_EV_TURN_KIND = 30,    // a:kind b:right c:pre d:post
     LOG_EV_SETPOS = 31,       // a:phase
@@ -68,7 +70,11 @@ typedef enum {
 // LOG_EV_MAP_CELLS: 機体の壁の地図(WallMap の cell、1区画1バイト)。index は最初の区画の番号(y × MAZE_SIZE + x)、
 //   w0〜w3 は続く区画を2つずつ(下位8bit が先、上位8bit が次)入れた値。1つで8区画、全部で MAZE_SIZE² / 8 個。
 //   (CSV は有効数字6桁なので、1つの値は 16bit まで)
-// LOG_EV_SETPOS の phase: 0 始め, 1 終わり。LOG_EV_MOTION_DONE の motion: 0 直進, 1 超信地旋回, 2 スラローム。
+// LOG_EV_SETPOS の phase: 0 始め, 1 終わり。LOG_EV_MOTION_DONE の motion: 0 直進, 1 超信地旋回, 2 スラローム, 3 前壁合わせ。
+// LOG_EV_ALONG_SYNC: 探索の 180° を 90° + 90° に分けたとき、止まって前後のずれを消し始める時の、目標の向きに対する
+//   前後のずれ(+ 目標が前)と横のずれ(+ 機体が左)[mm]。回る前と、1回目の 90° の後(along がそれまでの横のずれ)に入る。
+// LOG_EV_FRONT_ALIGN: 前の壁で合わせた結果。ok は 1 合った / 0 打ち切った、err_mm は終わった時の前後のずれ(+ 壁に近い)、
+//   err_deg は向きのずれ(+ 左を向いている)、ms はかかった時間。この後に MOTION_DONE が入る。
 // LOG_EV_PIVOT_SETTLE: 超信地旋回の台形が終わった後の合わせ込みの結果。ok は 1 合った / 0 打ち切った、
 //   err_deg は終わった時の角度の差(目標 − ジャイロ)、ms は台形が終わってからの時間。この後に MOTION_DONE が入る。
 // LOG_EV_RUN_TYPE の kind: 0 探索の曲がり方(0 PIVOT, 1 SMALL), 1 最短走行(0 PIVOT, 1 SMALL, 2 LARGE)。

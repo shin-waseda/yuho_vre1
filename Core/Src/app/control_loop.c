@@ -16,6 +16,7 @@
 #include "app/log_event.h"
 
 #define DEG_TO_RAD (3.14159265f / 180.0f)
+#define RAD_TO_DEG (180.0f / 3.14159265f)
 #define MM_TO_M 0.001f
 
 static Odometry_t s_odo;
@@ -36,6 +37,15 @@ static float s_pos_ref_mm = 0.0f;
 static float s_dist_mm = 0.0f;
 static volatile bool s_position_hold = true; // メインが書き、ISRが読む
 
+// 横のずれの FB。目標の位置と推定の位置[mm](向き 0 を +x、左を +y)。目標の距離と同じく、
+// 制御が無効の間は0にしておき、有効にした時点を基準にする。ISRからのみ触る。
+static float s_ref_x = 0.0f, s_ref_y = 0.0f;
+static float s_est_x = 0.0f, s_est_y = 0.0f;
+static float s_lat_ofs_deg = 0.0f; // 目標の向きに足すずらし Δθ[deg]
+// 目標の位置に対する推定の位置のずれ[mm](目標の向きの前後: + なら目標が前、横: + なら機体が左)。ISRが書き、メインが読む
+static volatile float s_along_err_mm = 0.0f;
+static volatile float s_lat_err_mm = 0.0f;
+
 // 目標(並進・回転)。プロファイル実行中はISRが毎tick書き換える。
 static float s_target_mm_s = 0.0f;
 static float s_target_acc = 0.0f;
@@ -50,6 +60,7 @@ typedef enum {
     MOTION_STRAIGHT,
     MOTION_PIVOT,
     MOTION_SLALOM,
+    MOTION_FRONT_ALIGN, // 前の壁で合わせる(プロファイルは使わない。UpdateFrontAlign が目標を決める)
 } MotionType;
 
 static VelocityProfile s_profile;
@@ -63,6 +74,12 @@ static volatile bool s_motion_done = true;
 static volatile bool s_pivot_settling = false;
 static float s_settle_integral = 0.0f; // ∫(θ_ref − θ)dt [rad·s]。ISRからのみ触る
 static uint32_t s_settle_ticks = 0;
+static float s_settle_prev_err = 0.0f; // 前のtickの角度の差[rad](0 を越えたかを見る)
+
+// 前の壁で合わせる間。ISRが立てて下ろす(新しい指令でメインも下ろす)。
+static volatile bool s_front_aligning = false;
+static uint32_t s_align_ticks = 0;    // ISRからのみ触る
+static uint32_t s_align_ok_ticks = 0; // 続けて合っている tick 数
 
 // メイン→ISRへの走行指令の受け渡し。パラメータを書いてから最後にフラグを立て、
 // ISRは次のtickでフラグを見て取り込む(取り込み中にメインが書き換えることはない)。
@@ -111,6 +128,7 @@ void App_SetTargetVelocity(float mm_s) {
     s_start_pending = false;
     s_profile_active = false;
     s_pivot_settling = false;
+    s_front_aligning = false;
     s_motion_done = true;
     s_target_acc = 0.0f;
     s_target_omega_dps = 0.0f;
@@ -147,6 +165,26 @@ void App_StartPivot(float angle_deg, float omega_max_dps, float alpha_dps2) {
     s_motion_done = false;
     s_start_pending = true; // 最後に立てる
     Logger_Event(LOG_EV_PIVOT, angle_deg, omega_max_dps, alpha_dps2, 0.0f, 0.0f);
+}
+
+void App_StartFrontAlign(void) {
+    s_pending.type = MOTION_FRONT_ALIGN;
+    s_pending.distance = 0.0f;
+    s_pending.v_max = 0.0f;
+    s_pending.v_end = 0.0f;
+    s_pending.accel = 0.0f;
+    s_pending.decel = 0.0f;
+    s_pending.sign = 1.0f;
+    s_motion_done = false;
+    s_start_pending = true; // 最後に立てる
+}
+
+float App_GetPositionError(void) {
+    return s_along_err_mm;
+}
+
+float App_GetLateralError(void) {
+    return s_lat_err_mm;
 }
 
 void App_StartSlalom(float angle_deg, float omega_max_dps, float alpha_dps2) {
@@ -217,8 +255,23 @@ static float Clamp(float x, float limit) {
 static void UpdateProfile(void) {
     if (s_start_pending) {
         s_pivot_settling = false; // 合わせ込みの途中でも、新しい指令が来たらやめる
+        s_front_aligning = false;
         s_profile_type = s_pending.type;
         s_profile_sign = s_pending.sign;
+        s_start_pending = false;
+        if (s_profile_type == MOTION_FRONT_ALIGN) {
+            // その場で合わせる(止まっている所から。目標は UpdateFrontAlign が毎tick決める)
+            s_profile_active = false;
+            s_target_mm_s = 0.0f;
+            s_target_acc = 0.0f;
+            s_target_omega_dps = 0.0f;
+            s_target_alpha_dps2 = 0.0f;
+            s_align_ticks = 0;
+            s_align_ok_ticks = 0;
+            s_front_aligning = true;
+            Logger_Event(LOG_EV_FRONT_ALIGN, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f); // 始め(ok = −1)
+            return;
+        }
         float v_start = 0.0f;
         if (s_profile_type == MOTION_STRAIGHT) {
             // 走りながら次の直進へつなげられるように(同じ向きに動いているときだけ今の速さから)
@@ -235,7 +288,6 @@ static void UpdateProfile(void) {
         VelocityProfile_StartAD(&s_profile, s_pending.distance, v_start,
                                 s_pending.v_max, s_pending.v_end, s_pending.accel, s_pending.decel);
         s_profile_active = true;
-        s_start_pending = false;
     }
     if (!s_profile_active || !s_enabled) return;
 
@@ -256,6 +308,7 @@ static void UpdateProfile(void) {
             // 超信地旋回はジャイロの角度が合うまで終わりにしない(UpdatePivotSettle が終わらせる)
             s_settle_integral = 0.0f;
             s_settle_ticks = 0;
+            s_settle_prev_err = 0.0f;
             s_pivot_settling = true;
         } else {
             s_motion_done = true;
@@ -266,10 +319,12 @@ static void UpdateProfile(void) {
 
 // 超信地旋回の合わせ込みを1tick進め、旋回の FB に足す積分の項[V]を返す(合わせ込みの間でなければ0)。
 // 角度の差と角速度がどちらも小さくなるか、PIVOT_SETTLE_TIMEOUT_MS を過ぎたら、積分を捨てて終わりにする。
+// 角度の差が 0 を越えたら(行き過ぎたら)積分を捨てる(2026-11-04)。積分が残ったままだと反対側へ押し続け、
+// 摩擦で止まった所から戻るのに時間がかかって打ち切りになっていた(search_0014 で +1.4° → −1.2°)。
 static float UpdatePivotSettle(float angle_err_rad) {
     if (!s_pivot_settling) return 0.0f;
     s_settle_ticks++;
-    float err_deg = s_angle_ref_deg - s_gyro_angle_deg;
+    float err_deg = angle_err_rad * RAD_TO_DEG;
     float ms = (float)s_settle_ticks * CONTROL_DT_S * 1000.0f;
     bool ok = (fabsf(err_deg) <= PIVOT_SETTLE_TOL_DEG) && (fabsf(s_gyro_z_dps) <= PIVOT_SETTLE_OMEGA_DPS);
     if (ok || ms >= (float)PIVOT_SETTLE_TIMEOUT_MS) {
@@ -280,10 +335,42 @@ static float UpdatePivotSettle(float angle_err_rad) {
         Logger_Event(LOG_EV_MOTION_DONE, (float)MOTION_PIVOT, 0.0f, 0.0f, 0.0f, 0.0f);
         return 0.0f;
     }
+    if (s_settle_prev_err * angle_err_rad < 0.0f) s_settle_integral = 0.0f; // 0 を越えた
+    s_settle_prev_err = angle_err_rad;
     s_settle_integral += angle_err_rad * CONTROL_DT_S;
     float i_term = Clamp(PIVOT_SETTLE_KI * s_settle_integral, PIVOT_SETTLE_I_LIMIT_V);
     s_settle_integral = i_term / PIVOT_SETTLE_KI; // 上限に張り付いたら積分を止める
     return i_term;
+}
+
+// 前の壁で合わせるのを1tick進める(制御が有効なときだけ)。前の壁センサーから前後[mm]と向き[deg]のずれを出し、
+// それを打ち消す速さと角速度を目標にする(目標の距離・目標の向きはふつうどおり目標から積むので、合わせた分も入る)。
+// 両方が FRONT_ALIGN_HOLD_MS 続けて合うか、FRONT_ALIGN_TIMEOUT_MS を過ぎたら、止めて終わりにする。
+static void UpdateFrontAlign(void) {
+    if (!s_front_aligning || !s_enabled) return;
+    s_align_ticks++;
+    float fl = (float)ad_fl;
+    float fr = (float)ad_fr;
+    float err_mm = (fl + fr - FRONT_ALIGN_REF_SUM) / FRONT_ALIGN_SUM_PER_MM;                // + 壁に近い
+    float err_deg = FRONT_ALIGN_ANGLE_ENABLE
+                  ? (fl - fr - FRONT_ALIGN_REF_DIFF) / FRONT_ALIGN_DIFF_PER_DEG : 0.0f;    // + 左を向いている
+    bool ok = (fabsf(err_mm) <= FRONT_ALIGN_TOL_MM) && (fabsf(err_deg) <= FRONT_ALIGN_TOL_DEG);
+    s_align_ok_ticks = ok ? s_align_ok_ticks + 1u : 0u;
+    float ms = (float)s_align_ticks * CONTROL_DT_S * 1000.0f;
+    bool held = (float)s_align_ok_ticks * CONTROL_DT_S * 1000.0f >= (float)FRONT_ALIGN_HOLD_MS;
+    if (held || ms >= (float)FRONT_ALIGN_TIMEOUT_MS) {
+        s_front_aligning = false;
+        s_target_mm_s = 0.0f;
+        s_target_omega_dps = 0.0f;
+        s_motion_done = true;
+        Logger_Event(LOG_EV_FRONT_ALIGN, held ? 1.0f : 0.0f, err_mm, err_deg, ms, 0.0f);
+        Logger_Event(LOG_EV_MOTION_DONE, (float)MOTION_FRONT_ALIGN, 0.0f, 0.0f, 0.0f, 0.0f);
+        return;
+    }
+    s_target_mm_s = Clamp(-FRONT_ALIGN_KV * err_mm, FRONT_ALIGN_V_MAX_MM_S);
+    s_target_omega_dps = Clamp(-FRONT_ALIGN_KW * err_deg, FRONT_ALIGN_W_MAX_DPS);
+    s_target_acc = 0.0f;
+    s_target_alpha_dps2 = 0.0f;
 }
 
 // 有効化はSTBY→フラグ、無効化はフラグ→STBYの順にする。
@@ -426,6 +513,7 @@ void App_ControlTick(void) {
     s_gyro_angle_deg += s_gyro_z_dps * CONTROL_DT_S;
 
     UpdateProfile();
+    UpdateFrontAlign();
 
     bool control_active = s_enabled && !FailSafe_IsTripped();
 
@@ -438,9 +526,23 @@ void App_ControlTick(void) {
         s_pos_ref_mm += s_target_mm_s * CONTROL_DT_S;
         s_dist_mm += 0.5f * (s_actual.left_mm_s + s_actual.right_mm_s) * CONTROL_DT_S;
         if (!s_position_hold) s_pos_ref_mm = s_dist_mm; // 位置を保たない間は、今の距離に合わせておく
+        // 目標の位置は目標の速さと目標の向き、推定の位置は進んだ距離とジャイロの角度で積む
+        float th_r = s_angle_ref_deg * DEG_TO_RAD;
+        float th_e = s_gyro_angle_deg * DEG_TO_RAD;
+        float v_e = 0.5f * (s_actual.left_mm_s + s_actual.right_mm_s);
+        s_ref_x += s_target_mm_s * CONTROL_DT_S * cosf(th_r);
+        s_ref_y += s_target_mm_s * CONTROL_DT_S * sinf(th_r);
+        s_est_x += v_e * CONTROL_DT_S * cosf(th_e);
+        s_est_y += v_e * CONTROL_DT_S * sinf(th_e);
+        if (!s_position_hold) { // 位置を保たない間は、横も今の位置に合わせておく
+            s_ref_x = s_est_x;
+            s_ref_y = s_est_y;
+        }
     } else {
         s_pos_ref_mm = 0.0f;
         s_dist_mm = 0.0f;
+        s_ref_x = s_ref_y = 0.0f;
+        s_est_x = s_est_y = 0.0f;
     }
 
     // ---- 壁切れ(横の壁がなくなった瞬間)を見つける ----
@@ -450,12 +552,34 @@ void App_ControlTick(void) {
     UpdateWallEdge(&s_edge_l, ad_l, WALL_TH_L, 0u, moving_straight);
     UpdateWallEdge(&s_edge_r, ad_r, WALL_TH_R, 1u, moving_straight);
 
+    // ---- 横のずれ(目標の位置に対する推定の位置。目標の向きの左 +) ----
+    // 直進している間だけ、ずれを目標の向きのずらし Δθ にして返す(それ以外は 0 へ戻す)。Δθ は速さの上限つきで動かす
+    float lat_err_mm;
+    {
+        float th_r = s_angle_ref_deg * DEG_TO_RAD;
+        float ex = s_est_x - s_ref_x;
+        float ey = s_est_y - s_ref_y;
+        lat_err_mm = -ex * sinf(th_r) + ey * cosf(th_r);
+        s_lat_err_mm = lat_err_mm;
+        s_along_err_mm = -(ex * cosf(th_r) + ey * sinf(th_r)); // 前後のずれ(+ なら目標が前)。位置のループが使う
+        float ofs_target = 0.0f;
+        if (LATERAL_CONTROL_ENABLE && moving_straight && !s_front_aligning) {
+            ofs_target = Clamp(-lat_err_mm / LATERAL_L_MM * RAD_TO_DEG, LATERAL_OFS_MAX_DEG);
+        }
+        float step = LATERAL_OFS_RATE_DPS * CONTROL_DT_S;
+        s_lat_ofs_deg += Clamp(ofs_target - s_lat_ofs_deg, step);
+        if (!control_active) s_lat_ofs_deg = 0.0f;
+    }
+
     // ---- 位置のループ(並進の FB の外側) ----
-    // v_cmd = v_ref + POSITION_KP×(s_ref − s)。出力は並進の FB の目標になる。
+    // v_cmd = v_ref + POSITION_KP×(前後のずれ)。出力は並進の FB の目標になる。
+    // 前後のずれは2次元(目標の位置に対する推定の位置を、目標の向きに投影した分)で見る(2026-11-04)。
+    // 道に沿った距離(pos_ref − dist)だと、曲がる前の横のずれが曲がった後に前後のずれになっても見えず、
+    // 小回りのたびに横と前後を行き来して消えなかった(search_0014 で 20〜25mm が約 4 秒残った)。
     float pos_corr = 0.0f;
     // 角度と同じく、止まっていても常に効かせる(止まっている間も位置を保つ)
     if (POSITION_CONTROL_ENABLE && s_position_hold && control_active) {
-        pos_corr = POSITION_KP * (s_pos_ref_mm - s_dist_mm);
+        pos_corr = POSITION_KP * s_along_err_mm;
         if (pos_corr > POSITION_CORR_LIMIT_MM_S) pos_corr = POSITION_CORR_LIMIT_MM_S;
         if (pos_corr < -POSITION_CORR_LIMIT_MM_S) pos_corr = -POSITION_CORR_LIMIT_MM_S;
     }
@@ -503,6 +627,7 @@ void App_ControlTick(void) {
     s_dbg.gyro_z_dps = s_gyro_z_dps;
     s_dbg.angle_deg = s_gyro_angle_deg;
     s_dbg.angle_ref_deg = s_angle_ref_deg;
+    s_dbg.lat_err_mm = lat_err_mm;
     // 壁センサー(このtickの先頭で Sensor_ReadAll() が更新した値)。制御が無効の間も記録する
     s_dbg.ad_l = (float)ad_l;
     s_dbg.ad_fl = (float)ad_fl;
@@ -521,6 +646,7 @@ void App_ControlTick(void) {
         s_start_pending = false;
         s_profile_active = false;
         s_pivot_settling = false;
+        s_front_aligning = false;
         s_motion_done = true;
         s_target_mm_s = 0.0f;
         s_target_acc = 0.0f;
@@ -556,7 +682,7 @@ void App_ControlTick(void) {
     // ---- 旋回の FB(PD．超信地旋回の合わせ込みの間だけ積分を足す) ----
     // 制御が有効な間は，止まっていても常に効かせる(止まっている間も向きを保つ)．
     float vd_fb = 0.0f;
-    float angle_err_rad = (s_angle_ref_deg - s_gyro_angle_deg) * DEG_TO_RAD;
+    float angle_err_rad = (s_angle_ref_deg + s_lat_ofs_deg - s_gyro_angle_deg) * DEG_TO_RAD; // 横のずれの分を足した向き
     float vd_settle_i = UpdatePivotSettle(angle_err_rad); // FB を切っていても，合わせ込みは打ち切りで終わる
     if (ANGULAR_CONTROL_ENABLE) {
         vd_fb = Clamp(DRIVE_VD_K_OMEGA * (omega_ref - omega_meas) + DRIVE_VD_K_THETA * angle_err_rad
