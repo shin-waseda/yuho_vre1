@@ -126,6 +126,10 @@ typedef struct {
     float f_ff;             // 旋回の FF のうち，タイヤが横にこする分 F[V]
     float ad_l, ad_fl, ad_fr, ad_r; // 壁センサーの値(IR 点灯 − 消灯の差。ad_* を float にしたもの)
     float wall_offset_deg;  // 壁の制御のオフセット[deg](目標の向き = 迷路の軸の向き + これ)
+    // 6軸(機体の座標: x 前、y 左、z 上。logic/state_estimation/imu)。制御には使わず、ログに残すだけ。
+    // 加速度[m/s²]は重力を含む(止まって水平なら acc_z が約 +9.8)。ジャイロ Z は gyro_z_dps と同じなので入れない
+    float acc_x, acc_y, acc_z;
+    float gyro_x_dps, gyro_y_dps;
 } ControlDebug;
 
 const ControlDebug *App_GetControlDebug(void);

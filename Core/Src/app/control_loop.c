@@ -8,6 +8,7 @@
 #include "interface/gyro.h"
 #include "interface/battery.h"
 #include "logic/state_estimation/kinematics.h"
+#include "logic/state_estimation/imu.h"
 #include "logic/control/drive_model.h"
 #include "logic/control/velocity_profile.h"
 #include "logic/control/wall_control.h"
@@ -392,7 +393,9 @@ void App_ControlTick(void) {
 
     s_actual = Odometry_Update(&s_odo, delta_l, delta_r, CONTROL_DT_S);
 
-    s_gyro_raw = ICM_ReadGyro();
+    // 6軸を1回で読む。制御に使うのは今までどおりジャイロ Z だけで、加速度とジャイロ X・Y はログに残すだけ
+    ImuData imu = ICM_ReadImu();
+    s_gyro_raw = imu.gyro;
     if (s_gyro_cal_ticks_left > 0) {
         s_gyro_cal_sum += (float)s_gyro_raw.z;
         s_gyro_cal_count++;
@@ -401,6 +404,20 @@ void App_ControlTick(void) {
         }
     }
     s_gyro_z_dps = GYRO_Z_SIGN * ((float)s_gyro_raw.z - s_gyro_offset.z) / GYRO_SENSITIVITY_LSB_PER_DPS;
+    {
+        // 機体の座標(x 前、y 左、z 上)の物理量にする。ジャイロのゼロ点は起動時の値(Z は測り直した値)。
+        // 加速度は重力を含んだまま(止まって水平なら acc_z が約 +9.8)
+        ImuCalib cal = { .gyro_bias = { s_gyro_offset.x, s_gyro_offset.y, s_gyro_offset.z } };
+        int16_t acc_raw[3] = { imu.accel.x, imu.accel.y, imu.accel.z };
+        int16_t gyro_raw[3] = { imu.gyro.x, imu.gyro.y, imu.gyro.z };
+        ImuSample body;
+        Imu_ToBody(acc_raw, gyro_raw, &cal, &body);
+        s_dbg.acc_x = body.acc[0];
+        s_dbg.acc_y = body.acc[1];
+        s_dbg.acc_z = body.acc[2];
+        s_dbg.gyro_x_dps = body.gyro[0];
+        s_dbg.gyro_y_dps = body.gyro[1];
+    }
     if (s_gyro_angle_reset_req) {
         s_gyro_angle_deg = 0.0f;
         s_angle_axis_deg = 0.0f; // 向きの基準を決めるのはここだけ(走りの始め)

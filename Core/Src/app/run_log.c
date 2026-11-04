@@ -40,6 +40,12 @@ void RunLog_Setup(const char *dir, const char *file, uint32_t decimation) {
     Logger_AddField("ad_fr", &d->ad_fr);
     Logger_AddField("ad_r", &d->ad_r);
     Logger_AddField("vbat", &d->vbat);
+    // 6軸(ログに残すだけ。ジャイロ Z は gyro_z)
+    Logger_AddField("acc_x", &d->acc_x);
+    Logger_AddField("acc_y", &d->acc_y);
+    Logger_AddField("acc_z", &d->acc_z);
+    Logger_AddField("gyro_x", &d->gyro_x_dps);
+    Logger_AddField("gyro_y", &d->gyro_y_dps);
     // イベント
     Logger_AddEventFields();
 

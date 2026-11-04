@@ -3190,3 +3190,15 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
     (前は無ければ `../..` を使ったが，止まるようにした)．`build/`(走らせた結果・迷路)と `fw_root.local` も写した．worktree `sim` は外した．
   - 残った worktree は `yuho`(master．モデルで動く機体)と `yuho-sysid`(同定のやり方の検討)．
   - plant_sim は今の master(モデルの FF+FB，`pid.c` などを消した)でビルドできるか，機体のモデルと合うかは確かめていない．
+
+### 2026-11-04 6軸(加速度・ジャイロ X/Y/Z)を読んで探索のログに残す(`feature/six-axis-imu`，`master` から)
+
+- **ICM の加速度とジャイロ X・Y も毎 tick 読み，探索・最短のログ(`run_log`)に残すようにした**(ユーザーの依頼．制御は変えない)．
+  - yuho-sysid から写した: `ICM_ReadImu()`(ACCEL_DATA_X1 から 12byte の1回のバースト)と加速度の設定(±8g / ODR 1kHz．`ACCEL_CONFIG0` = 0x26)，
+    `logic/state_estimation/imu`(機体の座標 x 前・y 左・z 上の物理量にする)，`params.h` の `ACCEL_SENSITIVITY_LSB_PER_G`・`GRAVITY_M_S2`・`IMU_AXIS_MAP/SIGN`．
+  - `App_ControlTick` は `ICM_ReadGyro` の代わりに `ICM_ReadImu` で読み，ジャイロ Z の扱いは今までどおり．
+    加速度は重力を含んだまま，ジャイロ X・Y のゼロ点は起動時の `ICM_CalibrateBlocking` の値．
+  - ログの列: `acc_x`・`acc_y`・`acc_z`[m/s²]，`gyro_x`・`gyro_y`[dps]．ジャイロ Z は今の `gyro_z`．探索のログは time_s とイベントを入れて 39 列(上限 40)．
+  - 残っていること: ACCEL_CONFIG0 の値の意味と，左 = センサーの +x は yuho-sysid でもまだ確かめていない．SPI で読む量が 6 → 12byte になった分の tick の時間は測っていない．
+    ログビューアの列の組(`yc.plot_groups`)には入れていない．
+  - 結果: ビルドも実機もまだ(未確認)．

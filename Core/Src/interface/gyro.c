@@ -22,6 +22,12 @@ void ICM_Init(void) {
     // ジャイロ ±2000dps / ODR 4kHz (divergence_v3と同じ設定値)
     ICM_Write(ICM_GYRO_CONFIG0, 0x04);
     HAL_Delay(1);
+
+    // 加速度 ±8g / ODR 1kHz(ACCEL_FS_SEL = 001、ACCEL_ODR = 0110。1kHz で読むので ODR も 1kHz にした)。
+    // 部品は ICM-42605(WHO_AM_I = 0x42、2026-10-30 に実機で確かめた)。値の意味は ICM-42688-P と同じ並びという記憶から決めた
+    // (ICM-42605 のデータシートの ACCEL_CONFIG0 と、実機の読み返しでは確かめていない)。yuho-sysid から写した(2026-11-04)
+    ICM_Write(ICM_ACCEL_CONFIG0, 0x26);
+    HAL_Delay(1);
 }
 
 void ICM_Write(uint8_t reg, uint8_t data) {
@@ -56,6 +62,26 @@ GyroData ICM_ReadGyro(void) {
     g.y = (int16_t)((uint16_t)rx[2] << 8 | rx[3]);
     g.z = (int16_t)((uint16_t)rx[4] << 8 | rx[5]);
     return g;
+}
+
+// ACCEL_DATA_X1 から 12byte(加速度 X/Y/Z、ジャイロ X/Y/Z)を連続で読む
+ImuData ICM_ReadImu(void) {
+    uint8_t tx = ICM_ACCEL_X_H | 0x80;
+    uint8_t rx[12] = {0};
+
+    HAL_GPIO_WritePin(CS_GPIO_Port, CS_Pin, GPIO_PIN_RESET);
+    HAL_SPI_Transmit(&hspi2, &tx, 1, 10);
+    HAL_SPI_Receive(&hspi2, rx, 12, 10);
+    HAL_GPIO_WritePin(CS_GPIO_Port, CS_Pin, GPIO_PIN_SET);
+
+    ImuData d;
+    d.accel.x = (int16_t)((uint16_t)rx[0] << 8 | rx[1]);
+    d.accel.y = (int16_t)((uint16_t)rx[2] << 8 | rx[3]);
+    d.accel.z = (int16_t)((uint16_t)rx[4] << 8 | rx[5]);
+    d.gyro.x = (int16_t)((uint16_t)rx[6] << 8 | rx[7]);
+    d.gyro.y = (int16_t)((uint16_t)rx[8] << 8 | rx[9]);
+    d.gyro.z = (int16_t)((uint16_t)rx[10] << 8 | rx[11]);
+    return d;
 }
 
 void ICM_CalibrateBlocking(uint16_t samples) {
