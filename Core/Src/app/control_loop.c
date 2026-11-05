@@ -9,6 +9,7 @@
 #include "interface/battery.h"
 #include "logic/state_estimation/kinematics.h"
 #include "logic/state_estimation/imu.h"
+#include "logic/state_estimation/gyro_bias.h"
 #include "logic/control/drive_model.h"
 #include "logic/control/velocity_profile.h"
 #include "app/failsafe.h"
@@ -108,6 +109,8 @@ static volatile uint32_t s_gyro_cal_ticks_left = 0;
 static float s_gyro_cal_sum = 0.0f;
 static uint32_t s_gyro_cal_count = 0;
 static ControlDebug s_dbg;
+// 走っている途中で止まっている間に、ジャイロ Z のゼロ点を測り直す(ISRからのみ触る)
+static GyroBiasEst s_bias_est;
 
 // メインループが書き、ISRが読む。フェイルセーフ発動時はISRもfalseを書く。
 static volatile bool s_enabled = false;
@@ -119,6 +122,7 @@ void App_ControlLoop_Init(void) {
     DriveModel_Reset(&s_model);
     FailSafe_Init();
     s_gyro_offset = ICM_GetOffset(); // ICM_CalibrateBlocking()後に呼ばれる前提
+    GyroBias_Init(&s_bias_est);
     s_actual.left_mm_s = 0.0f;
     s_actual.right_mm_s = 0.0f;
 }
@@ -516,6 +520,23 @@ void App_ControlTick(void) {
     UpdateFrontAlign();
 
     bool control_active = s_enabled && !FailSafe_IsTripped();
+
+    // ---- 止まっている間に、ジャイロ Z のゼロ点を測り直す ----
+    // 止まれの指令(目標の速さ・角速度が 0 で、動きと合わせ込みが終わっている)の間だけ。
+    // 本当に止まっているかは gyro_bias が、エンコーダ・ジャイロ・加速度の揺れで見る。新しいゼロ点は次のtickから効く
+    if (GYRO_BIAS_TRACK_ENABLE) {
+        bool cmd_still = control_active && s_motion_done && !s_start_pending
+                      && (s_target_mm_s == 0.0f) && (s_target_omega_dps == 0.0f)
+                      && !s_pivot_settling && !s_front_aligning && (s_gyro_cal_ticks_left == 0u);
+        float acc_body[3] = { s_dbg.acc_x, s_dbg.acc_y, s_dbg.acc_z };
+        GyroBiasStep b = GyroBias_Update(&s_bias_est, (float)s_gyro_raw.z, acc_body, delta_l, delta_r,
+                                         cmd_still, s_gyro_offset.z);
+        s_gyro_offset.z = b.offset;
+        if (b.run_ended) {
+            Logger_Event(LOG_EV_GYRO_BIAS, b.offset, b.run_change / GYRO_SENSITIVITY_LSB_PER_DPS,
+                         (float)b.run_windows, 0.0f, 0.0f);
+        }
+    }
 
     // ---- 目標の向き ----
     // 基準は App_ResetGyroAngle() で決めた走りの始めの向き。制御が無効の間は進めないだけで、今の向きには合わせない。

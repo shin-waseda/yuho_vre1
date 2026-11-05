@@ -12,7 +12,7 @@
 //   RUN : SEARCH(地図・行き先・アルゴリズム・速さなどを選ぶ) / FAST(最短走行) /
 //         TEST(ログ取りの走行: FAST_SWEEP / SEARCH_SPIN / FAST_BANDS / LONG_LOG) / AUTO(自立賞)
 //   TEST: SENSOR / SENSOR_LOG / VEL_PID / STRAIGHT / PIVOT / SLALOM / LED_TEST / PARTY /
-//         LONG_LOG / SLALOM_SWEEP / STRAIGHT_SWEEP / SENSOR_SPIN / LED_ALL_ON
+//         LONG_LOG / SLALOM_SWEEP / STRAIGHT_SWEEP / SENSOR_SPIN / LED_ALL_ON / GYRO_SCALE
 //   SD  : DUMP / DUMP_ALL / STREAM_TEST
 //   4〜9: ログ取りのモードへのショートカット(選ぶとすぐ決まる。FAST_SWEEP 以外は値も params.h の SHORTCUT_* で決まっていて選ばない)
 //         4 STRAIGHT_SWEEP(v)，5 STRAIGHT_SWEEP(acc)，6 SLALOM_SWEEP(low)，7 SLALOM_SWEEP(high)，8 FAST_SWEEP，9 LONG_LOG，
@@ -42,6 +42,7 @@ typedef enum {
     MODE_RUN_TEST,      // RUN の中の TEST(ログ取りの走行: FAST_SWEEP / SEARCH_SPIN / FAST_BANDS / LONG_LOG から選ぶ)
     MODE_AUTONOMOUS,    // 自立賞(探索 → 最短走行と帰り道を何本か。触らずに最後まで)
     MODE_LED_ALL_ON,    // すべての LED(シフトレジスタの16個と直結の6個)を点けたままにする
+    MODE_GYRO_SCALE_TEST, // ジャイロの倍率の試験(前の壁を見ながら左右に何回も回る)
     MODE_COUNT
 } RobotMode;
 

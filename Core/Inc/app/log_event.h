@@ -33,6 +33,8 @@ typedef enum {
     LOG_EV_PIVOT_SETTLE = 25, // a:ok b:err_deg c:ms
     LOG_EV_FRONT_ALIGN = 26,  // a:ok b:err_mm c:err_deg d:ms
     LOG_EV_ALONG_SYNC = 27,   // a:along_mm b:lat_mm
+    LOG_EV_GYRO_SCALE = 28,   // a:phase b:diff c:sum d:angle
+    LOG_EV_GYRO_BIAS = 29,    // a:offset_lsb b:change_dps c:windows
     // ---- 動き(search_run などが出す、意味のある単位) ----
     LOG_EV_TURN_KIND = 30,    // a:kind b:right c:pre d:post
     LOG_EV_SETPOS = 31,       // a:phase
@@ -71,7 +73,12 @@ typedef enum {
 //   w0〜w3 は続く区画を2つずつ(下位8bit が先、上位8bit が次)入れた値。1つで8区画、全部で MAZE_SIZE² / 8 個。
 //   (CSV は有効数字6桁なので、1つの値は 16bit まで)
 // LOG_EV_SETPOS の phase: 0 始め, 1 終わり。LOG_EV_MOTION_DONE の motion: 0 直進, 1 超信地旋回, 2 スラローム, 3 前壁合わせ。
-// LOG_EV_ALONG_SYNC: 探索の 180° を 90° + 90° に分けたとき、止まって前後のずれを消し始める時の、目標の向きに対する
+// LOG_EV_GYRO_BIAS: 走っている途中で止まっている間にジャイロ Z のゼロ点を測り直した続きが終わった所(app/control_loop)。
+//   offset_lsb は新しいゼロ点[LSB]、change_dps はその続きの間のゼロ点の変わり[dps]、windows は寄せた窓の数(1 つ 50ms)。
+// LOG_EV_GYRO_SCALE:ジャイロの倍率の試験(TEST の GYRO_SCALE)で止まって測った所。phase は 0 始め、1 左へ少し回った所、
+//   2 右へ少し回った所、3 戻った所、4 左へ何回も回った後、5 右へ何回も回って戻った後。diff は FL − FR、sum は FL + FR の平均、
+//   angle はそのときのジャイロの角度[deg]。
+// LOG_EV_ALONG_SYNC:探索の 180° を 90° + 90° に分けたとき、止まって前後のずれを消し始める時の、目標の向きに対する
 //   前後のずれ(+ 目標が前)と横のずれ(+ 機体が左)[mm]。回る前と、1回目の 90° の後(along がそれまでの横のずれ)に入る。
 // LOG_EV_FRONT_ALIGN: 前の壁で合わせた結果。ok は 1 合った / 0 打ち切った、err_mm は終わった時の前後のずれ(+ 壁に近い)、
 //   err_deg は向きのずれ(+ 左を向いている)、ms はかかった時間。この後に MOTION_DONE が入る。
