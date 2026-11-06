@@ -56,6 +56,29 @@ float App_GetTargetDistance(void);
 // (宴会芸モードのように、向きだけ保ちたいときに false にする)
 void App_SetPositionHold(bool en);
 
+// 横壁追従(logic/control/wall_control)を使うかどうか。起動時は false。直進している間だけ効く。
+// 探索で補正を選んだとき、境界から境界への直進の間だけ true にする(変わったら LOG_EV_WALL_CTRL)。
+// 横壁追従のずらしは、横のずれの FB のずらしと足して目標の向きに足す。
+void App_SetWallControl(bool en);
+
+// エンコーダとジャイロで見た横のずれの FB を使うかどうか。起動時は true。
+// false の間は、横のずれを返さず、目標の位置の横の成分を推定の位置に合わせ続ける(横のずれをためないので、
+// 曲がった後に前後のずれに変わって位置のループに引っ張られることもない)。横は横壁追従(壁)だけで決まる。
+// 探索で、横壁追従だけの走り方を作るのに使う(2026-11-05)。
+void App_SetLateralControl(bool en);
+
+// モーターの出力だけを 0 にする(true)/戻す(false)。制御の状態(目標の距離・向き・位置・積分)はそのまま。
+// 走っている途中で止まって flash を書くときに使う(flash を消している間は CPU が止まって制御の割り込みが回らず、
+// モーターが前の出力のまま回り続けるため。2026-11-06)
+void App_SetOutputPaused(bool paused);
+
+// 直進中に見つけた壁切れ(横の壁がなくなった瞬間)。side: 0 左、1 右、pos_ref_mm: その瞬間の目標の距離。
+// 戻り値は見つけた数(新しい壁切れがあったかを、前に読んだ値と比べて見分ける)。side・pos_ref_mm は NULL 可
+uint32_t App_GetWallEdge(uint8_t *side, float *pos_ref_mm);
+
+// 補正で前後の位置を直した量[mm]を、ログの列 corr_along に足していく(壁切れ補正・小回りの前壁補正。
+// 前壁合わせで動いた量は ISR が自分で足す)。+ なら、思っていたより後ろにいたので先へ進めた
+void App_AddAlongCorrection(float mm);
 // 速度PIDとモータ出力の有効/無効。起動時は無効。
 // 無効中もオドメトリ更新は続ける(PIDとモータ出力だけ止める)。
 // 有効化した直後のtickでPIDの内部状態をリセットする。
@@ -122,6 +145,11 @@ typedef struct {
     float angle_deg;        // ジャイロの積分角(起動からの累積)
     float angle_ref_deg;    // 目標の向き(angle_deg と同じ基準。止まってもリセットしない。横のずれのずらしは含まない)
     float lat_err_mm;       // 横のずれ[mm](目標の位置に対する推定の位置。目標の向きの左 +)
+    // 補正を受けない推定の位置[mm](進んだ距離とジャイロの角度だけで積む。走りの始めの向きを +x、左を +y)。
+    // 向きは angle_deg(補正は目標の向きを動かすだけで、ジャイロの角度は動かさない)
+    float est_x_mm, est_y_mm;
+    float wall_ofs_deg;     // 横壁追従のずらし[deg](目標の向きに足した分。横のずれの FB の分は含まない)
+    float corr_along_mm;    // 補正で前後の位置を直した量の合計[mm](壁切れ補正・小回りの前壁補正・前壁合わせ)
     float f_ff;             // 旋回の FF のうち，タイヤが横にこする分 F[V]
     float ad_l, ad_fl, ad_fr, ad_r; // 壁センサーの値(IR 点灯 − 消灯の差。ad_* を float にしたもの)
     // 6軸(機体の座標: x 前、y 左、z 上。logic/state_estimation/imu)。制御には使わず、ログに残すだけ。

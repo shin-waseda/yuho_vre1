@@ -18,13 +18,16 @@
 //
 // スタートからゴール(どれかの区画)へ行き、着いたらSTOPを1回返して、
 // 次の呼び出しからスタートへ戻る。スタートに着いたらSTOPを返して終わる。
+// goal_tour のときは、ゴールで STOP を返さず、ゴールの区画を全部回ってからスタートへ戻る(SEARCH_PHASE_GOAL_TOUR)。
 // どちらも、未知の壁は「ない」とみなした地図で、毎回経路を計算し直す。
 //
 // Dijkstraのコストは行き(cost_to_goal)と帰り(cost_to_start)で別に持つ。
 // 帰りは既知の区画のコストを上げて(known_cell)、まだ見ていない区画を通らせ、
 // 最短経路の候補を増やす。Init後にメンバを書き換えれば変えられる(足立法では使わない)。
 //
-// 全面探索(SearchPlanner_StartFull): 最短経路になりうる区画だけを回り、最短経路が決まったらスタートへ戻る。
+// 全面探索(SearchPlanner_StartFull): まず往復の行きと同じくゴールへ向かい(TO_GOAL。ゴールでは STOP を返さない)、
+// ゴールの区画に入った所から、最短経路になりうる区画だけを回り(FULL)、最短経路が決まったらスタートへ戻る。
+// (2026-11-07 にゴールへ先に行くようにした。そうしないと、大会の迷路の4割ほどでゴールに一度も入らずに終わっていた)
 //   1. 未知の壁は「ない」とみなした地図で、スタートからゴールまでの最短経路(最短走行と同じ Dijkstra の既定のコスト)を求める。
 //      未知の壁を「ない」とみなしているので、このコストは本当の最短のコストより大きくならない(下限)。
 //   2. その経路が横切る壁のうち、まだ分かっていない壁の両側の区画(見ていない区画)を行き先にして、一番近いものへ向かう。
@@ -32,6 +35,8 @@
 //      そこで探索をやめてスタートへ戻る(ゴールでは止まらない)。
 //   見つかる壁は「ない」→「ある」に変わるだけなので、経路を計算し直すのは、経路が横切る壁が見つかったときだけでよい。
 //   同じコストの経路が他にもあっても、そちらは見に行かない(最短走行が速くならないため)。
+//   (2026-11-07 に、最短になりうる経路を全部候補にする形も作って maze_sim で比べたが、探索が長くなるだけで
+//    最短走行はほとんど速くならなかったので消した。development_log.md の 12 章)
 #define SEARCH_FULL_TARGET_MAX 255u // 全面探索の行き先の最大数(Dijkstra に渡す数が uint8_t のため)
 
 typedef enum {
@@ -44,7 +49,8 @@ typedef enum {
     SEARCH_PHASE_TO_START, // スタートへ戻っている
     SEARCH_PHASE_DONE,     // スタートに戻った
     SEARCH_PHASE_FAILED,   // 分かっている壁でふさがれ、目的地へ行けない
-    SEARCH_PHASE_FULL,     // 全面探索: 最短経路になりうる区画を回っている(終わったら TO_START)
+    SEARCH_PHASE_FULL,     // 全面探索: ゴールに入った後、最短経路になりうる区画を回っている(終わったら TO_START)
+    SEARCH_PHASE_GOAL_TOUR, // ゴールの区画を全部回っている(goal_tour のとき。終わったら止まらずに TO_START)
 } SearchPhase;
 
 typedef struct {
@@ -68,8 +74,17 @@ typedef struct {
     uint8_t full_route[MAZE_CELL_COUNT]; // スタートから進む向き(Direction)の列
     uint16_t full_route_len;
     bool full_route_valid;               // full_route を計算したか(StartFull で false に戻す)
+    bool full_pending;                   // 全面探索で、まだゴールへ向かっている(ゴールに入ったら FULL にする)
     MazePos full_targets[SEARCH_FULL_TARGET_MAX]; // 見に行く区画
     uint8_t full_target_count;
+
+    // ゴールを回る(goal_tour): ゴールの区画が2つ以上あるとき、最初のゴールの区画に入っても止まらず、
+    // まだ入っていないゴールの区画を順に回ってから、止まらずにスタートへ戻る(ゴールで止まって 180° 回らない)。
+    // 既定は false(Init 後に書き換える)。全面探索ではゴールで止まらないので使わない
+    bool goal_tour;
+    uint16_t goal_visited;                // 入ったゴールの区画(goals の番号のビット)
+    MazePos tour_targets[MAZE_GOAL_MAX];  // まだ入っていないゴールの区画
+    uint8_t tour_target_count;
 
     // 経路計算の結果。使うのはalgoで選んだ方だけなので、同じ場所に重ねて置く(2KB)。
     // 最後に計算した結果が残る。ただし Dijkstra は今いるノードのコストが決まった所で計算を止めるので
@@ -86,13 +101,15 @@ void SearchPlanner_Init(SearchPlanner *sp, WallMap *map, SearchAlgo algo,
                         MazePos start, Direction heading,
                         const MazePos *goals, uint8_t goal_count);
 
-// 全面探索にする(Init の後、最初の Step の前に呼ぶ)。段階は SEARCH_PHASE_FULL になり、最短経路が決まったら
-// (ゴールで止まらずに)TO_START へ移ってスタートへ戻る。
+// 全面探索にする(Init の後、最初の Step の前に呼ぶ)。段階は TO_GOAL のままでゴールへ向かい、ゴールの区画に入ったら
+// (STOP を返さずに)SEARCH_PHASE_FULL になる。最短経路が決まったら TO_START へ移ってスタートへ戻る。
 void SearchPlanner_StartFull(SearchPlanner *sp);
 
 // 今いる区画で見えた壁を書き込み、次の指令を返す(位置・向きも指令の分だけ進める)。
 // ゴール・スタートに着いたとき、目的地へ行けないとき、終わった後はACTION_STOP。
-// 全面探索ではゴールで STOP を返さない(最短経路が決まった所から、そのままスタートへ向かう)。
+// 全面探索ではゴールで STOP を返さない(ゴールに入ったら FULL へ、最短経路が決まった所から、そのままスタートへ向かう)。
+// ゴールで STOP を返さずに段階が TO_GOAL から変わった Step(GOAL_TOUR・FULL・TO_START)は「走ったままゴールに入った」。
+// 機体はそこで真ん中に止まって地図を残してから、返した指令を行う(app/search_run)。
 Action SearchPlanner_Step(SearchPlanner *sp, WallObservation obs);
 
 // 既知の区間をまとめて走るための先読み(機体の app/search_run と maze_sim で同じものを使う)。

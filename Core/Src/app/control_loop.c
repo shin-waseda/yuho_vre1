@@ -11,6 +11,7 @@
 #include "logic/state_estimation/imu.h"
 #include "logic/state_estimation/gyro_bias.h"
 #include "logic/control/drive_model.h"
+#include "logic/control/wall_control.h"
 #include "logic/control/velocity_profile.h"
 #include "app/failsafe.h"
 #include "app/logger.h"
@@ -37,6 +38,7 @@ static float s_angle_ref_deg = 0.0f;
 static float s_pos_ref_mm = 0.0f;
 static float s_dist_mm = 0.0f;
 static volatile bool s_position_hold = true; // メインが書き、ISRが読む
+static volatile bool s_output_paused = false; // モーターの出力だけを 0 にする(App_SetOutputPaused)。メインが書き、ISRが読む
 
 // 横のずれの FB。目標の位置と推定の位置[mm](向き 0 を +x、左を +y)。目標の距離と同じく、
 // 制御が無効の間は0にしておき、有効にした時点を基準にする。ISRからのみ触る。
@@ -46,6 +48,15 @@ static float s_lat_ofs_deg = 0.0f; // 目標の向きに足すずらし Δθ[deg
 // 目標の位置に対する推定の位置のずれ[mm](目標の向きの前後: + なら目標が前、横: + なら機体が左)。ISRが書き、メインが読む
 static volatile float s_along_err_mm = 0.0f;
 static volatile float s_lat_err_mm = 0.0f;
+
+// 横壁追従(探索で補正を選んだとき、境界から境界への直進の間だけ)。ISRが進める
+static WallControl s_wall;
+static volatile bool s_wall_ctrl_on = false; // メインが書き、ISRが読む
+static volatile bool s_lat_ctrl_on = true;   // 横のずれの FB を使うか(メインが書き、ISRが読む)
+static bool s_wall_active = false;           // 前のtickで横壁追従を動かしていたか
+static float s_wall_ofs_deg = 0.0f;          // 目標の向きに足す横壁追従のずらし[deg]
+// 補正で前後の位置を直した量の合計[mm](ログ用。メインも ISR も足す)
+static volatile float s_corr_along_mm = 0.0f;
 
 // 目標(並進・回転)。プロファイル実行中はISRが毎tick書き換える。
 static float s_target_mm_s = 0.0f;
@@ -81,6 +92,7 @@ static float s_settle_prev_err = 0.0f; // 前のtickの角度の差[rad](0 を�
 static volatile bool s_front_aligning = false;
 static uint32_t s_align_ticks = 0;    // ISRからのみ触る
 static uint32_t s_align_ok_ticks = 0; // 続けて合っている tick 数
+static float s_align_start_pos_mm = 0.0f; // 合わせ始めの目標の距離(合わせて動いた量をログに残す)
 
 // メイン→ISRへの走行指令の受け渡し。パラメータを書いてから最後にフラグを立て、
 // ISRは次のtickでフラグを見て取り込む(取り込み中にメインが書き換えることはない)。
@@ -213,7 +225,7 @@ float App_GetTargetDistance(void) {
 }
 
 // ---- 壁切れ ----
-// 補正には使わず、イベント(LOG_EV_WALL_EDGE)に残すだけ。後でログから推定のずれを測るのに使う。
+// イベント(LOG_EV_WALL_EDGE)に残し、探索で補正を選んだときは壁切れ補正に使う(App_GetWallEdge)。
 typedef struct {
     bool above;          // しきい値より上(壁あり)
     float above_from;    // 壁ありになった目標の距離
@@ -221,6 +233,9 @@ typedef struct {
 
 static EdgeTrack s_edge_l = { false, 0.0f };
 static EdgeTrack s_edge_r = { false, 0.0f };
+static volatile uint32_t s_edge_seq = 0;     // 見つけた壁切れの数(メインが新しいものか見分ける)
+static volatile uint8_t s_edge_side = 0;     // 0: 左, 1: 右
+static volatile float s_edge_pos_ref = 0.0f; // 壁切れの瞬間の目標の距離
 
 // ISR から呼ぶ。直進していないときは追わない(見つけ直しになる)。
 static void UpdateWallEdge(EdgeTrack *t, uint16_t value, uint16_t th, uint8_t side, bool moving) {
@@ -238,13 +253,46 @@ static void UpdateWallEdge(EdgeTrack *t, uint16_t value, uint16_t th, uint8_t si
     if (t->above) {
         t->above = false;
         if (s_pos_ref_mm - t->above_from >= WALL_EDGE_MIN_WALL_MM) {
+            s_edge_side = side;
+            s_edge_pos_ref = s_pos_ref_mm;
+            s_edge_seq++; // 最後に進める(メインはこれが変わったら読む)
             Logger_Event(LOG_EV_WALL_EDGE, (float)side, s_pos_ref_mm, s_dist_mm, 0.0f, 0.0f);
         }
     }
 }
 
+uint32_t App_GetWallEdge(uint8_t *side, float *pos_ref_mm) {
+    uint32_t seq;
+    do { // ISR が途中で書き換えたら読み直す
+        seq = s_edge_seq;
+        if (side != NULL) *side = s_edge_side;
+        if (pos_ref_mm != NULL) *pos_ref_mm = s_edge_pos_ref;
+    } while (seq != s_edge_seq);
+    return seq;
+}
+
 void App_SetPositionHold(bool en) {
     s_position_hold = en;
+}
+
+void App_SetWallControl(bool en) {
+    if (en != s_wall_ctrl_on) Logger_Event(LOG_EV_WALL_CTRL, en ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    s_wall_ctrl_on = en;
+}
+
+void App_SetLateralControl(bool en) {
+    s_lat_ctrl_on = en;
+}
+
+void App_SetOutputPaused(bool paused) {
+    s_output_paused = paused;
+}
+
+void App_AddAlongCorrection(float mm) {
+    uint32_t primask = __get_PRIMASK(); // ISR も足すので、足す間だけ割り込みを止める
+    __disable_irq();
+    s_corr_along_mm += mm;
+    if (!primask) __enable_irq();
 }
 
 // x を ±limit に収める
@@ -272,6 +320,7 @@ static void UpdateProfile(void) {
             s_target_alpha_dps2 = 0.0f;
             s_align_ticks = 0;
             s_align_ok_ticks = 0;
+            s_align_start_pos_mm = s_pos_ref_mm;
             s_front_aligning = true;
             Logger_Event(LOG_EV_FRONT_ALIGN, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f); // 始め(ok = −1)
             return;
@@ -367,7 +416,9 @@ static void UpdateFrontAlign(void) {
         s_target_mm_s = 0.0f;
         s_target_omega_dps = 0.0f;
         s_motion_done = true;
-        Logger_Event(LOG_EV_FRONT_ALIGN, held ? 1.0f : 0.0f, err_mm, err_deg, ms, 0.0f);
+        float moved_mm = s_pos_ref_mm - s_align_start_pos_mm; // 合わせる間に目標の距離が動いた量(+ 前へ)
+        s_corr_along_mm += moved_mm;
+        Logger_Event(LOG_EV_FRONT_ALIGN, held ? 1.0f : 0.0f, err_mm, err_deg, ms, moved_mm);
         Logger_Event(LOG_EV_MOTION_DONE, (float)MOTION_FRONT_ALIGN, 0.0f, 0.0f, 0.0f, 0.0f);
         return;
     }
@@ -512,6 +563,7 @@ void App_ControlTick(void) {
     if (s_gyro_angle_reset_req) {
         s_gyro_angle_deg = 0.0f;
         s_angle_ref_deg = 0.0f; // 向きの基準を決めるのはここだけ(走りの始め)
+        s_corr_along_mm = 0.0f; // 補正の量の合計も、走りごとに数え直す
         s_gyro_angle_reset_req = false;
     }
     s_gyro_angle_deg += s_gyro_z_dps * CONTROL_DT_S;
@@ -567,11 +619,39 @@ void App_ControlTick(void) {
     }
 
     // ---- 壁切れ(横の壁がなくなった瞬間)を見つける ----
-    // 直進中に、L か R が壁ありのしきい値より上から下へ切れた瞬間の目標の距離をイベントに残す(補正には使わない)。
-    // 柱の横で一瞬だけ跳ねた値に引っかからないよう、その前に WALL_EDGE_MIN_WALL_MM 以上続けて壁があったときだけ数える。
+    // 直進中に、L か R が壁ありのしきい値より上から下へ切れた瞬間の目標の距離をイベントに残す(探索で補正を選んだときは
+    // 壁切れ補正に使う)。柱の横で一瞬だけ跳ねた値に引っかからないよう、その前に WALL_EDGE_MIN_WALL_MM 以上続けて
+    // 壁があったときだけ数える。
     bool moving_straight = control_active && (s_target_mm_s > 0.0f) && (s_target_omega_dps == 0.0f);
     UpdateWallEdge(&s_edge_l, ad_l, WALL_TH_L, 0u, moving_straight);
     UpdateWallEdge(&s_edge_r, ad_r, WALL_TH_R, 1u, moving_straight);
+
+    // ---- 横壁追従 ----
+    // 使う指示(App_SetWallControl)があって直進している間だけ、壁センサーのずれに比例した向きのずらしを求める。
+    // 使える壁がないとき・使わない場面では、ずらしの目標は 0。ずらしは WALL_OFFSET_RATE_DPS の速さまでしか変えない。
+    // 直進を始めるたびに切れ目の検出の履歴を捨てる。
+    {
+        float wall_target = 0.0f;
+        bool use_l = false, use_r = false;
+        if (s_wall_ctrl_on && moving_straight && !s_front_aligning) {
+            if (!s_wall_active) WallControl_Reset(&s_wall);
+            WallSensorValues wv = { .l = ad_l, .fl = ad_fl, .fr = ad_fr, .r = ad_r };
+            wall_target = WallControl_Update(&s_wall, wv, s_dist_mm, s_target_mm_s, &use_l, &use_r);
+            s_wall_active = true;
+        } else {
+            s_wall_active = false;
+        }
+        // 左右どちらの壁を使ったかが変わったらイベントに残す(壁の切れ目・柱で使わなくなった所が分かる)
+        static bool s_prev_use_l = false, s_prev_use_r = false;
+        if (use_l != s_prev_use_l || use_r != s_prev_use_r) {
+            Logger_Event(LOG_EV_WALL_USE, use_l ? 1.0f : 0.0f, use_r ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+            s_prev_use_l = use_l;
+            s_prev_use_r = use_r;
+        }
+        float step = WALL_OFFSET_RATE_DPS * CONTROL_DT_S;
+        s_wall_ofs_deg += Clamp(wall_target - s_wall_ofs_deg, step);
+        if (!control_active) s_wall_ofs_deg = 0.0f;
+    }
 
     // ---- 横のずれ(目標の位置に対する推定の位置。目標の向きの左 +) ----
     // 直進している間だけ、ずれを目標の向きのずらし Δθ にして返す(それ以外は 0 へ戻す)。Δθ は速さの上限つきで動かす
@@ -581,10 +661,15 @@ void App_ControlTick(void) {
         float ex = s_est_x - s_ref_x;
         float ey = s_est_y - s_ref_y;
         lat_err_mm = -ex * sinf(th_r) + ey * cosf(th_r);
+        if (!s_lat_ctrl_on && control_active) {
+            // 横のずれの FB を使わない間は、目標の位置を横にだけ動かして推定の位置に合わせる(横のずれをためない)
+            s_ref_x += -lat_err_mm * sinf(th_r);
+            s_ref_y += lat_err_mm * cosf(th_r);
+        }
         s_lat_err_mm = lat_err_mm;
         s_along_err_mm = -(ex * cosf(th_r) + ey * sinf(th_r)); // 前後のずれ(+ なら目標が前)。位置のループが使う
         float ofs_target = 0.0f;
-        if (LATERAL_CONTROL_ENABLE && moving_straight && !s_front_aligning) {
+        if (LATERAL_CONTROL_ENABLE && s_lat_ctrl_on && moving_straight && !s_front_aligning) {
             ofs_target = Clamp(-lat_err_mm / LATERAL_L_MM * RAD_TO_DEG, LATERAL_OFS_MAX_DEG);
         }
         float step = LATERAL_OFS_RATE_DPS * CONTROL_DT_S;
@@ -649,6 +734,10 @@ void App_ControlTick(void) {
     s_dbg.angle_deg = s_gyro_angle_deg;
     s_dbg.angle_ref_deg = s_angle_ref_deg;
     s_dbg.lat_err_mm = lat_err_mm;
+    s_dbg.est_x_mm = s_est_x;
+    s_dbg.est_y_mm = s_est_y;
+    s_dbg.wall_ofs_deg = s_wall_ofs_deg;
+    s_dbg.corr_along_mm = s_corr_along_mm;
     // 壁センサー(このtickの先頭で Sensor_ReadAll() が更新した値)。制御が無効の間も記録する
     s_dbg.ad_l = (float)ad_l;
     s_dbg.ad_fl = (float)ad_fl;
@@ -682,6 +771,12 @@ void App_ControlTick(void) {
         s_prev_enabled = false;
         return;
     }
+    // 出力だけを止めている間(flash を書く間)。積分は進めず、目標・位置はそのまま持つ
+    if (s_output_paused) {
+        Motor_Stop();
+        ClearOutputDebug();
+        return;
+    }
     // 有効化の立ち上がりで，並進の積分と F の FF を捨てる．
     if (!s_prev_enabled) {
         s_vs_integral = 0.0f;
@@ -703,7 +798,8 @@ void App_ControlTick(void) {
     // ---- 旋回の FB(PD．超信地旋回の合わせ込みの間だけ積分を足す) ----
     // 制御が有効な間は，止まっていても常に効かせる(止まっている間も向きを保つ)．
     float vd_fb = 0.0f;
-    float angle_err_rad = (s_angle_ref_deg + s_lat_ofs_deg - s_gyro_angle_deg) * DEG_TO_RAD; // 横のずれの分を足した向き
+    // 目標の向きに、横のずれの FB のずらしと、横壁追従のずらしを足す(どちらも直進の間だけ 0 でない)
+    float angle_err_rad = (s_angle_ref_deg + s_lat_ofs_deg + s_wall_ofs_deg - s_gyro_angle_deg) * DEG_TO_RAD;
     float vd_settle_i = UpdatePivotSettle(angle_err_rad); // FB を切っていても，合わせ込みは打ち切りで終わる
     if (ANGULAR_CONTROL_ENABLE) {
         vd_fb = Clamp(DRIVE_VD_K_OMEGA * (omega_ref - omega_meas) + DRIVE_VD_K_THETA * angle_err_rad

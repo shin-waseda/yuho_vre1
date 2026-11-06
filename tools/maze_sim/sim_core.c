@@ -188,6 +188,9 @@ void SimCore_PlannerValues(const SearchPlanner *sp, MazeSolver *out) {
     } else if (sp->phase == SEARCH_PHASE_FULL) {
         // 全面探索: 今の行き先(最短経路になりうる、まだ見ていない区画)へ
         Dijkstra_Compute(out, sp->map, WALL_VIEW_SEARCH, &sp->cost_to_goal, sp->full_targets, sp->full_target_count);
+    } else if (sp->phase == SEARCH_PHASE_GOAL_TOUR) {
+        // ゴールを回る: まだ入っていないゴールの区画へ
+        Dijkstra_Compute(out, sp->map, WALL_VIEW_SEARCH, &sp->cost_to_goal, sp->tour_targets, sp->tour_target_count);
     } else {
         Dijkstra_Compute(out, sp->map, WALL_VIEW_SEARCH, &sp->cost_to_start, &sp->start, 1);
     }

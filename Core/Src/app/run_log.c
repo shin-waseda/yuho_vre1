@@ -15,18 +15,19 @@ void RunLog_Setup(const char *dir, const char *file, uint32_t decimation) {
     Logger_AddField("pos_ref", &d->pos_ref);
     Logger_AddField("dist", &d->dist_mm);
     Logger_AddField("pos_corr", &d->pos_corr);
-    Logger_AddField("x_mm", &d->x_mm);
+    // 補正を受けない推定の位置と、補正の量(2026-11-05 に x_mm・vl_ref・vr_ref・f_ff と入れ替えた。列の上限のため)
+    Logger_AddField("est_x", &d->est_x_mm);
+    Logger_AddField("est_y", &d->est_y_mm);
+    Logger_AddField("wall_ofs", &d->wall_ofs_deg);
+    Logger_AddField("corr_along", &d->corr_along_mm);
     // 車輪
     Logger_AddField("vl", &d->vl);
     Logger_AddField("vr", &d->vr);
-    Logger_AddField("vl_ref", &d->vl_ref);
-    Logger_AddField("vr_ref", &d->vr_ref);
     Logger_AddField("pwm_l", &d->pwm_l);
     Logger_AddField("pwm_r", &d->pwm_r);
     Logger_AddField("ff_l", &d->ff_l);
     Logger_AddField("ff_r", &d->ff_r);
     Logger_AddField("i_s", &d->i_s);
-    Logger_AddField("f_ff", &d->f_ff);
     // 回転
     Logger_AddField("omega_ref", &d->target_omega_dps);
     Logger_AddField("gyro_z", &d->gyro_z_dps);

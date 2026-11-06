@@ -246,6 +246,11 @@ bool RunProfile_LinkedStraightTime(const RunProfile *prof, float dist,
 
 bool RunList_EstimateTime(const RunList *list, const RunProfile *prof,
                           float *total, float *times, uint16_t *bad_index) {
+    return RunList_EstimateTimeEnds(list, prof, 0.0f, 0.0f, total, times, bad_index);
+}
+
+bool RunList_EstimateTimeEnds(const RunList *list, const RunProfile *prof, float v_start, float v_end,
+                              float *total, float *times, uint16_t *bad_index) {
     bool ok = true;
     float sum = 0.0f;
 
@@ -256,8 +261,10 @@ bool RunList_EstimateTime(const RunList *list, const RunProfile *prof,
 
         if (t == RUN_STRAIGHT) {
             float dist  = (float)c->halves * SECTION_MM * 0.5f;
-            float v_in  = BoundarySpeed(list, prof, (int)i - 1);
-            float v_out = BoundarySpeed(list, prof, (int)i + 1);
+            // 列の端(先頭の前・STOP か終わり)は、v_start / v_end
+            bool last = (i + 1u >= list->count) || (list->items[i + 1u].type == RUN_STOP);
+            float v_in  = (i == 0) ? v_start : BoundarySpeed(list, prof, (int)i - 1);
+            float v_out = last ? v_end : BoundarySpeed(list, prof, (int)i + 1);
             float off_in  = (i > 0) ? TurnPost(list, prof, (int)i - 1) : 0.0f;
             float off_out = TurnPre(list, prof, (int)i + 1);
             if (!RunProfile_LinkedStraightTime(prof, dist, v_in, off_in, v_out, off_out, &dt)) {

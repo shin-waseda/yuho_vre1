@@ -25,10 +25,15 @@ void SearchPlanner_Init(SearchPlanner *sp, WallMap *map, SearchAlgo algo,
     sp->full_route_len = 0;
     sp->full_route_valid = false;
     sp->full_target_count = 0;
+    sp->full_pending = false;
+    sp->goal_tour = false;
+    sp->goal_visited = 0;
+    sp->tour_target_count = 0;
 }
 
 void SearchPlanner_StartFull(SearchPlanner *sp) {
-    sp->phase = SEARCH_PHASE_FULL;
+    sp->phase = SEARCH_PHASE_TO_GOAL; // 先にゴールへ向かう(ゴールに入ったら FULL)
+    sp->full_pending = true;
     sp->full_route_len = 0;
     sp->full_route_valid = false;
     sp->full_target_count = 0;
@@ -101,6 +106,17 @@ static bool FullUpdateTargets(SearchPlanner *sp) {
     return true;
 }
 
+// ---- ゴールを回る ----
+
+// 今いる区画がゴールなら入ったことにし、まだ入っていないゴールの区画を tour_targets に書く
+static void TourUpdateTargets(SearchPlanner *sp) {
+    sp->tour_target_count = 0;
+    for (uint8_t i = 0; i < sp->goal_count; i++) {
+        if (MazePos_Equal(sp->pos, sp->goals[i])) sp->goal_visited |= (uint16_t)(1u << i);
+        if (!(sp->goal_visited & (1u << i))) sp->tour_targets[sp->tour_target_count++] = sp->goals[i];
+    }
+}
+
 // 目的地(targets)へ向かうとき、次に進む向きを地図から計算する
 static bool NextDir(SearchPlanner *sp, const MazePos *targets, uint8_t count,
                     const MazeCost *cost, Direction *next) {
@@ -119,6 +135,12 @@ Action SearchPlanner_Step(SearchPlanner *sp, WallObservation obs) {
 
     WallMap_Observe(sp->map, sp->pos, sp->heading, obs);
 
+    // 全面探索: ゴールに入ったら、止まらずに最短経路になりうる区画を回り始める
+    if (sp->full_pending && sp->phase == SEARCH_PHASE_TO_GOAL && MazePos_InList(sp->pos, sp->goals, sp->goal_count)) {
+        sp->full_pending = false;
+        sp->phase = SEARCH_PHASE_FULL;
+    }
+
     // 全面探索: 行き先がなくなったら(最短経路が決まったら)、止まらずにスタートへ戻り始める
     if (sp->phase == SEARCH_PHASE_FULL) {
         if (!FullUpdateTargets(sp)) {
@@ -130,8 +152,16 @@ Action SearchPlanner_Step(SearchPlanner *sp, WallObservation obs) {
 
     // 目的地に着いたら止まる(ゴールなら、次の呼び出しから戻り始める)
     if (sp->phase == SEARCH_PHASE_TO_GOAL && MazePos_InList(sp->pos, sp->goals, sp->goal_count)) {
-        sp->phase = SEARCH_PHASE_TO_START;
-        return kStop;
+        if (!sp->goal_tour || sp->goal_count < 2u) {
+            sp->phase = SEARCH_PHASE_TO_START;
+            return kStop;
+        }
+        sp->phase = SEARCH_PHASE_GOAL_TOUR; // 止まらずに、残りのゴールの区画を回る
+    }
+    // ゴールを回る: 残りがなくなったら、止まらずにスタートへ戻り始める
+    if (sp->phase == SEARCH_PHASE_GOAL_TOUR) {
+        TourUpdateTargets(sp);
+        if (sp->tour_target_count == 0) sp->phase = SEARCH_PHASE_TO_START;
     }
     if (sp->phase == SEARCH_PHASE_TO_START && MazePos_Equal(sp->pos, sp->start)) {
         sp->phase = SEARCH_PHASE_DONE;
@@ -144,6 +174,13 @@ Action SearchPlanner_Step(SearchPlanner *sp, WallObservation obs) {
         ok = NextDir(sp, sp->goals, sp->goal_count, &sp->cost_to_goal, &next);
     } else if (sp->phase == SEARCH_PHASE_FULL) {
         ok = NextDir(sp, sp->full_targets, sp->full_target_count, &sp->cost_to_goal, &next);
+    } else if (sp->phase == SEARCH_PHASE_GOAL_TOUR) {
+        ok = NextDir(sp, sp->tour_targets, sp->tour_target_count, &sp->cost_to_goal, &next);
+        if (!ok) {
+            // 残りのゴールの区画へ行けない(壁でふさがれている): 回るのをやめてスタートへ戻る
+            sp->phase = SEARCH_PHASE_TO_START;
+            ok = NextDir(sp, &sp->start, 1, &sp->cost_to_start, &next);
+        }
     } else {
         ok = NextDir(sp, &sp->start, 1, &sp->cost_to_start, &next);
     }
@@ -162,13 +199,14 @@ Action SearchPlanner_Step(SearchPlanner *sp, WallObservation obs) {
 static bool IsTarget(const SearchPlanner *sp, MazePos p) {
     if (sp->phase == SEARCH_PHASE_TO_GOAL) return MazePos_InList(p, sp->goals, sp->goal_count);
     if (sp->phase == SEARCH_PHASE_FULL) return MazePos_InList(p, sp->full_targets, sp->full_target_count);
+    if (sp->phase == SEARCH_PHASE_GOAL_TOUR) return MazePos_InList(p, sp->tour_targets, sp->tour_target_count);
     return MazePos_Equal(p, sp->start);
 }
 
 uint16_t SearchPlanner_KnownRun(const SearchPlanner *sp, uint16_t min_moves, Direction *moves) {
     if (sp->algo != SEARCH_ALGO_DIJKSTRA) return 0;
     if (sp->phase != SEARCH_PHASE_TO_GOAL && sp->phase != SEARCH_PHASE_TO_START &&
-        sp->phase != SEARCH_PHASE_FULL) return 0;
+        sp->phase != SEARCH_PHASE_FULL && sp->phase != SEARCH_PHASE_GOAL_TOUR) return 0;
     MazePos c = sp->pos;
     Direction h = sp->heading;
     uint16_t m = 0;

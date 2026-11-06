@@ -74,5 +74,4 @@ typedef struct {
 } SlalomOffsets;
 
 SlalomOffsets Slalom_SmallTurnOffsets(const SlalomParams *p);
-
 #endif
