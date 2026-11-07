@@ -69,6 +69,9 @@ typedef enum {
     LOG_EV_SLIP_POINT = 57,   // a:kind b:v c:stop d:fl e:fr
     LOG_EV_SLIP_POINT2 = 58,  // a:dist b:l c:r d:sum_std e:vbat
     LOG_EV_SLIP_RUN = 59,     // a:kind b:v c:pre d:post
+    // ---- 最短走行の ADJ CHECK(小回りの調整のあり・なしを比べる．2026-11-07 に消した．fast_0045〜0060 を読むため残す)----
+    LOG_EV_FAST_CHECK = 60,   // a:adj b:fl c:fr d:l e:r
+    LOG_EV_FAST_CHECK2 = 61,  // a:dist b:stop c:sum_std d:vbat e:no
 } LogEventCode;
 
 // LOG_EV_BOOT: 今の起動のリセットの原因(FAULT_RESET_*、interface/fault_diag.h)と、その前に HardFault があったか(1/0)。
@@ -84,6 +87,9 @@ typedef enum {
 // LOG_EV_FW1_POINT / LOG_EV_FW1_POINT2: 前壁の物差しの試験の FW1 で、止まって 0.5 秒測った1点。index は 1 から、d は計画の距離
 //   (4輪の真ん中から前壁まで[mm]．置いた所からの目標の距離から計算した名目の値)、dist はその間のエンコーダの道のりの平均[mm]、
 //   fl / fr / l / r は平均、sum_std は FL + FR の標準偏差、vbat は電池の電圧。
+// LOG_EV_FAST_CHECK / LOG_EV_FAST_CHECK2: 最短走行の ADJ CHECK(2026-11-07)。ゴールの真ん中から、次の境界の 12mm 手前まで
+//   進んで止まり、0.5 秒前壁を読んだ平均。adj は小回りの手で足す調整を入れたか(1/0)、stop は止まる所の目標の距離、
+//   dist はその間のエンコーダの道のりの平均、no は ADJ CHECK の何本目か(1 から)。
 // LOG_EV_SLIP_RUN / LOG_EV_SLIP_POINT / LOG_EV_SLIP_POINT2: 小回りの滑りの試験(app/slip_turn_test)。RUN は 1 本の始め
 //   (kind 1 = T1 小回り 1 回、2 = T2 右 → 左、3 = E 東へまっすぐ、4 = N 北へまっすぐ、5 = P1 超信地旋回で右、6 = P2 超信地旋回で右 → 小回りで左、
 //   7 = T1L 小回りで左、8 = P1L 超信地旋回で左、9 = EW 西へまっすぐ、10 = T2L 小回りで左 → 右、11 = P2L 超信地旋回で左 → 小回りで右。

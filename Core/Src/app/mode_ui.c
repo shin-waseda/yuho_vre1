@@ -52,7 +52,8 @@ static const char *ModeName(RobotMode mode) {
         case MODE_GYRO_SCALE_TEST: return "GYRO_SCALE";
         case MODE_FRONT_WALL_TEST: return "FRONT_WALL";
         case MODE_SLIP_TURN_TEST: return "SLIP";
-        default:                return "UNKNOWN";
+        case MODE_FAST_ALL:      return "FAST_ALL";
+        default:               return "UNKNOWN";
     }
 }
 
@@ -65,7 +66,8 @@ static const RobotMode s_test_modes[] = {
 };
 static const RobotMode s_run_modes[] = {
     // SEARCH は地図・行き先・アルゴリズムなどを中で選ぶ(SearchMenu_Run)。ログ取りの走行は TEST の中で選ぶ(RunTest_Run)
-    MODE_SEARCH, MODE_FAST_RUN, MODE_RUN_TEST, MODE_AUTONOMOUS,
+    // FAST_ALL は最短走行の制御全部乗せ(2026-11-07。前からの番号を変えないよう最後に足した)
+    MODE_SEARCH, MODE_FAST_RUN, MODE_RUN_TEST, MODE_AUTONOMOUS, MODE_FAST_ALL,
 };
 static const RobotMode s_sd_modes[] = {
     MODE_SD_DUMP, MODE_SD_DUMP_ALL, MODE_STREAM_TEST,
@@ -419,6 +421,9 @@ void ModeUI_Run(RobotMode mode) {
             break;
         case MODE_FAST_RUN:
             FastRun_Run();
+            break;
+        case MODE_FAST_ALL:
+            FastAll_Run();
             break;
         case MODE_PARTY:
             PartyMode_Run();

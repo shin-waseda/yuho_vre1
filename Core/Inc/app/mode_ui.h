@@ -45,6 +45,7 @@ typedef enum {
     MODE_GYRO_SCALE_TEST, // ジャイロの倍率の試験(前の壁を見ながら左右に何回も回る)
     MODE_FRONT_WALL_TEST, // 前壁の物差しの試験(FW1 止めて測る / FW2 走って測る)
     MODE_SLIP_TURN_TEST,  // 小回りの滑りを止めて測る試験(T1 小回り 1 回 / T2 右 → 左)
+    MODE_FAST_ALL,        // 最短走行の制御全部乗せ(横壁追従・壁切れ補正・小回りの前壁補正・ゴールの前壁合わせ)
     MODE_COUNT
 } RobotMode;
 

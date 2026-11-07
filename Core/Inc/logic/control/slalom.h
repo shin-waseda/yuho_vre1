@@ -73,5 +73,4 @@ typedef struct {
     float post_adj_mm; // 形で決まる後ろのオフセットからの調整分
 } SlalomOffsets;
 
-SlalomOffsets Slalom_SmallTurnOffsets(const SlalomParams *p);
-#endif
+SlalomOffsets Slalom_SmallTurnOffsets(const SlalomParams *p);#endif

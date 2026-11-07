@@ -43,6 +43,8 @@ enum {
     SLIP_EW = 9,   // (2,1) で西向き((2,1) の東の壁に付ける)→ まっすぐ (1,1) の西の端(T1L と同じ止まる所)
     SLIP_T2L = 10, // (2,0) → (2,1) で左 → (1,1) で右 → (1,2) の北の端(T2 と同じ止まる所)
     SLIP_P2L = 11, // (2,0) → (2,1) の真ん中で左へ超信地旋回 → (1,1) で右へ小回り → (1,2) の北の端
+    // 最短走行の ADJ CHECK の比べ相手(2026-11-07)。N と同じ動きで、ゴールの列(例: ゴール (2,2) なら (2,0))に置く
+    SLIP_NG = 12,  // (2,0) で北向き(南の外周の壁に付ける)→ まっすぐ (2,2) の北の端(ゴール (2,2) の ADJ CHECK と同じ止まる所)
 };
 static const float kPivotSpeeds[] = { 300.0f, 500.0f }; // 超信地旋回の走り(T1・P1・T2・P2)の直進・小回りの速さ
 #define SLIP_LR_V 300.0f // LR の組の速さ(速さによらないずれを見るので 1 つだけ)
@@ -206,7 +208,7 @@ static void SetupLogger(int kind, float v) {
     // 走り(T2・P2 で約 700mm、T1・P1 で約 450mm、N で 478mm、E で 298mm)+ 止まってから読み終わるまで + 余り。
     // 超信地旋回は止まる・前後を合わせる・回るの分を足す。長いほど間引かれる
     float path_mm = (kind == SLIP_T2 || kind == SLIP_P2 || kind == SLIP_T2L || kind == SLIP_P2L) ? 700.0f
-                  : (kind == SLIP_E || kind == SLIP_EW) ? 300.0f : (kind == SLIP_N) ? 480.0f : 450.0f;
+                  : (kind == SLIP_E || kind == SLIP_EW) ? 300.0f : (kind == SLIP_N || kind == SLIP_NG) ? 480.0f : 450.0f;
     uint32_t pivot_ms = (kind == SLIP_P1 || kind == SLIP_P2 || kind == SLIP_P1L || kind == SLIP_P2L) ? 2000u : 0u;
     Logger_SetDuration((uint32_t)(path_mm / v * 1000.0f) + pivot_ms + SLIP_SETTLE_MS + SLIP_RECORD_MS + 700u);
 }
@@ -225,7 +227,7 @@ static bool RunOnce(int kind, float v, StopMeasure *m) {
     if (kind == SLIP_T1 || kind == SLIP_T2 || kind == SLIP_T1L || kind == SLIP_T2L) {
         if (!Turn(&ref, !left_set, v, &s)) return false;              // 1 回目
         if (second && !Turn(&ref, left_set, v, &s)) return false;     // 2 回目(反対の向き)
-    } else if (kind == SLIP_N) {
+    } else if (kind == SLIP_N || kind == SLIP_NG) {
         ref += SECTION_MM; // (1,0) から (1,1) を通って (1,2) へ(E・EW は隣の区画へ入るだけ)
     } else if (kind == SLIP_P1 || kind == SLIP_P2 || kind == SLIP_P1L || kind == SLIP_P2L) {
         StraightTo(ref + 0.5f * SECTION_MM, v, 0.0f); // 曲がる区画の真ん中で止まる
@@ -275,6 +277,7 @@ static const char *KindName(int kind) {
         case SLIP_T2: return "T2";
         case SLIP_E: return "E";
         case SLIP_N: return "N";
+        case SLIP_NG: return "NG";
         case SLIP_P1: return "P1";
         case SLIP_P2: return "P2";
         case SLIP_T1L: return "T1L";
@@ -286,11 +289,49 @@ static const char *KindName(int kind) {
     }
 }
 
+// 置く所の番号(手かざしを待つ間に LED で見せる): 1 S、2 (2,0)、3 (0,1) 東向き、4 (2,1) 西向き、5 (1,0)
+static int KindPlaceNo(int kind) {
+    switch (kind) {
+        case SLIP_T1L:
+        case SLIP_P1L:
+        case SLIP_T2L:
+        case SLIP_P2L: return 2;
+        case SLIP_E: return 3;
+        case SLIP_EW: return 4;
+        case SLIP_N: return 5;
+        case SLIP_NG: return 2; // (2,0) で北向き(左の組と同じ所)
+        default: return 1;
+    }
+}
+
+// 手かざしを待つ。待つ間、シフトレジスタの LED を置く所の番号 × 3 個つける(1 番 3 個 … 5 番 15 個)。
+// 置く所が前の 1 本から変わったときは、それと直結の LED 全部を 0.15 秒ごとに点滅させる(置き直しを見落とさないため)。
+// 手をかざしたら消して、あとは ModeUI_WaitHandStart と同じ(かざし続けて離すまで待つ)
+static void WaitHandShowingPlace(int place, bool changed) {
+    uint16_t bar = (uint16_t)((1u << (3u * (uint32_t)place)) - 1u);
+    uint32_t t0 = HAL_GetTick();
+    int shown = -1;
+    while (ad_fl <= SENSOR_START_THRESHOLD) {
+        if (FailSafe_IsTripped()) FailSafe_Halt();
+        int on = (!changed || ((HAL_GetTick() - t0) / 150u) % 2u == 0u) ? 1 : 0;
+        if (on != shown) { // 変わったときだけ書く(シフトレジスタを毎回送らない)
+            LED_SetShiftPattern(on ? bar : 0u);
+            if (changed) LED_SetDirectPattern(on ? LED_DIRECT_ALL : 0u);
+            shown = on;
+        }
+        HAL_Delay(1);
+    }
+    LED_SetShiftPattern(0u);
+    LED_SetDirectPattern(0u);
+    ModeUI_WaitHandStart();
+}
+
 // 置く所(UART に出す)
 static const char *KindPlace(int kind) {
     switch (kind) {
         case SLIP_E: return "(0,1) facing east, tail on the west wall";
         case SLIP_N: return "(1,0) facing north, tail on the south wall";
+        case SLIP_NG: return "(2,0) facing north, tail on the south wall (the column of the goal (2,2))";
         case SLIP_T1L:
         case SLIP_P1L:
         case SLIP_T2L:
@@ -311,9 +352,13 @@ static bool RunOneByHand(uint32_t run, int kind, float v) {
         return false;
     }
     if (FailSafe_IsTripped()) FailSafe_Halt();
-    printf("#%lu %s v %.0f: place at %s, then hand over front-left sensor to RUN\r\n", (unsigned long)run,
-           KindName(kind), v, KindPlace(kind));
-    ModeUI_WaitHandStart();
+    static int s_last_place = 0; // 前の 1 本の置く所(0 はまだ走っていない)
+    int place = KindPlaceNo(kind);
+    bool changed = (place != s_last_place);
+    s_last_place = place;
+    printf("#%lu %s v %.0f: %splace at %s (place %d), then hand over front-left sensor to RUN\r\n", (unsigned long)run,
+           KindName(kind), v, changed ? "NEW PLACE! " : "", KindPlace(kind), place);
+    WaitHandShowingPlace(place, changed);
     HAL_Delay(SLIP_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
     SetupLogger(kind, v);
     BeginAtStart();
@@ -337,26 +382,53 @@ static bool RunOneByHand(uint32_t run, int kind, float v) {
 }
 
 void SlipTurnTest_Run(void) {
-    static const float kFour[] = { 1.0f, 2.0f, 3.0f, 4.0f };
-    int set = (int)ModeUI_SelectValue("SLIP(1 TURN 2 STRAIGHT 3 PIVOT 4 LR)", "", kFour, 4u, 1.0f);
+    static const float kSix[] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
+    int set = (int)ModeUI_SelectValue("SLIP(1 TURN 2 STRAIGHT 3 PIVOT 4 LR 5 LR REST 6 REF NG)", "", kSix, 6u, 1.0f);
     printf("walls: south of S, east of (2,1), north of (1,3). keep open: east of (0,1), east and north of (1,1), "
            "(1,2)-(1,3). place by hand before every run\r\n");
     uint32_t run = 0;
 
-    if (set == 4) {
+    if (set == 6) {
+        // 最短走行の ADJ CHECK の比べ相手(2026-11-07): ゴール (2,2) の列の一番下 (2,0) から、まっすぐ北へ (2,2) の北の端まで。
+        // ADJ CHECK と同じ迷路のまま走る(迷路は ADJ CHECK の迷路で、(2,0)〜(2,2) がまっすぐ空いていること)
+        printf("SLIP REF NG: straight north from (2,0) to the north end of (2,2), v %.0f, %d runs\r\n", SLIP_LR_V,
+               SLIP_RUNS_EACH);
+        for (uint32_t k = 0; k < (uint32_t)SLIP_RUNS_EACH; k++) {
+            if (!RunOneByHand(++run, SLIP_NG, SLIP_LR_V)) return;
+        }
+    } else if (set == 5) {
+        // LR の残り(2026-11-07): 1 回目の LR は 19 本で止まった(S の 12 本と、(2,0) の T1L・P1L・T2L が 2 本、P2L が 1 本)。
+        // 各 3 本になるように (2,0) の足りない分を走り、続けて E・EW・N を 3 本ずつ走る(同じ迷路のまま)
+        static const int kRest[] = { SLIP_T1L, SLIP_P1L, SLIP_T2L, SLIP_P2L, SLIP_P2L,
+                                     SLIP_E, SLIP_E, SLIP_E, SLIP_EW, SLIP_EW, SLIP_EW, SLIP_N, SLIP_N, SLIP_N };
+        const uint32_t n_rest = (uint32_t)(sizeof(kRest) / sizeof(kRest[0]));
+        s_raw_slalom = true;
+        printf("SLIP LR REST: (2,0) T1L P1L T2L P2L P2L, then E x3, EW x3, N x3, v %.0f\r\n", SLIP_LR_V);
+        printf("walls: also keep open (2,0)-(2,1), (2,1)-(1,1), (1,1)-(0,1)\r\n");
+        for (uint32_t j = 0; j < n_rest; j++) {
+            if (!RunOneByHand(++run, kRest[j], SLIP_LR_V)) return;
+        }
+    } else if (set == 4) {
         // 左右と回る中心のずれ: 右の組・左の組の小回りと超信地旋回、同じ止まる所のまっすぐの走りを、同じ回の中で順に走る。
         // 小回りは手で足す調整を引いた形で走る(調整の入っていない小回りと超信地旋回を、回る中心のずれの式で比べるため)。
-        // 置く所が同じものを続ける: S(T1 P1 T2 P2)→ (2,0)(T1L P1L T2L P2L)→ E → EW → N を SLIP_RUNS_EACH 回くり返す
-        static const int kKinds[] = { SLIP_T1, SLIP_P1, SLIP_T2, SLIP_P2, SLIP_T1L, SLIP_P1L, SLIP_T2L, SLIP_P2L,
-                                      SLIP_E, SLIP_EW, SLIP_N };
-        const uint32_t n_kinds = (uint32_t)(sizeof(kKinds) / sizeof(kKinds[0]));
+        // 置き直しを減らすため、置く所ごとにまとめる(2026-11-07): S で T1 P1 T2 P2 を SLIP_RUNS_EACH 回 →
+        // (2,0) で T1L P1L T2L P2L を同じように → E・EW・N を SLIP_RUNS_EACH 本ずつ。比べる組(T1 と P1 など)は同じ所で交互に走る
+        static const int kGroups[5][4] = {
+            { SLIP_T1, SLIP_P1, SLIP_T2, SLIP_P2 },
+            { SLIP_T1L, SLIP_P1L, SLIP_T2L, SLIP_P2L },
+            { SLIP_E, 0, 0, 0 },
+            { SLIP_EW, 0, 0, 0 },
+            { SLIP_N, 0, 0, 0 },
+        };
         s_raw_slalom = true;
-        printf("SLIP LR: right / left, slalom (no manual adjust) and pivot, with straight E / EW / N, v %.0f, %d rounds\r\n",
-               SLIP_LR_V, SLIP_RUNS_EACH);
+        printf("SLIP LR: right / left, slalom (no manual adjust) and pivot, with straight E / EW / N, v %.0f, "
+               "grouped by place\r\n", SLIP_LR_V);
         printf("walls: also keep open (2,0)-(2,1), (2,1)-(1,1), (1,1)-(0,1)\r\n");
-        for (uint32_t k = 0; k < (uint32_t)SLIP_RUNS_EACH; k++) {
-            for (uint32_t j = 0; j < n_kinds; j++) {
-                if (!RunOneByHand(++run, kKinds[j], SLIP_LR_V)) return;
+        for (uint32_t g = 0; g < 5u; g++) {
+            for (uint32_t k = 0; k < (uint32_t)SLIP_RUNS_EACH; k++) {
+                for (uint32_t j = 0; j < 4u && kGroups[g][j] != 0; j++) {
+                    if (!RunOneByHand(++run, kGroups[g][j], SLIP_LR_V)) return;
+                }
             }
         }
     } else if (set == 3) {
