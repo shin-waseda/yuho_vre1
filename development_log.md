@@ -3944,3 +3944,17 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
 - 次: 実機の走らせ方(`RunList_Drive` で 45°・135°・V90 のスラロームと斜めの直進．制御の目標の位置はもともと 2 次元で積んでいるので，
   向きが 45° でも追従できるはず)と FAST のメニュー．maze_sim の画面に斜めを描くには maze-sim の `MSIM_RUN_*` と描き方を足す．
 - 11章(残っている課題)に「斜め走行」を足した(前は斜めの項目はなかった)．
+
+### 2026-11-07 maze-sim(Python の公開版)を斜めに対応させた(`feature/diagonal-run` のまま)
+- ユーザーの依頼「maze-sim(python)を更新して」．別リポジトリ `M:/User/Desktop/school/club/maze-sim`(main．コミットはしていない)．
+  - `include/msim.h`: `MSIM_RUN_DIAG`(8)〜`MSIM_RUN_DV90_L`(18)を足した(yuho の `RunType` と同じ番号)．使わなくてよい指令なので
+    `MSIM_API_VERSION` は 1 のまま．`mouse.py` に番号と名前，`cli.py` に斜めの直進の表示．
+  - `static/motion.js`: 向きを 45° 単位で持つようにし，斜めの直進(1個 = S/√2)と斜めの旋回の表示用の固定の形
+    (角までの折れ線の短い方に収まる一番大きな円弧 + 長い方の残りの直線．yuho の `RunProfile_Default` と同じ形)を足した．
+    `app.js` で色を分けた(斜めの直進は緑，斜めの旋回は桃)．`README.md` と `docs/api.md` に説明を足した．
+  - `examples/yuho/` を今の yuho のつなぎ(`yuho_mouse.c`・`ideal_time.c/.h`)で写し直した(10-21 から写していなかった分も入る)．
+- yuho 側: `tools/maze_sim/yuho_mouse.c` の最短走行の経路を 3 つにした(3 つめ「cost + large + diag」= `RunPath_FromRouteEx` で大回りと斜め)．
+- 確かめたこと: maze-sim のテスト(`tests/run_tests.py`，yuho を足して)は全部通った(yuho は 3 つの経路，同梱の迷路 87 枚，画面に JS のエラーなし)．
+  学生クラシック 2021 の斜めの経路(D45IN・DIAG・D45OUT・DV90・D135IN・D135OUT を含む 34 指令)を，画面なしの Chrome で `motion.js` に通し，
+  指令ごとの終わりが区画の格子の点(斜めの点は境目の真ん中で 45° の向き)に乗ること，向きが前後でつながること，
+  ゴールの中心で終わること，再生の時間が機体の見積もり(10.882 秒)と合うことを確かめ，形を絵でも見た．
