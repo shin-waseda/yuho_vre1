@@ -49,6 +49,27 @@ static char s_note[128];          // 状態の行に出す出来事(LOST など)
 static bool s_has_cost;           // 探索の後の経路のコスト(msim_results で計算する)
 static uint16_t s_cost_found, s_cost_best;
 
+// 既知の区間をまとめて走っている途中(SearchTime_KnownRun)。msim の1手は「向きを変えて何区画か進む」なので、
+// 曲がりを含む区間は何手かに分けて返す。その間はプランナーを呼ばない(機体も区間の途中では壁を読まない)
+static Direction s_known[MAZE_CELL_COUNT]; // 区画を移る向き(s_known[0] は C1 に入る向き)
+static uint16_t s_known_m;                 // 最後の番号(0 ならまとめていない)
+static uint16_t s_known_next;              // 次に返す番号
+static Direction s_known_heading;          // シミュレータの機体の今の向き
+
+// s_known[s_known_next..] から1手ぶん(同じ向きが続く間)を move に書く
+static void NextKnownMove(MsimMove *move) {
+    Direction d = s_known[s_known_next];
+    int q = ((int)d - (int)s_known_heading) & 3;
+    move->turn = (q == 3) ? -1 : q; // 右 1、左 -1、180° 2
+    move->cells = 0;
+    while (s_known_next <= s_known_m && s_known[s_known_next] == d) {
+        move->cells++;
+        s_known_next++;
+    }
+    s_known_heading = d;
+    if (s_known_next > s_known_m) s_known_m = 0; // 終わり(プランナーの位置は区間の終わりの区画になっている)
+}
+
 // ------------------------------------------------------------
 // オプション("名前=値" の行)
 // ------------------------------------------------------------
@@ -145,7 +166,10 @@ MSIM_EXPORT int msim_reset(const MsimMaze *maze, const char *options, char *err,
     s_planner.cost_to_goal = to_goal;
     s_planner.cost_to_start = to_start;
     if (s_scope == SCOPE_FULL) SearchPlanner_StartFull(&s_planner);
+    // 往復は機体と同じく、ゴールで止まって 180° 回らず、ゴールの区画を全部回ってから戻る(app/search_run の RunSearch)
+    s_planner.goal_tour = (s_scope == SCOPE_ROUND);
     SearchTime_Init(&s_st, &s_speeds);
+    s_known_m = 0;
     s_has_values = false;
     s_decided_shown = false;
     s_has_cost = false;
@@ -155,6 +179,14 @@ MSIM_EXPORT int msim_reset(const MsimMaze *maze, const char *options, char *err,
 
 MSIM_EXPORT void msim_step(const MsimSense *sense, MsimMove *move) {
     memset(move, 0, sizeof(*move));
+    // 既知の区間の続き(プランナーは区間の終わりにいるので、位置は比べない)
+    if (s_known_m > 0u) {
+        move->status = MSIM_MOVE;
+        NextKnownMove(move);
+        move->returning = (s_planner.phase == SEARCH_PHASE_TO_START || s_planner.phase == SEARCH_PHASE_DONE ||
+                           s_planner.phase == SEARCH_PHASE_GOAL_TOUR) ? 1 : 0;
+        return;
+    }
     // プランナーの位置とシミュレータの位置がずれたら logic 層のバグ
     if (sense->x != s_planner.pos.x || sense->y != s_planner.pos.y || sense->dir != (int)s_planner.heading) {
         snprintf(s_note, sizeof(s_note), "LOST: planner (%u,%u) %c, sim (%d,%d) %c", s_planner.pos.x,
@@ -169,8 +201,11 @@ MSIM_EXPORT void msim_step(const MsimSense *sense, MsimMove *move) {
 
     WallObservation obs = { sense->front != 0, sense->right != 0, sense->left != 0 };
     SearchPhase before = s_planner.phase;
+    Direction h_before = (Direction)sense->dir;
     Action a = SearchPlanner_Step(&s_planner, obs);
-    SearchTime_Step(&s_st, a, before, s_planner.phase);
+    // 機体と同じく、先の区画の壁が分かっていればまとめて走る(プランナーの位置は区間の終わりへ進む)
+    uint16_t km = SearchTime_KnownRun(&s_st, &s_planner, a, before, s_planner.phase, s_known);
+    if (km == 0u) SearchTime_Step(&s_st, a, before, s_planner.phase);
     s_has_values = true;
     // 指令を返したときだけプランナーは経路を計算している(止まったときは前の値のまま)
     if (s_algo == SEARCH_ALGO_DIJKSTRA && a.type != ACTION_STOP) {
@@ -206,10 +241,23 @@ MSIM_EXPORT void msim_step(const MsimSense *sense, MsimMove *move) {
         }
         return;
     }
-    move->status = MSIM_MOVE;
-    move->turn = Action_QuarterTurns(a.type); // 右 1、左 -1、180° 2(msim.h と同じ)
-    move->cells = a.cells;
-    move->returning = (s_planner.phase == SEARCH_PHASE_TO_START || s_planner.phase == SEARCH_PHASE_DONE) ? 1 : 0;
+    // 走ったままゴールに入った所(ゴールを回る・全面探索。機体はここで止まって地図を残し、真ん中から次の指令)。
+    // ゴールに着いた合図を出しつつ、この手の動きもそのまま返す
+    bool goal_moving = (before == SEARCH_PHASE_TO_GOAL && s_planner.phase != SEARCH_PHASE_TO_GOAL);
+    move->status = goal_moving ? MSIM_GOAL : MSIM_MOVE;
+    if (km > 0u) {
+        // 既知の区間: 最初の1手(C1 へ入る向きから同じ向きが続く間)を返し、残りは次の呼び出しから
+        s_known_m = km;
+        s_known_next = 0;
+        s_known_heading = h_before;
+        NextKnownMove(move);
+    } else {
+        move->turn = Action_QuarterTurns(a.type); // 右 1、左 -1、180° 2(msim.h と同じ)
+        move->cells = a.cells;
+    }
+    // ゴールを回っている間も、ゴールに着いた後なので「帰り」に数える
+    move->returning = (s_planner.phase == SEARCH_PHASE_TO_START || s_planner.phase == SEARCH_PHASE_DONE ||
+                       s_planner.phase == SEARCH_PHASE_GOAL_TOUR) ? 1 : 0;
 }
 
 // ------------------------------------------------------------
@@ -265,10 +313,11 @@ MSIM_EXPORT int msim_cell_value(int x, int y) {
 }
 
 MSIM_EXPORT void msim_status(char *buf, int len) {
-    static const char *const kPhase[] = { "to goal", "to start", "done", "failed", "full search" };
+    static const char *const kPhase[] = { "to goal", "to start", "done", "failed", "full search", "goal tour" };
     static const char *const kScope[] = { "round", "oneway", "full" };
     const char *target = (s_planner.phase == SEARCH_PHASE_TO_GOAL) ? "goal"
-                       : (s_planner.phase == SEARCH_PHASE_FULL) ? "targets" : "start";
+                       : (s_planner.phase == SEARCH_PHASE_FULL) ? "targets"
+                       : (s_planner.phase == SEARCH_PHASE_GOAL_TOUR) ? "goal cells" : "start";
     const char *goal_label = (s_scope == SCOPE_FULL) ? "route decided" : "goal";
     int n = snprintf(buf, (size_t)len,
                      "phase  : %s\n"
@@ -281,6 +330,8 @@ MSIM_EXPORT void msim_status(char *buf, int len) {
     if (s_st.t_goal_s >= 0.0f) n += snprintf(buf + n, (size_t)(len - n), " (%s %.1f s)", goal_label, (double)s_st.t_goal_s);
     if (n < 0 || n >= len) return;
     n += snprintf(buf + n, (size_t)(len - n), "\n");
+    if (n < 0 || n >= len) return;
+    n += snprintf(buf + n, (size_t)(len - n), "known  : %d runs, %d cells\n", s_st.known_runs, s_st.known_cells);
     if (n < 0 || n >= len) return;
     if (s_has_cost) {
         n += snprintf(buf + n, (size_t)(len - n), "route cost %u%s", s_cost_found,
@@ -314,8 +365,8 @@ MSIM_EXPORT void msim_results(const MsimMaze *truth, char *buf, int len) {
     Dijkstra_Compute(&s_solver, &s_map, WALL_VIEW_KNOWN, NULL, s_goals, s_goal_count);
     s_cost_found = Dijkstra_Cost(&s_solver, s_start, DIR_NORTH);
     s_has_cost = true;
-    snprintf(buf, (size_t)len, "search_s=%.3f\ngoal_s=%.3f\ncost_optimal=%d\ncost_ratio=%.4f\n",
-             (double)s_st.t_s, (double)s_st.t_goal_s, s_cost_found == s_cost_best ? 1 : 0,
+    snprintf(buf, (size_t)len, "search_s=%.3f\ngoal_s=%.3f\nknown_cells=%d\ncost_optimal=%d\ncost_ratio=%.4f\n",
+             (double)s_st.t_s, (double)s_st.t_goal_s, s_st.known_cells, s_cost_found == s_cost_best ? 1 : 0,
              (double)s_cost_found / (double)s_cost_best);
 }
 

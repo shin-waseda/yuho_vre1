@@ -25,9 +25,20 @@ void App_StartStraight(float distance_mm, float v_max, float v_end, float accel)
 void App_StartStraightAD(float distance_mm, float v_max, float v_end, float accel, float decel);
 
 // 台形プロファイルで超信地旋回する(その場で回る。止まって終わる)。
+// 台形が終わった後、ジャイロの角度が目標に合うまで(最長 PIVOT_SETTLE_TIMEOUT_MS)完了にしない。
 // angle_deg: 正=反時計回り(左)、負=時計回り(右)。
 // 実際の開始は次のtick。完了はApp_IsMotionDone()で見る。制御が有効でないと進まない。
 void App_StartPivot(float angle_deg, float omega_max_dps, float alpha_dps2);
+
+// 区画の真ん中で前の壁に向いて止まっている所で、前の壁センサーが基準(FRONT_ALIGN_REF_*)になるよう、
+// その場で前後と向きを合わせる(止まって終わる)。合わせた分は目標の距離と目標の向きにも入る。
+// 実際の開始は次のtick。完了はApp_IsMotionDone()で見る(最長 FRONT_ALIGN_TIMEOUT_MS)。結果は LOG_EV_FRONT_ALIGN。
+void App_StartFrontAlign(void);
+
+// 目標の位置に対する推定の位置のずれ[mm](2次元。目標の向きに対して)。位置のループは前後のずれを、
+// 横のずれの FB は横のずれを、いつも消そうとしている。
+float App_GetPositionError(void); // 前後(+ なら目標が前)
+float App_GetLateralError(void);  // 横(+ なら機体が左)
 
 // スラローム(並進しながら曲がる)。今の並進の目標速度をそのまま保ち、角速度だけを台形で動かして
 // angle_deg 回る(正=反時計回り)。走っている最中(直進のプロファイルが終わって等速のとき)に呼ぶこと。
@@ -40,24 +51,34 @@ bool App_IsMotionDone(void);
 // 超信地旋回の間は変わらない。探索で区画の境界・真ん中に着いたかを見るのに使う。
 float App_GetTargetDistance(void);
 
-// 直進中に見つけた最後の壁切れ(横の壁がなくなった瞬間)。side(NULL可): 0 左 / 1 右、
-// pos_ref_mm(NULL可): その瞬間の目標の距離。戻り値は見つけた数(増えたら新しい壁切れ)。
-uint32_t App_GetWallEdge(uint8_t *side, float *pos_ref_mm);
-
 // 位置の制御(前後の位置を保つ)を効かせるかどうか。起動時は true。
 // false の間は目標の距離を今の距離に合わせ続けるので、true に戻しても補正は跳ばない。
 // (宴会芸モードのように、向きだけ保ちたいときに false にする)
 void App_SetPositionHold(bool en);
 
-// 尻当て用。true の間は向きと位置の補正を止め(目標の向き・距離は今の値に合わせ続ける)、
-// 並進の FB だけで動かす(旋回の FF・FB は止め，左右に同じ電圧をかける)。壁に押し当てたとき、機体が壁にそろう向きを打ち消さないため。
-void App_SetWallPush(bool en);
-
-// 壁の制御を使うかどうか(起動時は true)。WALL_CONTROL_ENABLE が 1 のときだけ効く。
-// 探索では BlueEyes と同じく、区画の境界から境界までの直進(1区画)だけで使い、
-// 真ん中から・真ん中までの半区画と尻当てでは止める(真ん中ではセンサーが柱のあたりを見るため)。
+// 横壁追従(logic/control/wall_control)を使うかどうか。起動時は false。直進している間だけ効く。
+// 探索で補正を選んだとき、境界から境界への直進の間だけ true にする(変わったら LOG_EV_WALL_CTRL)。
+// 横壁追従のずらしは、横のずれの FB のずらしと足して目標の向きに足す。
 void App_SetWallControl(bool en);
 
+// エンコーダとジャイロで見た横のずれの FB を使うかどうか。起動時は true。
+// false の間は、横のずれを返さず、目標の位置の横の成分を推定の位置に合わせ続ける(横のずれをためないので、
+// 曲がった後に前後のずれに変わって位置のループに引っ張られることもない)。横は横壁追従(壁)だけで決まる。
+// 探索で、横壁追従だけの走り方を作るのに使う(2026-11-05)。
+void App_SetLateralControl(bool en);
+
+// モーターの出力だけを 0 にする(true)/戻す(false)。制御の状態(目標の距離・向き・位置・積分)はそのまま。
+// 走っている途中で止まって flash を書くときに使う(flash を消している間は CPU が止まって制御の割り込みが回らず、
+// モーターが前の出力のまま回り続けるため。2026-11-06)
+void App_SetOutputPaused(bool paused);
+
+// 直進中に見つけた壁切れ(横の壁がなくなった瞬間)。side: 0 左、1 右、pos_ref_mm: その瞬間の目標の距離。
+// 戻り値は見つけた数(新しい壁切れがあったかを、前に読んだ値と比べて見分ける)。side・pos_ref_mm は NULL 可
+uint32_t App_GetWallEdge(uint8_t *side, float *pos_ref_mm);
+
+// 補正で前後の位置を直した量[mm]を、ログの列 corr_along に足していく(壁切れ補正・小回りの前壁補正。
+// 前壁合わせで動いた量は ISR が自分で足す)。+ なら、思っていたより後ろにいたので先へ進めた
+void App_AddAlongCorrection(float mm);
 // 速度PIDとモータ出力の有効/無効。起動時は無効。
 // 無効中もオドメトリ更新は続ける(PIDとモータ出力だけ止める)。
 // 有効化した直後のtickでPIDの内部状態をリセットする。
@@ -122,10 +143,19 @@ typedef struct {
     float target_omega_dps; // 目標角速度(プロファイル)
     float gyro_z_dps;       // ジャイロの角速度
     float angle_deg;        // ジャイロの積分角(起動からの累積)
-    float angle_ref_deg;    // 目標の向き(angle_deg と同じ基準。止まってもリセットしない)
+    float angle_ref_deg;    // 目標の向き(angle_deg と同じ基準。止まってもリセットしない。横のずれのずらしは含まない)
+    float lat_err_mm;       // 横のずれ[mm](目標の位置に対する推定の位置。目標の向きの左 +)
+    // 補正を受けない推定の位置[mm](進んだ距離とジャイロの角度だけで積む。走りの始めの向きを +x、左を +y)。
+    // 向きは angle_deg(補正は目標の向きを動かすだけで、ジャイロの角度は動かさない)
+    float est_x_mm, est_y_mm;
+    float wall_ofs_deg;     // 横壁追従のずらし[deg](目標の向きに足した分。横のずれの FB の分は含まない)
+    float corr_along_mm;    // 補正で前後の位置を直した量の合計[mm](壁切れ補正・小回りの前壁補正・前壁合わせ)
     float f_ff;             // 旋回の FF のうち，タイヤが横にこする分 F[V]
     float ad_l, ad_fl, ad_fr, ad_r; // 壁センサーの値(IR 点灯 − 消灯の差。ad_* を float にしたもの)
-    float wall_offset_deg;  // 壁の制御のオフセット[deg](目標の向き = 迷路の軸の向き + これ)
+    // 6軸(機体の座標: x 前、y 左、z 上。logic/state_estimation/imu)。制御には使わず、ログに残すだけ。
+    // 加速度[m/s²]は重力を含む(止まって水平なら acc_z が約 +9.8)。ジャイロ Z は gyro_z_dps と同じなので入れない
+    float acc_x, acc_y, acc_z;
+    float gyro_x_dps, gyro_y_dps;
 } ControlDebug;
 
 const ControlDebug *App_GetControlDebug(void);

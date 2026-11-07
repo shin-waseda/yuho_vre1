@@ -12,7 +12,7 @@
 #define SLALOM_TEST_PRE_MS       200   // 走り出す前に止まったまま記録する時間
 #define SLALOM_TEST_POST_MS      500   // 止まった後も記録する時間
 #define SLALOM_TEST_TIMEOUT_MS   3000  // 1つの動きがこれを過ぎても終わらなければ打ち切る
-#define SLALOM_TEST_LOG_MS       4000  // 記録の長さ(走る時間は約 1.5 秒 + 前後の待ち。尻当ての間は記録しない)
+#define SLALOM_TEST_LOG_MS       4000  // 記録の長さ(走る時間は約 1.5 秒 + 前後の待ち。真ん中へ進む間は記録しない)
 #define SLALOM_TEST_START_DELAY_MS 1000 // 手を離してから走り出すまでの待ち(ジャイロのゼロ点を測る時間を含む)
 
 #define HALF_SECTION_MM (SECTION_MM * 0.5f)
@@ -145,17 +145,16 @@ static void ComputeTurns(void) {
 }
 
 // 1回走る。right: 右(時計回り)に曲がる。打ち切ったら false。
-static bool RunOnce(const TestTurn *t, bool right) {
+// from_wall: 後ろの壁に尾を付けて置いた所から始める(まず区画の真ん中へ進む)。false なら区画の真ん中から始める。
+// 尻当て・壁の制御は使わない(2026-11-04)。
+static bool RunOnce(const TestTurn *t, bool right, bool from_wall) {
     App_SetPositionHold(true);
-    App_SetWallPush(false);
-    App_SetWallControl(false); // 曲がった後のずれをそのまま見るため、壁の制御は使わない
     App_SetTargetVelocity(0.0f);
     App_ControlLoop_SetEnabled(true);
 
-    // 尻当てで区画の真ん中・置いた向きにそろえる(手で置いたときの横のずれ・向きのずれを消す)
-    if (!MazeRun_StartSequence()) return false;
+    if (from_wall && !MazeRun_StartSequence()) return false;
     float base = App_GetTargetDistance(); // 区画の真ん中の目標の距離
-    Logger_Start(); // 曲がるところを細かく残すため、記録は尻当ての後から
+    Logger_Start(); // 曲がるところを細かく残すため、記録は真ん中に着いてから
     DelayWatching(SLALOM_TEST_PRE_MS);
 
     // 旋回の始まりまで加速して、前のオフセットまで旋回の速さで進む
@@ -200,7 +199,7 @@ void SlalomTest_Run(void) {
 
     while (1) {
         // 旋回を選ぶ: ボタンのクリックで切り替え、手かざしで走り出す(シフトレジスタの LED に番号を出す)
-        printf("put in a cell with walls on the left and behind (facing north). turn: %s  (click: change, hand: RUN)\r\n",
+        printf("put with the tail on the back wall (facing north). turn: %s  (click: change, hand: RUN)\r\n",
                kFileNames[sel]);
         LED_SetShiftPattern((uint16_t)(1u << sel));
         while (ModeUI_WaitHandStartOrClick()) {
@@ -216,7 +215,7 @@ void SlalomTest_Run(void) {
         printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
         App_ResetGyroAngle(); // 走り出しの向きを 0° にする
 
-        bool ok = RunOnce(t, right);
+        bool ok = RunOnce(t, right, true);
         if (!ok) {
             App_SetTargetVelocity(0.0f);
             DelayWatching(300);
@@ -251,8 +250,6 @@ void SlalomTest_Run(void) {
 // 区画の真ん中で 180° 回る(探索の超信地旋回と同じ速さ)。打ち切ったら false
 static bool TurnAround(void) {
     App_SetPositionHold(true);
-    App_SetWallPush(false);
-    App_SetWallControl(false);
     App_SetTargetVelocity(0.0f);
     App_ControlLoop_SetEnabled(true);
     DelayWatching(100);
@@ -290,7 +287,7 @@ void SlalomSweep_Run(void) {
     if (i_to < i_from) i_to = i_from;
     printf("SLALOM SWEEP: s90 %.0f -> %.0f mm/s, %u round trips each (wall control off)\r\n",
            kSpeeds[i_from], kSpeeds[i_to], SLALOM_SWEEP_REPEAT);
-    printf("put in cell A (walls west and south) facing north. B (2 east, 2 north) needs walls east and south. hand: START\r\n");
+    printf("put in cell A facing north, with the tail on the south wall. B is 2 east, 2 north. hand: START\r\n");
     if (FailSafe_IsTripped()) FailSafe_Halt();
 
     SetupLogger();
@@ -307,6 +304,7 @@ void SlalomSweep_Run(void) {
         for (uint8_t rep = 0; rep < SLALOM_SWEEP_REPEAT; rep++) {
             for (uint8_t dir = 0; dir < 2u; dir++) { // 0: 右(A → B)、1: 左(B → A)
                 bool right = (dir == 0u);
+                bool from_wall = first; // 最初の1本だけ、後ろの壁に付けて置いた所から(その後は真ん中で 180° 回った所から)
                 if (!first) {
                     DelayWatching(SLALOM_SWEEP_PAUSE_MS);
                     if (!TurnAround()) SweepHalt("turn around timeout", (uint8_t)(si + 1u));
@@ -320,7 +318,7 @@ void SlalomSweep_Run(void) {
                 Logger_SetFileName(right ? "s90r" : "s90l");
                 printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
                 if (si == i_from && rep == 0u && dir == 0u) App_ResetGyroAngle(); // 置いた向きを 0° にする(往復の途中では決め直さない)
-                bool ok = RunOnce(&s_turns[0], right);
+                bool ok = RunOnce(&s_turns[0], right, from_wall);
                 if (!ok) {
                     App_SetTargetVelocity(0.0f);
                     DelayWatching(300);

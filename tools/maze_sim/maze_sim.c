@@ -99,6 +99,8 @@ typedef struct {
     float time_opt_best;  // 迷路を全部知っていたときの、時間で選んだ経路の時間[s]
     float search_s;       // 探索の時間[s](運動だけ。ideal_time.h)
     float goal_s;         // 往復・片道: ゴールに止まった時刻、全面: 最短経路が決まった時刻[s]
+    int known_runs;       // 既知の区間をまとめて走った回数
+    int known_cells;      // まとめて走った区画の数
 } Result;
 
 static void PrintRunList(const char *title, const RunList *list, const float *times) {
@@ -171,7 +173,7 @@ typedef struct {
 } SimConfig;
 
 static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, bool quiet) {
-    Result r = { false, 0, 0, MAZE_COST_INF, MAZE_COST_INF, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f };
+    Result r = { false, 0, 0, MAZE_COST_INF, MAZE_COST_INF, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 0, 0 };
     SearchAlgo algo = cfg->algo;
 
     // --- 探索 ---
@@ -181,19 +183,36 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
     if (cfg->set_back_cost) s_planner.cost_to_start = cfg->back_cost;
     bool one_way = (cfg->scope == SCOPE_ONE_WAY);
     if (cfg->scope == SCOPE_FULL) SearchPlanner_StartFull(&s_planner);
+    // 往復は機体と同じく、ゴールで止まって 180° 回らず、ゴールの区画を全部回ってから戻る(app/search_run の RunSearch)
+    s_planner.goal_tour = (cfg->scope == SCOPE_ROUND);
     SearchTime st;
     SearchTime_Init(&st, &cfg->search);
     MazePos pos = kSimStart;
     Direction heading = DIR_NORTH;
+    static Direction known[MAZE_CELL_COUNT]; // 既知の区間で C1 から先に進む向き(SearchTime_KnownRun)
 
     for (int step = 0; step < STEP_LIMIT; step++) {
         WallObservation obs = SimCore_Sense(truth, pos, heading);
         SearchPhase before = s_planner.phase;
         Action a = SearchPlanner_Step(&s_planner, obs);
-        SearchTime_Step(&st, a, before, s_planner.phase);
+        // 機体と同じく、先の区画の壁が分かっていればまとめて走る(プランナーの位置は区間の終わりへ進む)
+        uint16_t km = SearchTime_KnownRun(&st, &s_planner, a, before, s_planner.phase, known);
+        if (km == 0u) SearchTime_Step(&st, a, before, s_planner.phase);
         if (!quiet && before == SEARCH_PHASE_FULL && s_planner.phase == SEARCH_PHASE_TO_START) {
             printf("shortest route decided at (%u,%u) after %d moves (%.1f s)\n", pos.x, pos.y, r.moves_to_goal,
                    (double)st.t_goal_s);
+        }
+        if (!quiet && before == SEARCH_PHASE_TO_GOAL && s_planner.phase == SEARCH_PHASE_GOAL_TOUR) {
+            printf("reached goal (%u,%u) after %d moves (%.1f s), touring the goal cells\n", pos.x, pos.y,
+                   r.moves_to_goal, (double)st.t_goal_s);
+        }
+        if (!quiet && before == SEARCH_PHASE_TO_GOAL &&
+            (s_planner.phase == SEARCH_PHASE_FULL || (cfg->scope == SCOPE_FULL && s_planner.phase == SEARCH_PHASE_TO_START))) {
+            printf("reached goal (%u,%u) after %d moves (%.1f s), starting the full search\n", pos.x, pos.y,
+                   r.moves_to_goal, (double)st.t_s);
+        }
+        if (!quiet && before == SEARCH_PHASE_GOAL_TOUR && s_planner.phase == SEARCH_PHASE_TO_START) {
+            printf("goal tour done at (%u,%u), back to start without stopping\n", pos.x, pos.y);
         }
 
         if (a.type == ACTION_STOP) {
@@ -217,16 +236,25 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
             if (!quiet) printf("CRASH: %s at (%u,%u)\n", Action_Name(a.type), pos.x, pos.y);
             return r;
         }
+        // 既知の区間: 残りの区画も本当の迷路で進む(分かっている壁だけを通るので、ぶつかれば logic 層のバグ)
+        for (uint16_t k = 1; k <= km; k++) {
+            if (!SimCore_Execute(truth, &pos, &heading, Action_Move((int)known[k] - (int)heading))) {
+                if (!quiet) printf("CRASH: known-section run at (%u,%u)\n", pos.x, pos.y);
+                return r;
+            }
+        }
         if (!MazePos_Equal(pos, s_planner.pos) || heading != s_planner.heading) {
             if (!quiet) printf("planner lost track: sim (%u,%u) planner (%u,%u)\n",
                                pos.x, pos.y, s_planner.pos.x, s_planner.pos.y);
             return r;
         }
-        if (s_planner.phase == SEARCH_PHASE_TO_GOAL || s_planner.phase == SEARCH_PHASE_FULL) r.moves_to_goal++;
-        else r.moves_to_start++;
+        int cells = 1 + (int)km;
+        if (s_planner.phase == SEARCH_PHASE_TO_GOAL || s_planner.phase == SEARCH_PHASE_FULL) r.moves_to_goal += cells;
+        else r.moves_to_start += cells;
 
         if (verbose) {
-            printf("\n#%d %s -> (%u,%u)\n", step, Action_Name(a.type), pos.x, pos.y);
+            if (km > 0u) printf("\n#%d KNOWN x%d -> (%u,%u)\n", step, cells, pos.x, pos.y);
+            else printf("\n#%d %s -> (%u,%u)\n", step, Action_Name(a.type), pos.x, pos.y);
             // プランナーは途中で計算を止めるので、表示する値は全部を計算し直す(s_solver は後でまた計算する)
             if (algo == SEARCH_ALGO_DIJKSTRA) SimCore_PlannerValues(&s_planner, &s_solver);
             MazePrint_Map(&s_map, algo == SEARCH_ALGO_DIJKSTRA ? &s_solver : NULL,
@@ -240,6 +268,8 @@ static Result RunOne(const WallMap *truth, const SimConfig *cfg, bool verbose, b
     }
     r.search_s = st.t_s;
     r.goal_s = st.t_goal_s;
+    r.known_runs = st.known_runs;
+    r.known_cells = st.known_cells;
     if (!quiet) printf("search time: %.1f s\n", (double)st.t_s);
 
     // --- 分かった壁だけで最短経路 ---
@@ -357,6 +387,7 @@ static void PrintCost(const char *label, const MazeCost *c) {
 static void PrintResult(const Result *r) {
     printf("search: %d moves to goal, %d moves back\n", r->moves_to_goal, r->moves_to_start);
     printf("search time: %.1f s (goal / shortest route decided at %.1f s)\n", (double)r->search_s, (double)r->goal_s);
+    printf("known-section runs: %d (%d cells)\n", r->known_runs, r->known_cells);
     printf("route cost: %u (best possible %u)%s\n", (unsigned)r->cost_found, (unsigned)r->cost_best,
            (r->cost_found == r->cost_best) ? "  = optimal" : "");
     printf("run time: %.3f s small turns only, %.3f s with large turns (negative = not feasible)\n",
@@ -381,6 +412,7 @@ typedef struct {
     int opt_optimal;     // 時間で選んだ経路が、全部知っていたときと同じ時間だった迷路の数
     double sum_search;   // 探索の時間の見積もり
     double sum_goal_s;   // ゴールに止まった(全面: 最短経路が決まった)時刻
+    long sum_known_cells; // 既知の区間でまとめて走った区画の数
 } BatchStats;
 
 static void Batch_Add(BatchStats *b, const Result *r, const char *label) {
@@ -395,6 +427,7 @@ static void Batch_Add(BatchStats *b, const Result *r, const char *label) {
     b->sum_ratio += (double)r->cost_found / (double)r->cost_best;
     b->sum_search += r->search_s;
     b->sum_goal_s += r->goal_s;
+    b->sum_known_cells += r->known_cells;
     if (r->cost_found == r->cost_best) b->optimal++;
     if (r->time_small > 0.0f && r->time_large > 0.0f) {
         b->timed++;
@@ -418,6 +451,7 @@ static void Batch_Print(const BatchStats *b, const SimConfig *cfg) {
         printf(", moves %.1f + %.1f = %.1f, search %.1f s (goal %.1f s), cost ratio %.3f",
                (double)b->sum_goal / ok, (double)b->sum_back / ok,
                (double)(b->sum_goal + b->sum_back) / ok, b->sum_search / ok, b->sum_goal_s / ok, b->sum_ratio / ok);
+        printf(", known cells %.1f", (double)b->sum_known_cells / ok);
     }
     if (b->timed > 0) {
         printf(", run time %.3f s (small) %.3f s (large) %.3f s (time-opt, best %.3f s, optimal %d)",

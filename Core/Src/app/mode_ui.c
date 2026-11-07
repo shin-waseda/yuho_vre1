@@ -16,6 +16,9 @@
 #include "app/slalom_test.h"
 #include "app/stream_test.h"
 #include "app/sensor_spin.h"
+#include "app/gyro_scale_test.h"
+#include "app/front_wall_test.h"
+#include "app/slip_turn_test.h"
 #include "app/failsafe.h"
 #include "app/logger.h"
 #include "interface/sdcard.h"
@@ -46,7 +49,11 @@ static const char *ModeName(RobotMode mode) {
         case MODE_RUN_TEST:      return "TEST";
         case MODE_AUTONOMOUS:    return "AUTO";
         case MODE_LED_ALL_ON:    return "LED_ALL_ON";
-        default:                return "UNKNOWN";
+        case MODE_GYRO_SCALE_TEST: return "GYRO_SCALE";
+        case MODE_FRONT_WALL_TEST: return "FRONT_WALL";
+        case MODE_SLIP_TURN_TEST: return "SLIP";
+        case MODE_FAST_ALL:      return "FAST_ALL";
+        default:               return "UNKNOWN";
     }
 }
 
@@ -54,11 +61,13 @@ static const char *ModeName(RobotMode mode) {
 // 一番上の階層の各項目が、その中のモードの一覧を持つ。並び順がエンコーダで送る順になる。
 static const RobotMode s_test_modes[] = {
     MODE_SENSOR, MODE_SENSOR_LOG, MODE_VEL_PID, MODE_STRAIGHT_TEST, MODE_PIVOT_TEST, MODE_SLALOM_TEST, MODE_LED_TEST, MODE_PARTY,
-    MODE_LONG_LOG, MODE_SLALOM_SWEEP, MODE_STRAIGHT_SWEEP, MODE_SENSOR_SPIN, MODE_LED_ALL_ON,
+    MODE_LONG_LOG, MODE_SLALOM_SWEEP, MODE_STRAIGHT_SWEEP, MODE_SENSOR_SPIN, MODE_LED_ALL_ON, MODE_GYRO_SCALE_TEST,
+    MODE_FRONT_WALL_TEST, // シフトレジスタの LED で出せる上限(15)。SLIP は RUN の TEST に入れた
 };
 static const RobotMode s_run_modes[] = {
     // SEARCH は地図・行き先・アルゴリズムなどを中で選ぶ(SearchMenu_Run)。ログ取りの走行は TEST の中で選ぶ(RunTest_Run)
-    MODE_SEARCH, MODE_FAST_RUN, MODE_RUN_TEST, MODE_AUTONOMOUS,
+    // FAST_ALL は最短走行の制御全部乗せ(2026-11-07。前からの番号を変えないよう最後に足した)
+    MODE_SEARCH, MODE_FAST_RUN, MODE_RUN_TEST, MODE_AUTONOMOUS, MODE_FAST_ALL,
 };
 static const RobotMode s_sd_modes[] = {
     MODE_SD_DUMP, MODE_SD_DUMP_ALL, MODE_STREAM_TEST,
@@ -371,10 +380,12 @@ float ModeUI_SelectValueFrom(const char *name, const char *unit, const float *va
 
 // RUN の中の TEST: ログ取りの走行を、値を選ぶのと同じ画面(棒グラフ)で選んで始める
 static void RunTest_Run(void) {
-    static const RobotMode kTests[] = { MODE_FAST_SWEEP, MODE_SEARCH_SPIN, MODE_FAST_BANDS, MODE_LONG_LOG };
-    static const float kValues[] = { 1.0f, 2.0f, 3.0f, 4.0f };
-    printf("RUN TEST: 1 FAST_SWEEP, 2 SEARCH_SPIN, 3 FAST_BANDS, 4 LONG_LOG\r\n");
-    uint8_t n = (uint8_t)ModeUI_SelectValue("TEST(1 FAST_SWEEP 2 SEARCH_SPIN 3 FAST_BANDS 4 LONG_LOG)", "", kValues,
+    // SLIP は TEST の一覧が上限(15)で入らないので、ここに入れた(2026-11-06)
+    static const RobotMode kTests[] = { MODE_FAST_SWEEP, MODE_SEARCH_SPIN, MODE_FAST_BANDS, MODE_LONG_LOG,
+                                        MODE_SLIP_TURN_TEST };
+    static const float kValues[] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f };
+    printf("RUN TEST: 1 FAST_SWEEP, 2 SEARCH_SPIN, 3 FAST_BANDS, 4 LONG_LOG, 5 SLIP\r\n");
+    uint8_t n = (uint8_t)ModeUI_SelectValue("TEST(1 FAST_SWEEP 2 SEARCH_SPIN 3 FAST_BANDS 4 LONG_LOG 5 SLIP)", "", kValues,
                                             MENU_COUNT_OF(kValues), 1.0f);
     RobotMode mode = kTests[n - 1u];
     printf("MODE: RUN / TEST / %s\r\n", ModeName(mode));
@@ -410,6 +421,9 @@ void ModeUI_Run(RobotMode mode) {
             break;
         case MODE_FAST_RUN:
             FastRun_Run();
+            break;
+        case MODE_FAST_ALL:
+            FastAll_Run();
             break;
         case MODE_PARTY:
             PartyMode_Run();
@@ -455,6 +469,15 @@ void ModeUI_Run(RobotMode mode) {
             break;
         case MODE_AUTONOMOUS:
             AutonomousRun_Run();
+            break;
+        case MODE_GYRO_SCALE_TEST:
+            GyroScaleTest_Run();
+            break;
+        case MODE_FRONT_WALL_TEST:
+            FrontWallTest_Run();
+            break;
+        case MODE_SLIP_TURN_TEST:
+            SlipTurnTest_Run();
             break;
         default:
             break;

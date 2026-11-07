@@ -158,6 +158,11 @@ bool RunProfile_LinkedStraightTime(const RunProfile *prof, float dist,
 bool RunList_EstimateTime(const RunList *list, const RunProfile *prof,
                           float *total, float *times, uint16_t *bad_index);
 
+// RunList_EstimateTime の、列の始めと終わりの速度を v_start / v_end にしたもの(探索の既知の区間のように、
+// 走りながら始まって走りながら終わる列。maze_sim が使う)。RunList_EstimateTime は v_start = v_end = 0
+bool RunList_EstimateTimeEnds(const RunList *list, const RunProfile *prof, float v_start, float v_end,
+                              float *total, float *times, uint16_t *bad_index);
+
 // 区画の経路(Dijkstra_BuildRoute の結果。スタートの中心から、スタートの向きで出発)を
 // 最短走行の指令へ置き換えてoutへ書く。最後は必ずRUN_STOP(ゴールの区画の中心で止まる)。
 // use_largeがtrueなら、前から順に LARGE180 → LARGE90 の形を探して置き換える。
