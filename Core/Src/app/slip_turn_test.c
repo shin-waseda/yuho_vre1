@@ -45,8 +45,30 @@ enum {
     SLIP_P2L = 11, // (2,0) → (2,1) の真ん中で左へ超信地旋回 → (1,1) で右へ小回り → (1,2) の北の端
     // 最短走行の ADJ CHECK の比べ相手(2026-11-07)。N と同じ動きで、ゴールの列(例: ゴール (2,2) なら (2,0))に置く
     SLIP_NG = 12,  // (2,0) で北向き(南の外周の壁に付ける)→ まっすぐ (2,2) の北の端(ゴール (2,2) の ADJ CHECK と同じ止まる所)
+    // ---- 2025 学生クラシック迷路の階段(STAIR。2026-11-07)----
+    // 階段の走りは止まらずに、小回りの曲がり始めの直前に前壁を読む(ログの ad_fl・ad_fr)。比べ相手は、同じ前壁にまっすぐ入り、
+    // 階段の走りが曲がり始める所で止まって読む(調整を引いた前のオフセットの所)
+    SLIP_ST = 13,  // S から: (0,1) 右・(1,1) 右・(1,0) 左 → 東へ 6 → (8,0) 左 → 北へ 5 → (8,6) 右・(9,6) 左・…・(13,11) 右
+                   // (階段は 11 回)→ (14,11) の真ん中で止まる(地図の最短走行の道 S → (8,6) に階段をつないだもの)
+    SLIP_RE1 = 14, // (8,6) で東向き(西の壁に付ける)→ (9,6) の曲がり始めの所で止まる
+    SLIP_RE2 = 15, // (9,7) で東向き → (10,7)
+    SLIP_RE3 = 16, // (10,8) で東向き → (11,8)
+    SLIP_RE4 = 17, // (11,9) で東向き → (12,9)
+    SLIP_RE5 = 18, // (12,10) で東向き → (13,10)
+    SLIP_RN1 = 19, // (9,6) で北向き(南の壁に付ける)→ (9,7) の曲がり始めの所で止まる
+    SLIP_RN2 = 20, // (12,9) で北向き → (12,10)
+    SLIP_RN3 = 21, // (13,10) で北向き → (13,11)
 };
 static const float kPivotSpeeds[] = { 300.0f, 500.0f }; // 超信地旋回の走り(T1・P1・T2・P2)の直進・小回りの速さ
+#define SLIP_ST_V        500.0f // 階段の速さ(探索の小回りと同じ。走りながら前壁を読む片寄りがほぼ 0 の速さ: FW2 の B 500)
+#define SLIP_ST_TURNS    11     // 階段の小回りの数(右から始めて交互)
+#define SLIP_ST_RUNS     6      // 階段を何本走るか(調整なし・ありを交互に)
+#define SLIP_ST_STOP_MM  (0.5f * SECTION_MM) // 最後の小回りの後、(14,11) の真ん中で止まる(東に壁がある)
+#define SLIP_TURN_READ_MM 15.0f  // STAIR: 曲がり始めのこれだけ手前から曲がり始めまで前壁を読む
+
+// STAIR のときだけ 0 以上(小回りごとに前壁を読んで LOG_EV_SLIP_TURN に残す。値は次の小回りの番号)
+static int s_turn_log_index = -1;
+#define SLIP_ST_REF_RUNS 2      // 比べ相手を 1 か所あたり何本走るか
 #define SLIP_LR_V 300.0f // LR の組の速さ(速さによらないずれを見るので 1 つだけ)
 
 typedef struct {
@@ -130,7 +152,28 @@ static void StraightTo(float target_mm, float v_max, float v_end) {
 static bool Turn(float *ref_mm, bool right, float v, const TurnShape *s) {
     float start = *ref_mm + s->pre_mm;
     StraightTo(start, v, v);
-    if (!WaitTargetDistance(start)) return false;
+    if (s_turn_log_index >= 0) {
+        // STAIR: 曲がり始めの SLIP_TURN_READ_MM 手前から曲がり始めまで、前壁を読んで平均する(止まらずに読む)
+        if (!WaitTargetDistance(start - SLIP_TURN_READ_MM)) return false;
+        float s_sum = 0.0f, s_diff = 0.0f, s_before = 0.0f;
+        uint32_t n = 0;
+        uint32_t t0 = HAL_GetTick();
+        while (App_GetTargetDistance() < start) {
+            CheckFailSafe();
+            s_sum += (float)ad_fl + (float)ad_fr;
+            s_diff += (float)ad_fl - (float)ad_fr;
+            s_before += start - App_GetTargetDistance();
+            n++;
+            if (HAL_GetTick() - t0 > SLIP_TIMEOUT_MS) return false;
+            HAL_Delay(1); // 1kHz で読む(壁センサーの値は制御の割り込みで 1ms ごとに変わる)
+        }
+        if (n == 0u) n = 1u;
+        Logger_Event(LOG_EV_SLIP_TURN, (float)s_turn_log_index, s_sum / (float)n, s_diff / (float)n,
+                     s_before / (float)n, s_raw_slalom ? 0.0f : 1.0f);
+        s_turn_log_index++;
+    } else if (!WaitTargetDistance(start)) {
+        return false;
+    }
     App_StartSlalom(right ? -90.0f : 90.0f, s->omega_dps, s->alpha_dps2);
     if (!WaitMotionDone()) return false;
     *ref_mm = App_GetTargetDistance() + s->post_mm;
@@ -208,7 +251,8 @@ static void SetupLogger(int kind, float v) {
     // 走り(T2・P2 で約 700mm、T1・P1 で約 450mm、N で 478mm、E で 298mm)+ 止まってから読み終わるまで + 余り。
     // 超信地旋回は止まる・前後を合わせる・回るの分を足す。長いほど間引かれる
     float path_mm = (kind == SLIP_T2 || kind == SLIP_P2 || kind == SLIP_T2L || kind == SLIP_P2L) ? 700.0f
-                  : (kind == SLIP_E || kind == SLIP_EW) ? 300.0f : (kind == SLIP_N || kind == SLIP_NG) ? 480.0f : 450.0f;
+                  : (kind == SLIP_E || kind == SLIP_EW) ? 300.0f : (kind == SLIP_N || kind == SLIP_NG) ? 480.0f
+                  : (kind == SLIP_ST) ? 5000.0f : (kind >= SLIP_RE1 && kind <= SLIP_RN3) ? 200.0f : 450.0f;
     uint32_t pivot_ms = (kind == SLIP_P1 || kind == SLIP_P2 || kind == SLIP_P1L || kind == SLIP_P2L) ? 2000u : 0u;
     Logger_SetDuration((uint32_t)(path_mm / v * 1000.0f) + pivot_ms + SLIP_SETTLE_MS + SLIP_RECORD_MS + 700u);
 }
@@ -224,7 +268,27 @@ static bool RunOnce(int kind, float v, StopMeasure *m) {
     bool left_set = (kind == SLIP_T1L || kind == SLIP_T2L || kind == SLIP_P1L || kind == SLIP_P2L);
     bool second = (kind == SLIP_T2 || kind == SLIP_P2 || kind == SLIP_T2L || kind == SLIP_P2L);
     float ref = SLIP_B0_MM; // 置いた区画と次の区画の境界
-    if (kind == SLIP_T1 || kind == SLIP_T2 || kind == SLIP_T1L || kind == SLIP_T2L) {
+    float stop_after = SLIP_STOP_MM; // 最後の境界から止まる所まで(ふつうは次の境界の 12mm 手前)
+    if (kind == SLIP_ST) {
+        // S から階段の入口まで(search_0092 の地図の最短走行の道): (0,1) 右・(1,1) 右・(1,0) 左 → (2,0)〜(7,0) を東へ →
+        // (8,0) 左 → (8,1)〜(8,5) を北へ。ここまでの小回りも前壁を読む(番号 0〜3)
+        s_turn_log_index = 0;
+        bool ok = Turn(&ref, true, v, &s) && Turn(&ref, true, v, &s) && Turn(&ref, false, v, &s);
+        if (ok) {
+            ref += 6.0f * SECTION_MM;
+            ok = Turn(&ref, false, v, &s);
+        }
+        if (ok) ref += 5.0f * SECTION_MM;
+        // 階段: (8,6) 右・(9,6) 左・…・(13,11) 右(番号 4〜14)
+        for (int k = 0; ok && k < SLIP_ST_TURNS; k++) {
+            ok = Turn(&ref, (k % 2) == 0, v, &s);
+        }
+        s_turn_log_index = -1;
+        if (!ok) return false;
+        stop_after = SLIP_ST_STOP_MM;
+    } else if (kind >= SLIP_RE1 && kind <= SLIP_RN3) {
+        stop_after = s.pre_mm; // 隣の区画で、階段の走りが曲がり始める所
+    } else if (kind == SLIP_T1 || kind == SLIP_T2 || kind == SLIP_T1L || kind == SLIP_T2L) {
         if (!Turn(&ref, !left_set, v, &s)) return false;              // 1 回目
         if (second && !Turn(&ref, left_set, v, &s)) return false;     // 2 回目(反対の向き)
     } else if (kind == SLIP_N || kind == SLIP_NG) {
@@ -236,7 +300,7 @@ static bool RunOnce(int kind, float v, StopMeasure *m) {
         ref = App_GetTargetDistance() + 0.5f * SECTION_MM; // 次の区画との境界
         if (second && !Turn(&ref, left_set, v, &s)) return false; // (1,1) で反対の向きへ小回り
     }
-    m->stop_mm = ref + SLIP_STOP_MM;
+    m->stop_mm = ref + stop_after;
     StraightTo(m->stop_mm, v, 0.0f);
     if (!WaitMotionDone()) return false;
     DelayWatching(SLIP_SETTLE_MS);
@@ -285,6 +349,15 @@ static const char *KindName(int kind) {
         case SLIP_EW: return "EW";
         case SLIP_T2L: return "T2L";
         case SLIP_P2L: return "P2L";
+        case SLIP_ST: return "ST";
+        case SLIP_RE1: return "RE1";
+        case SLIP_RE2: return "RE2";
+        case SLIP_RE3: return "RE3";
+        case SLIP_RE4: return "RE4";
+        case SLIP_RE5: return "RE5";
+        case SLIP_RN1: return "RN1";
+        case SLIP_RN2: return "RN2";
+        case SLIP_RN3: return "RN3";
         default: return "?";
     }
 }
@@ -300,7 +373,11 @@ static int KindPlaceNo(int kind) {
         case SLIP_EW: return 4;
         case SLIP_N: return 5;
         case SLIP_NG: return 2; // (2,0) で北向き(左の組と同じ所)
-        default: return 1;
+        case SLIP_ST: return 1;
+        default:
+            // 階段の比べ相手は 8 か所あるので、LED の番号は 2〜5 を順に使う(置く所が変わったかは置く所の文字で見る)
+            if (kind >= SLIP_RE1 && kind <= SLIP_RN3) return 2 + (kind - SLIP_RE1) % 4;
+            return 1;
     }
 }
 
@@ -337,6 +414,15 @@ static const char *KindPlace(int kind) {
         case SLIP_T2L:
         case SLIP_P2L: return "(2,0) facing north, tail on the south wall";
         case SLIP_EW: return "(2,1) facing west, tail on the east wall of (2,1)";
+        case SLIP_ST: return "S (0,0) facing north, tail on the south wall (2025 students classic)";
+        case SLIP_RE1: return "(8,6) facing east, tail on the west wall";
+        case SLIP_RE2: return "(9,7) facing east, tail on the west wall";
+        case SLIP_RE3: return "(10,8) facing east, tail on the west wall";
+        case SLIP_RE4: return "(11,9) facing east, tail on the west wall";
+        case SLIP_RE5: return "(12,10) facing east, tail on the west wall";
+        case SLIP_RN1: return "(9,6) facing north, tail on the south wall";
+        case SLIP_RN2: return "(12,9) facing north, tail on the south wall";
+        case SLIP_RN3: return "(13,10) facing north, tail on the south wall";
         default: return "S (0,0) facing north, tail on the south wall";
     }
 }
@@ -352,10 +438,10 @@ static bool RunOneByHand(uint32_t run, int kind, float v) {
         return false;
     }
     if (FailSafe_IsTripped()) FailSafe_Halt();
-    static int s_last_place = 0; // 前の 1 本の置く所(0 はまだ走っていない)
+    static const char *s_last_place = NULL; // 前の 1 本の置く所(NULL はまだ走っていない)
     int place = KindPlaceNo(kind);
-    bool changed = (place != s_last_place);
-    s_last_place = place;
+    bool changed = (KindPlace(kind) != s_last_place);
+    s_last_place = KindPlace(kind);
     printf("#%lu %s v %.0f: %splace at %s (place %d), then hand over front-left sensor to RUN\r\n", (unsigned long)run,
            KindName(kind), v, changed ? "NEW PLACE! " : "", KindPlace(kind), place);
     WaitHandShowingPlace(place, changed);
@@ -382,13 +468,35 @@ static bool RunOneByHand(uint32_t run, int kind, float v) {
 }
 
 void SlipTurnTest_Run(void) {
-    static const float kSix[] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
-    int set = (int)ModeUI_SelectValue("SLIP(1 TURN 2 STRAIGHT 3 PIVOT 4 LR 5 LR REST 6 REF NG)", "", kSix, 6u, 1.0f);
-    printf("walls: south of S, east of (2,1), north of (1,3). keep open: east of (0,1), east and north of (1,1), "
-           "(1,2)-(1,3). place by hand before every run\r\n");
+    static const float kEight[] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f };
+    int set = (int)ModeUI_SelectValue("SLIP(1 TURN 2 STRAIGHT 3 PIVOT 4 LR 5 LR REST 6 REF NG 7 STAIR 8 STAIR REF)", "",
+                                      kEight, 8u, 1.0f);
     uint32_t run = 0;
+    if (set <= 6) {
+        printf("walls: south of S, east of (2,1), north of (1,3). keep open: east of (0,1), east and north of (1,1), "
+               "(1,2)-(1,3). place by hand before every run\r\n");
+    }
 
-    if (set == 6) {
+    if (set == 7) {
+        // 2025 学生クラシック迷路の階段(2026-11-07): 小回りの手で足す調整なし・ありを交互に。曲がり始めの直前の前壁はログから読む
+        printf("SLIP STAIR (2025 students classic): S -> (8,6) -> 11 slaloms R,L,...,R from (8,6) to (13,11), "
+               "slalom adj OFF / ON in turn, v %.0f, %d runs\r\n", SLIP_ST_V, SLIP_ST_RUNS);
+        for (uint32_t k = 0; k < (uint32_t)SLIP_ST_RUNS; k++) {
+            s_raw_slalom = (k % 2u == 0u); // 1 本目は調整なし
+            printf("slalom adj %s\r\n", s_raw_slalom ? "OFF" : "ON");
+            if (!RunOneByHand(++run, SLIP_ST, SLIP_ST_V)) return;
+        }
+    } else if (set == 8) {
+        // 階段の比べ相手: 同じ前壁へまっすぐ入り、階段の走りが曲がり始める所(調整なしの前のオフセット)で止まって読む
+        static const int kRefs[] = { SLIP_RE1, SLIP_RE2, SLIP_RE3, SLIP_RE4, SLIP_RE5, SLIP_RN1, SLIP_RN2, SLIP_RN3 };
+        s_raw_slalom = true;
+        printf("SLIP STAIR REF (2025 students classic): 8 places, %d runs each, v %.0f\r\n", SLIP_ST_REF_RUNS, SLIP_ST_V);
+        for (uint32_t j = 0; j < (uint32_t)(sizeof(kRefs) / sizeof(kRefs[0])); j++) {
+            for (uint32_t k = 0; k < (uint32_t)SLIP_ST_REF_RUNS; k++) {
+                if (!RunOneByHand(++run, kRefs[j], SLIP_ST_V)) return;
+            }
+        }
+    } else if (set == 6) {
         // 最短走行の ADJ CHECK の比べ相手(2026-11-07): ゴール (2,2) の列の一番下 (2,0) から、まっすぐ北へ (2,2) の北の端まで。
         // ADJ CHECK と同じ迷路のまま走る(迷路は ADJ CHECK の迷路で、(2,0)〜(2,2) がまっすぐ空いていること)
         printf("SLIP REF NG: straight north from (2,0) to the north end of (2,2), v %.0f, %d runs\r\n", SLIP_LR_V,

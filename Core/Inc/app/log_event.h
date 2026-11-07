@@ -72,6 +72,8 @@ typedef enum {
     // ---- 最短走行の ADJ CHECK(小回りの調整のあり・なしを比べる．2026-11-07 に消した．fast_0045〜0060 を読むため残す)----
     LOG_EV_FAST_CHECK = 60,   // a:adj b:fl c:fr d:l e:r
     LOG_EV_FAST_CHECK2 = 61,  // a:dist b:stop c:sum_std d:vbat e:no
+    // ---- SLIP の STAIR(小回りの曲がり始めの直前に前壁を読む)----
+    LOG_EV_SLIP_TURN = 62,    // a:index b:sum c:diff d:before e:adj
 } LogEventCode;
 
 // LOG_EV_BOOT: 今の起動のリセットの原因(FAULT_RESET_*、interface/fault_diag.h)と、その前に HardFault があったか(1/0)。
@@ -93,6 +95,10 @@ typedef enum {
 // LOG_EV_SLIP_RUN / LOG_EV_SLIP_POINT / LOG_EV_SLIP_POINT2: 小回りの滑りの試験(app/slip_turn_test)。RUN は 1 本の始め
 //   (kind 1 = T1 小回り 1 回、2 = T2 右 → 左、3 = E 東へまっすぐ、4 = N 北へまっすぐ、5 = P1 超信地旋回で右、6 = P2 超信地旋回で右 → 小回りで左、
 //   7 = T1L 小回りで左、8 = P1L 超信地旋回で左、9 = EW 西へまっすぐ、10 = T2L 小回りで左 → 右、11 = P2L 超信地旋回で左 → 小回りで右。
+//   12 = NG、13 = ST(2025 学生クラシック迷路の階段)、14〜18 = RE1〜RE5・19〜21 = RN1〜RN3(階段の比べ相手)。
+// LOG_EV_SLIP_TURN: STAIR の小回りごとに、曲がり始めの SLIP_TURN_READ_MM 手前から曲がり始めまでの前壁の平均(sum = FL + FR、
+//   diff = FL − FR)。index は 0 から(S からの全部の小回りを数える)、before は読んだ所が曲がり始めより平均で何 mm 手前か(目標の距離)、
+//   adj は小回りの手で足す調整を入れたか(1/0)。
 //   LR の組(7〜11 と同じ回の 1〜6)の小回りは手で足す調整を引いた形(pre / post に出る)、v は小回り(直進)の速さ、pre / post は小回りの前後のオフセット)。POINT・POINT2 は
 //   止まって 0.5 秒読んだ値(stop は止まる所の目標の距離、dist はその間のエンコーダの道のりの平均。ほかは FW1 と同じ)。
 // LOG_EV_GYRO_BIAS:走っている途中で止まっている間にジャイロ Z のゼロ点を測り直した続きが終わった所(app/control_loop)。

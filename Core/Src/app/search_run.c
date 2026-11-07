@@ -306,14 +306,32 @@ static bool AlongSync(void) {
 // 前の壁で合わせる → 横の壁のほうへ 90° → その壁(前になる)で合わせる → 90°(横の壁は左を先に使う)。
 // 壁がない所は合わせを飛ばす(どこにも壁がなければ、その場で 180° 回るだけ)。
 // 探索で 180° の前壁合わせを選んだとき(CORR_FALIGN)も、前壁合わせを使う。
+// 回る向きは、180° のたびに左・右を入れ替える(2026-11-07。いつも左だと、ジャイロの倍率のずれが回った量だけたまる。
+// search_0044〜0047 では 180° で左回りが 1440° たまり、横壁追従が直した向きが 2° まで育った。前壁合わせで横の壁が
+// 片側にしかないときは、その壁のほうへ回る)。向きは走りの始め(StartRunBegin)で左に戻す
+static bool s_turn_back_left = true;
+
+// 横の壁に寄っているときは、寄っていない側へ回る(2026-11-07。寄っている側へ回ると、その側の前の角が壁に当たって回れない。
+// search_0081 は L 705 で左へ、search_0091 は R 600 で右へ回って止まった)。横の壁センサーが真ん中の基準(WALL_REF_L/R)より
+// TURN_BACK_AVOID_COUNTS 以上大きい側を「寄っている側」とし、両方ならより大きい側。どちらでもなければ左右交互の向き。
+// 壁の有無は見ない(壁がなければ値は小さいので寄っている側にならない。最短走行のゴールのように壁の観測がない所でも使える)
+static float TurnBackDir(float alt_dir) {
+    float near_l = (float)ad_l - (float)WALL_REF_L;
+    float near_r = (float)ad_r - (float)WALL_REF_R;
+    if (near_l < TURN_BACK_AVOID_COUNTS && near_r < TURN_BACK_AVOID_COUNTS) return alt_dir;
+    return (near_l > near_r) ? -1.0f : 1.0f; // 左に寄っていれば右へ、右に寄っていれば左へ
+}
+
 static bool TurnBack(DrivePos *dp, WallObservation walls) {
+    float dir = TurnBackDir(s_turn_back_left ? 1.0f : -1.0f); // + 左
+    s_turn_back_left = !s_turn_back_left;
     if (!SEARCH_FRONT_ALIGN_ENABLE && !(s_search_corr & CORR_FALIGN)) {
-        if (!SEARCH_TURN_BACK_SPLIT) return Pivot(180.0f);
-        return AlongSync() && Pivot(90.0f) && AlongSync() && Pivot(90.0f);
+        if (!SEARCH_TURN_BACK_SPLIT) return Pivot(180.0f * dir);
+        return AlongSync() && Pivot(90.0f * dir) && AlongSync() && Pivot(90.0f * dir);
     }
     if (walls.front && !FrontAlign(dp)) return false;
-    float side = walls.left ? 90.0f : walls.right ? -90.0f : 0.0f;
-    if (side == 0.0f) return Pivot(180.0f);
+    float side = (walls.left && walls.right) ? 90.0f * dir : walls.left ? 90.0f : walls.right ? -90.0f : 0.0f;
+    if (side == 0.0f) return Pivot(180.0f * dir);
     return Pivot(side) && FrontAlign(dp) && Pivot(side);
 }
 
@@ -640,6 +658,7 @@ static uint16_t s_band_total = 0;
 
 // 走り出す前の準備(探索・最短走行・帰り道で共通): 制御を有効にし、記録を始める。今いる所(区画の真ん中)が基準になる。
 static void StartRunBegin(DrivePos *dp) {
+    s_turn_back_left = true; // 180° の向きは、走りごとに左から始める(TurnBack)
     App_SetPositionHold(true);
     App_SetWallControl(false); // 横壁追従を使うのは、壁の補正を選んだときの境界から境界への直進の間だけ
     App_SetLateralControl(!(s_search_corr & CORR_LAT_OFF)); // 探索で切ると選んだときだけ切る(ほかの走りは使う)
