@@ -68,12 +68,14 @@ typedef enum {
     // ---- 小回りの滑りの試験(TEST の SLIP)----
     LOG_EV_SLIP_POINT = 57,   // a:kind b:v c:stop d:fl e:fr
     LOG_EV_SLIP_POINT2 = 58,  // a:dist b:l c:r d:sum_std e:vbat
-    LOG_EV_SLIP_RUN = 59,     // a:kind b:v c:pre d:post
+    LOG_EV_SLIP_RUN = 59,     // a:kind b:v c:pre d:post e:stop_extra(RULER で止まる所をずらした量)
     // ---- 最短走行の ADJ CHECK(小回りの調整のあり・なしを比べる．2026-11-07 に消した．fast_0045〜0060 を読むため残す)----
     LOG_EV_FAST_CHECK = 60,   // a:adj b:fl c:fr d:l e:r
     LOG_EV_FAST_CHECK2 = 61,  // a:dist b:stop c:sum_std d:vbat e:no
     // ---- SLIP の STAIR(小回りの曲がり始めの直前に前壁を読む)----
     LOG_EV_SLIP_TURN = 62,    // a:index b:sum c:diff d:before e:adj
+    LOG_EV_FAST_LARGE = 64,   // a:large90_v b:large180_v(最短走行の大回りの速さ。LOG_EV_FAST_PARAMS の続き。
+                              // 63 は feature/diagonal-run の DIAG_TEST と重なったので 64 にした。fast_0067・0068 は 63 で残っている)
 } LogEventCode;
 
 // LOG_EV_BOOT: 今の起動のリセットの原因(FAULT_RESET_*、interface/fault_diag.h)と、その前に HardFault があったか(1/0)。
@@ -95,7 +97,9 @@ typedef enum {
 // LOG_EV_SLIP_RUN / LOG_EV_SLIP_POINT / LOG_EV_SLIP_POINT2: 小回りの滑りの試験(app/slip_turn_test)。RUN は 1 本の始め
 //   (kind 1 = T1 小回り 1 回、2 = T2 右 → 左、3 = E 東へまっすぐ、4 = N 北へまっすぐ、5 = P1 超信地旋回で右、6 = P2 超信地旋回で右 → 小回りで左、
 //   7 = T1L 小回りで左、8 = P1L 超信地旋回で左、9 = EW 西へまっすぐ、10 = T2L 小回りで左 → 右、11 = P2L 超信地旋回で左 → 小回りで右。
-//   12 = NG、13 = ST(2025 学生クラシック迷路の階段)、14〜18 = RE1〜RE5・19〜21 = RN1〜RN3(階段の比べ相手)。
+//   12 = NG、13 = ST(2025 学生クラシック迷路の階段)、14〜18 = RE1〜RE5・19〜21 = RN1〜RN3(階段の比べ相手)、
+//   22 = L90L・23 = L90LR・24 = L90R・25 = L90RR(4×4 の大回り 90°。L90 の pre / post は大回りのオフセット)、
+//   26 = L180R・27 = L180RR・28 = L180L・29 = L180LR(4×4 の大回り 180°)。
 // LOG_EV_SLIP_TURN: STAIR の小回りごとに、曲がり始めの SLIP_TURN_READ_MM 手前から曲がり始めまでの前壁の平均(sum = FL + FR、
 //   diff = FL − FR)。index は 0 から(S からの全部の小回りを数える)、before は読んだ所が曲がり始めより平均で何 mm 手前か(目標の距離)、
 //   adj は小回りの手で足す調整を入れたか(1/0)。

@@ -84,6 +84,8 @@ static SearchAlgo s_search_algo = SEARCH_ALGO_DIJKSTRA; // 今の探索のアル
 static float s_fast_v = FAST_V_MM_S;     // 最短走行の直進の最高速度
 static float s_fast_small_v = FAST_SMALL_V_MM_S; // 最短走行の小回りの速さ
 static float s_fast_accel = FAST_ACCEL_MM_S2;    // 最短走行の直進の加速度
+static float s_fast_large90_v = FAST_LARGE90_V_MM_S;   // 最短走行の大回り 90° の速さ(RUN の FAST で LARGE のときに選ぶ)
+static float s_fast_large180_v = FAST_LARGE180_V_MM_S; // 最短走行の大回り 180° の速さ
 static float s_fast_decel = 0.0f;                // 最短走行の直進の減速度(0 なら加速度と FAST_DECEL_MAX_MM_S2 の小さい方)
 
 // 最短走行の直進の減速度(RunProfile の decel にも同じ値を入れる)
@@ -95,6 +97,9 @@ static const float kSearchSpeeds[] = SPEED_SELECT_SEARCH_V_MM_S;
 static const float kSearchTurnSpeeds[] = SPEED_SELECT_SEARCH_TURN_V_MM_S;
 static const float kFastSpeeds[] = SPEED_SELECT_FAST_V_MM_S;
 static const float kFastSmallSpeeds[] = SPEED_SELECT_FAST_SMALL_V_MM_S;
+static const float kLongFastSmallSpeeds[] = LONG_LOG_FAST_SMALL_V_MM_S; // 長い走行の最短走行の小回りの速さ
+static const float kFastLarge90Speeds[] = SPEED_SELECT_FAST_LARGE90_V_MM_S;
+static const float kFastLarge180Speeds[] = SPEED_SELECT_FAST_LARGE180_V_MM_S;
 static const float kAccels[] = SPEED_SELECT_ACCEL_MM_S2; // 探索・最短走行で選ぶ加速度(RUN の SEARCH・FAST)
 static const float kFastAccelForSpeed[] = FAST_ACCEL_FOR_SPEED_MM_S2; // kFastSpeeds と同じ並び
 static const float kFastDecelForSpeed[] = FAST_DECEL_FOR_SPEED_MM_S2;
@@ -673,6 +678,7 @@ static void StartRunBegin(DrivePos *dp) {
     LogBootInfo();
     if (s_run_kind == 1.0f) {
         Ev(LOG_EV_FAST_PARAMS, s_fast_v, s_fast_accel, s_fast_small_v, s_run_type, FastDecel());
+        Ev(LOG_EV_FAST_LARGE, s_fast_large90_v, s_fast_large180_v, 0.0f, 0.0f, 0.0f);
     } else {
         Ev(LOG_EV_SEARCH_PARAMS, s_search_v, s_search_turn_v, s_search_accel, s_search_slalom ? 1.0f : 0.0f,
            (float)s_search_corr);
@@ -1102,7 +1108,8 @@ static FastTurn s_fast_turn[RUN_TYPE_COUNT];
 
 // 旋回の形を計算し、経路の計算に使う RunProfile も作る(計算は logic の RunProfile_ForSpeeds。maze_sim と同じ)
 static RunProfile ComputeFastTurns(void) {
-    RunProfile prof = RunProfile_ForSpeeds(s_fast_v, s_fast_accel, s_fast_small_v, s_fast_turn);
+    RunProfile prof = RunProfile_ForSpeedsLarge(s_fast_v, s_fast_accel, s_fast_small_v, s_fast_large90_v,
+                                                s_fast_large180_v, s_fast_turn);
     prof.decel = FastDecel(); // 速度帯で減速度を決めたとき(FAST_BANDS)も、経路の時間の計算を走りに合わせる
 
     static const RunType kTurns[] = { RUN_SMALL90_R, RUN_LARGE90_R, RUN_LARGE180_R };
@@ -1400,7 +1407,8 @@ void FastRun_Run(void) {
     const MazePos *goals;
     uint8_t goal_count = GetGoals(&goals);
 
-    // 直進の最高速度・加速度・小回り(スラローム)の速さ・走り方を選ぶ(大回りは FAST_LARGE* のまま。電源を切るまでそのまま)。
+    // 直進の最高速度・加速度・小回り(スラローム)の速さ・走り方を選ぶ。走り方が LARGE なら大回り 90°・180° の速さも選ぶ
+    // (選ばなければ FAST_LARGE* の速さ。電源を切るまでそのまま)。
     // 加速度は、最高速度に合う値(FAST_ACCEL_FOR_SPEED_MM_S2)から始める(回さずに決めればその値)。
     // 減速度は加速度から決める(FAST_DECEL_MAX_MM_S2 まで)
     s_fast_v = ModeUI_SelectValue("SPEED", "mm/s", kFastSpeeds,
@@ -1420,8 +1428,17 @@ void FastRun_Run(void) {
     static const float kTurnValues[] = { 1.0f, 2.0f, 3.0f };
     float turn = ModeUI_SelectValue("TURN(1 SMALL 2 LARGE 3 PIVOT)", "", kTurnValues, 3u, 1.0f);
     uint8_t type = (turn == 3.0f) ? 0u : (turn == 2.0f) ? 2u : 1u;
-    printf("FAST RUN: v=%.0f mm/s accel=%.0f decel=%.0f, small turn %.0f mm/s\r\n",
-           s_fast_v, s_fast_accel, FastDecel(), s_fast_small_v);
+    if (type == 2u) {
+        // 大回りの速さ(2026-11-08)。回さずに決めれば FAST_LARGE* の速さ
+        s_fast_large90_v = ModeUI_SelectValue("LARGE90", "mm/s", kFastLarge90Speeds,
+                                              (uint8_t)(sizeof(kFastLarge90Speeds) / sizeof(kFastLarge90Speeds[0])),
+                                              FAST_LARGE90_V_MM_S);
+        s_fast_large180_v = ModeUI_SelectValue("LARGE180", "mm/s", kFastLarge180Speeds,
+                                               (uint8_t)(sizeof(kFastLarge180Speeds) / sizeof(kFastLarge180Speeds[0])),
+                                               FAST_LARGE180_V_MM_S);
+    }
+    printf("FAST RUN: v=%.0f mm/s accel=%.0f decel=%.0f, small turn %.0f mm/s, large90 %.0f, large180 %.0f mm/s\r\n",
+           s_fast_v, s_fast_accel, FastDecel(), s_fast_small_v, s_fast_large90_v, s_fast_large180_v);
     PrintSettings(goals, goal_count);
 
     if (FailSafe_IsTripped()) FailSafe_Halt(); // 起動時の低電圧など
@@ -1561,7 +1578,7 @@ static bool FastRunAndReturn(uint8_t type, const MazePos *goals, uint8_t goal_co
 
 // ---- 長い走行(ログを取るための試験のモード)----
 // 探索を、直進の速さ × スラロームの速さの組み合わせ(LONG_LOG_SEARCH_V_MM_S × SPEED_SELECT_SEARCH_TURN_V_MM_S)で
-// LONG_LOG_REPEAT 回ずつ走り、次に最短走行を、小回り(SMALL)を小回りの速さ(SPEED_SELECT_FAST_SMALL_V_MM_S)ごとに、
+// LONG_LOG_REPEAT 回ずつ走り、次に最短走行を、小回り(SMALL)を小回りの速さ(LONG_LOG_FAST_SMALL_V_MM_S)ごとに、
 // 大回り(LARGE)を1通り、LONG_LOG_REPEAT 回ずつ走る(直進は FAST_V_MM_S)。最短走行の後はゴールからスタートへ自分で戻る。
 // 置き直さずに続ける(探索はスタートに戻って北を向いて終わる)。1回ごとに別のログになる(search / fast / back)。
 // 走る順は「段」と「その中の番号」で数える(電池を替えた後に続きから始めるため。選ぶ画面の LED は 15 個まで):
@@ -1582,9 +1599,9 @@ typedef struct {
 #define COUNT_OF(a) ((uint8_t)(sizeof(a) / sizeof((a)[0])))
 #define LONG_PART_COUNT (COUNT_OF(kLongSearchSpeeds) + 2u)
 #define LONG_RUN_MAX (COUNT_OF(kLongSearchSpeeds) * COUNT_OF(kSearchTurnSpeeds) * LONG_LOG_REPEAT + \
-                      COUNT_OF(kFastSmallSpeeds) * LONG_LOG_REPEAT + LONG_LOG_REPEAT)
+                      COUNT_OF(kLongFastSmallSpeeds) * LONG_LOG_REPEAT + LONG_LOG_REPEAT)
 _Static_assert(COUNT_OF(kSearchTurnSpeeds) * LONG_LOG_REPEAT <= 15u, "too many steps in a part for the LED display");
-_Static_assert(COUNT_OF(kFastSmallSpeeds) * LONG_LOG_REPEAT <= 15u, "too many steps in a part for the LED display");
+_Static_assert(COUNT_OF(kLongFastSmallSpeeds) * LONG_LOG_REPEAT <= 15u, "too many steps in a part for the LED display");
 
 static LongRun s_long_runs[LONG_RUN_MAX];
 
@@ -1600,9 +1617,9 @@ static uint16_t BuildLongRuns(void) {
     }
     uint8_t part = (uint8_t)(COUNT_OF(kLongSearchSpeeds) + 1u);
     uint8_t step = 1;
-    for (uint8_t j = 0; j < COUNT_OF(kFastSmallSpeeds); j++) {
+    for (uint8_t j = 0; j < COUNT_OF(kLongFastSmallSpeeds); j++) {
         for (uint8_t k = 0; k < LONG_LOG_REPEAT; k++) {
-            s_long_runs[n++] = (LongRun){ LONG_FAST_SMALL, FAST_V_MM_S, kFastSmallSpeeds[j], part, step++ };
+            s_long_runs[n++] = (LongRun){ LONG_FAST_SMALL, FAST_V_MM_S, kLongFastSmallSpeeds[j], part, step++ };
         }
     }
     part++;

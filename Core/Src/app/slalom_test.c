@@ -110,8 +110,6 @@ static const float kSpeeds[] = SPEED_SELECT_SLALOM_TEST_V_MM_S;
 static TestTurn s_turns[TEST_TURN_COUNT];
 
 static void ComputeTurns(void) {
-    float pre, post;
-    SlalomShape sh;
 
     SlalomParams s90 = { SLALOM_V_MM_S, SLALOM_OMEGA_DPS, SLALOM_ALPHA_DPS2, 90.0f };
     Slalom_ScaleToSpeed(&s90, s_s90_v); // 選んだ速さでも同じ形で曲がる(探索と同じ)
@@ -120,19 +118,18 @@ static void ComputeTurns(void) {
                              so.pre_mm, so.post_mm,
                              HALF_SECTION_MM + SECTION_MM, SECTION_MM + HALF_SECTION_MM };
 
+    // 大回りの前後のオフセットは最短走行と同じ計算(スリップのモデル + *_ADJ。2026-11-08)
     SlalomParams l90 = { FAST_LARGE90_V_MM_S, FAST_LARGE90_OMEGA_DPS, FAST_LARGE90_ALPHA_DPS2, 90.0f };
-    sh = Slalom_ComputeShape(&l90);
-    Slalom_Turn90Offsets(&sh, SECTION_MM, &pre, &post);
+    SlalomOffsets o90 = Slalom_Large90Offsets(&l90);
     s_turns[1] = (TestTurn){ "l90", l90.v_mm_s, l90.omega_dps, l90.alpha_dps2, 90.0f,
-                             pre + FAST_LARGE90_PRE_ADJ_MM, post + FAST_LARGE90_POST_ADJ_MM,
+                             o90.pre_mm, o90.post_mm,
                              SECTION_MM, SECTION_MM };
 
     SlalomParams l180 = { FAST_LARGE180_V_MM_S, 0.0f, FAST_LARGE180_ALPHA_DPS2, 180.0f };
     Slalom_SolveOmegaForSide(&l180, SECTION_MM);
-    sh = Slalom_ComputeShape(&l180);
-    Slalom_Turn180Offsets(&sh, SECTION_MM, &pre, &post);
+    SlalomOffsets o180 = Slalom_Large180Offsets(&l180);
     s_turns[2] = (TestTurn){ "l180", l180.v_mm_s, l180.omega_dps, l180.alpha_dps2, 180.0f,
-                             pre + FAST_LARGE180_PRE_ADJ_MM, post + FAST_LARGE180_POST_ADJ_MM,
+                             o180.pre_mm, o180.post_mm,
                              SECTION_MM, SECTION_MM };
 
     for (int i = 0; i < TEST_TURN_COUNT; i++) {

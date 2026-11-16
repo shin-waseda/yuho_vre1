@@ -58,6 +58,20 @@ enum {
     SLIP_RN1 = 19, // (9,6) で北向き(南の壁に付ける)→ (9,7) の曲がり始めの所で止まる
     SLIP_RN2 = 20, // (12,9) で北向き → (12,10)
     SLIP_RN3 = 21, // (13,10) で北向き → (13,11)
+    // ---- 4×4 の大回り 90°(LARGE90。2026-11-08)----
+    // 0 列目・3 列目の (x,0)〜(x,2) と 2 段目 (0,2)〜(3,2) を空け、(3,2) の東に壁を置く。止まる所は前壁の 186mm 手前
+    SLIP_L90L = 22,  // (3,0) で北向き(南の外周に付ける)→ (3,1) の真ん中から大回り左 → (2,2) の真ん中 → 西へ
+                     // → (1,2) の西の端(西の外周の手前)
+    SLIP_L90LR = 23, // (3,2) で西向き((3,2) の東の壁に付ける)→ まっすぐ L90L と同じ止まる所
+    SLIP_L90R = 24,  // S で北向き → (0,1) の真ん中から大回り右 → (1,2) の真ん中 → 東へ → (2,2) の東の端((3,2) の東の壁の手前)
+    SLIP_L90RR = 25, // (0,2) で東向き(西の外周に付ける)→ まっすぐ L90R と同じ止まる所
+    // ---- 4×4 の大回り 180°(LARGE180。2026-11-08)----
+    // 4 列とも (x,0)〜(x,3) を空け、3 段目の (0,3)〜(1,3) と (2,3)〜(3,3) を空ける(0 列目と 1 列目、2 列目と 3 列目の間の壁は
+    // あってもよい)。止まる所は南の外周の 186mm 手前((x,1) の南の端)
+    SLIP_L180R = 26,  // S で北向き → (0,2) の真ん中から大回り右 180° → (1,2) の真ん中 → 南へ → (1,1) の南の端
+    SLIP_L180RR = 27, // (1,3) で南向き(北の外周に付ける)→ まっすぐ L180R と同じ止まる所
+    SLIP_L180L = 28,  // (3,0) で北向き(南の外周に付ける)→ (3,2) の真ん中から大回り左 180° → (2,2) の真ん中 → 南へ → (2,1) の南の端
+    SLIP_L180LR = 29, // (2,3) で南向き(北の外周に付ける)→ まっすぐ L180L と同じ止まる所
 };
 static const float kPivotSpeeds[] = { 300.0f, 500.0f }; // 超信地旋回の走り(T1・P1・T2・P2)の直進・小回りの速さ
 #define SLIP_ST_V        500.0f // 階段の速さ(探索の小回りと同じ。走りながら前壁を読む片寄りがほぼ 0 の速さ: FW2 の B 500)
@@ -70,6 +84,13 @@ static const float kPivotSpeeds[] = { 300.0f, 500.0f }; // 超信地旋回の走
 static int s_turn_log_index = -1;
 #define SLIP_ST_REF_RUNS 2      // 比べ相手を 1 か所あたり何本走るか
 #define SLIP_LR_V 300.0f // LR の組の速さ(速さによらないずれを見るので 1 つだけ)
+// 大回り 90° の速さ(遅い順に 1 段ずつ上げる。壁に当たるなどで止まったら、そこで終わる)。最短走行の目標は 1000(2026-11-08)
+static const float kLarge90Speeds[] = { 600.0f, 700.0f, 800.0f, 900.0f, 1000.0f };
+#define SLIP_L90_RUNS     3      // 1 つの速さで左・右を何本ずつ走るか(置く所ごとにまとめる)
+#define SLIP_L90_REF_V    600.0f // 比べ相手(まっすぐ)の速さ
+#define SLIP_L90_REF_RUNS 3      // 比べ相手を 1 か所あたり何本走るか
+// 大回り 180° の速さ(LARGE90 と同じく遅い順に 1 段ずつ。本数・比べ相手の速さと本数も LARGE90 と同じ)。最短走行の目標は 1000
+static const float kLarge180Speeds[] = { 600.0f, 700.0f, 800.0f, 900.0f, 1000.0f };
 
 typedef struct {
     float omega_dps, alpha_dps2, pre_mm, post_mm;
@@ -78,6 +99,11 @@ typedef struct {
 // true の間は、小回りの手で足す調整(SLALOM_PRE/POST_ADJ_MM)を引いた形で走る(LR の組。回る中心のずれの式を、
 // 調整の入っていない小回りと超信地旋回で比べるため)
 static bool s_raw_slalom = false;
+
+// 止まる所をこれだけ先へずらす(RULER: 前壁の物差しの傾きを、止まる所を変えて確かめる。ふつうは 0。LOG_EV_SLIP_RUN の e に出す)
+static float s_stop_extra_mm = 0.0f;
+static const float kRulerExtraMm[] = { -10.0f, 0.0f, 10.0f, 20.0f };
+#define SLIP_RULER_ROUNDS 2 // 置く所ごとに kRulerExtraMm を何回まわすか
 
 // 探索と同じ形の小回りを、速さ v に合わせて作る(前後のオフセットも探索と同じ計算)
 static TurnShape ShapeFor(float v) {
@@ -96,6 +122,42 @@ static TurnShape ShapeFor(float v) {
     }
     return s;
 }
+
+// 最短走行と同じ形の大回り 90°(FAST_LARGE90_*)を、速さ v に合わせて作る(角速度は速さに比例、角加速度は速さの2乗に比例)。
+// 前後のオフセットは区画の真ん中から曲がり始めまで・曲がり終わりから斜め隣の区画の真ん中まで(run_path と同じ計算)
+static TurnShape LargeShapeFor(float v) {
+    SlalomParams p = {
+        .v_mm_s = FAST_LARGE90_V_MM_S,
+        .omega_dps = FAST_LARGE90_OMEGA_DPS,
+        .alpha_dps2 = FAST_LARGE90_ALPHA_DPS2,
+        .angle_deg = 90.0f,
+    };
+    Slalom_ScaleToSpeed(&p, v);
+    SlalomOffsets o = Slalom_Large90Offsets(&p); // 最短走行と同じ(スリップのモデル + FAST_LARGE90_*_ADJ_MM)
+    TurnShape s = { p.omega_dps, p.alpha_dps2, o.pre_mm, o.post_mm };
+    return s;
+}
+
+// 最短走行と同じ形の大回り 180°(FAST_LARGE180_*。横にちょうど 1 区画移る角速度を求めてから)を、速さ v に合わせて作る。
+// 前のオフセットは出発した区画の真ん中から曲がり始めまで、後ろのオフセットは曲がり終わりから隣の列の区画の真ん中まで(run_path と同じ)
+static TurnShape Large180ShapeFor(float v) {
+    SlalomParams p = {
+        .v_mm_s = FAST_LARGE180_V_MM_S,
+        .omega_dps = 0.0f,
+        .alpha_dps2 = FAST_LARGE180_ALPHA_DPS2,
+        .angle_deg = 180.0f,
+    };
+    Slalom_SolveOmegaForSide(&p, SECTION_MM);
+    Slalom_ScaleToSpeed(&p, v);
+    SlalomOffsets o = Slalom_Large180Offsets(&p); // 最短走行と同じ(スリップのモデル + FAST_LARGE180_*_ADJ_MM)
+    TurnShape s = { p.omega_dps, p.alpha_dps2, o.pre_mm, o.post_mm };
+    return s;
+}
+
+static bool IsLarge90Turn(int kind) { return kind == SLIP_L90L || kind == SLIP_L90R; }
+static bool IsLarge90(int kind) { return kind >= SLIP_L90L && kind <= SLIP_L90RR; }
+static bool IsLarge180Turn(int kind) { return kind == SLIP_L180R || kind == SLIP_L180L; }
+static bool IsLarge180(int kind) { return kind >= SLIP_L180R && kind <= SLIP_L180LR; }
 
 // フェイルセーフが働いていたら、記録を SD に保存してから FailSafe_Halt() へ入る(戻らない)
 static void CheckFailSafe(void) {
@@ -180,6 +242,18 @@ static bool Turn(float *ref_mm, bool right, float v, const TurnShape *s) {
     return true;
 }
 
+// 区画の真ん中(*center_mm)から大回り(angle_deg = 90 は斜め隣、180 は隣の列へ)で曲がり、出た区画の真ん中を *center_mm に入れる。
+// 曲がり始めまでは速さ v のまま進む。曲がった後の直進は呼び出し側が始める
+static bool LargeTurn(float *center_mm, bool right, float angle_deg, float v, const TurnShape *s) {
+    float start = *center_mm + s->pre_mm;
+    StraightTo(start, v, v);
+    if (!WaitTargetDistance(start)) return false;
+    App_StartSlalom(right ? -angle_deg : angle_deg, s->omega_dps, s->alpha_dps2);
+    if (!WaitMotionDone()) return false;
+    *center_mm = App_GetTargetDistance() + s->post_mm;
+    return true;
+}
+
 // 止まったまま、目標の位置に対する2次元の前後のずれが小さくなるのを待つ(探索の AlongSync と同じ。壁は使わない)
 static void AlongSync(void) {
     DelayWatching(SEARCH_TURN_WAIT_MS);
@@ -252,7 +326,9 @@ static void SetupLogger(int kind, float v) {
     // 超信地旋回は止まる・前後を合わせる・回るの分を足す。長いほど間引かれる
     float path_mm = (kind == SLIP_T2 || kind == SLIP_P2 || kind == SLIP_T2L || kind == SLIP_P2L) ? 700.0f
                   : (kind == SLIP_E || kind == SLIP_EW) ? 300.0f : (kind == SLIP_N || kind == SLIP_NG) ? 480.0f
-                  : (kind == SLIP_ST) ? 5000.0f : (kind >= SLIP_RE1 && kind <= SLIP_RN3) ? 200.0f : 450.0f;
+                  : (kind == SLIP_ST) ? 5000.0f : (kind >= SLIP_RE1 && kind <= SLIP_RN3) ? 200.0f
+                  : IsLarge90Turn(kind) ? 900.0f : IsLarge90(kind) ? 550.0f
+                  : IsLarge180Turn(kind) ? 1100.0f : IsLarge180(kind) ? 550.0f : 450.0f;
     uint32_t pivot_ms = (kind == SLIP_P1 || kind == SLIP_P2 || kind == SLIP_P1L || kind == SLIP_P2L) ? 2000u : 0u;
     Logger_SetDuration((uint32_t)(path_mm / v * 1000.0f) + pivot_ms + SLIP_SETTLE_MS + SLIP_RECORD_MS + 700u);
 }
@@ -260,8 +336,8 @@ static void SetupLogger(int kind, float v) {
 // 置いた所で制御が有効になっている状態から 1 本走り、止まって前壁を読む(制御は有効のまま)
 static bool RunOnce(int kind, float v, StopMeasure *m) {
     const ControlDebug *d = App_GetControlDebug();
-    TurnShape s = ShapeFor(v);
-    Logger_Event(LOG_EV_SLIP_RUN, (float)kind, v, s.pre_mm, s.post_mm, 0.0f);
+    TurnShape s = IsLarge90(kind) ? LargeShapeFor(v) : IsLarge180(kind) ? Large180ShapeFor(v) : ShapeFor(v);
+    Logger_Event(LOG_EV_SLIP_RUN, (float)kind, v, s.pre_mm, s.post_mm, s_stop_extra_mm);
 
     // 右の組(T1・T2・P1・P2)は S から (0,1) で右、左の組(T1L・T2L・P1L・P2L)は (2,0) から (2,1) で左に曲がる。
     // 2 回目(T2・P2 は左、T2L・P2L は右)はどちらも (1,1) で曲がる
@@ -269,7 +345,22 @@ static bool RunOnce(int kind, float v, StopMeasure *m) {
     bool second = (kind == SLIP_T2 || kind == SLIP_P2 || kind == SLIP_T2L || kind == SLIP_P2L);
     float ref = SLIP_B0_MM; // 置いた区画と次の区画の境界
     float stop_after = SLIP_STOP_MM; // 最後の境界から止まる所まで(ふつうは次の境界の 12mm 手前)
-    if (kind == SLIP_ST) {
+    if (IsLarge90(kind)) {
+        // 大回り 90°: 置いた区画の真ん中は SEARCH_START_FRONT_MM 先。曲がる走りはその次の区画の真ん中から曲がり、斜め隣の区画の
+        // 真ん中へ出る。比べ相手は置いた区画の次の区画の真ん中を通る。そこから半区画先の境界の SLIP_STOP_MM 先で止まる(前壁の 186mm 手前)
+        float center = SEARCH_START_FRONT_MM + SECTION_MM; // (0,1)・(3,1)、比べ相手は (1,2)・(2,2) の真ん中
+        if (IsLarge90Turn(kind) && !LargeTurn(&center, kind == SLIP_L90R, 90.0f, v, &s)) return false; // → (1,2)・(2,2) の真ん中
+        ref = center + 0.5f * SECTION_MM; // 止まる所の手前の境界
+    } else if (IsLarge180(kind)) {
+        // 大回り 180°: 曲がる走りは置いた区画から 2 区画先((0,2)・(3,2))の真ん中から曲がり、隣の列の同じ段((1,2)・(2,2))の真ん中へ
+        // 南向きに出る。比べ相手は (1,3)・(2,3) に置き、次の区画 (1,2)・(2,2) の真ん中を通る。そこから LARGE90 と同じく止まる
+        float center = SEARCH_START_FRONT_MM + SECTION_MM;
+        if (IsLarge180Turn(kind)) {
+            center += SECTION_MM;
+            if (!LargeTurn(&center, kind == SLIP_L180R, 180.0f, v, &s)) return false;
+        }
+        ref = center + 0.5f * SECTION_MM;
+    } else if (kind == SLIP_ST) {
         // S から階段の入口まで(search_0092 の地図の最短走行の道): (0,1) 右・(1,1) 右・(1,0) 左 → (2,0)〜(7,0) を東へ →
         // (8,0) 左 → (8,1)〜(8,5) を北へ。ここまでの小回りも前壁を読む(番号 0〜3)
         s_turn_log_index = 0;
@@ -300,7 +391,7 @@ static bool RunOnce(int kind, float v, StopMeasure *m) {
         ref = App_GetTargetDistance() + 0.5f * SECTION_MM; // 次の区画との境界
         if (second && !Turn(&ref, left_set, v, &s)) return false; // (1,1) で反対の向きへ小回り
     }
-    m->stop_mm = ref + stop_after;
+    m->stop_mm = ref + stop_after + s_stop_extra_mm;
     StraightTo(m->stop_mm, v, 0.0f);
     if (!WaitMotionDone()) return false;
     DelayWatching(SLIP_SETTLE_MS);
@@ -358,6 +449,14 @@ static const char *KindName(int kind) {
         case SLIP_RN1: return "RN1";
         case SLIP_RN2: return "RN2";
         case SLIP_RN3: return "RN3";
+        case SLIP_L90L: return "L90L";
+        case SLIP_L90LR: return "L90LR";
+        case SLIP_L90R: return "L90R";
+        case SLIP_L90RR: return "L90RR";
+        case SLIP_L180R: return "L180R";
+        case SLIP_L180RR: return "L180RR";
+        case SLIP_L180L: return "L180L";
+        case SLIP_L180LR: return "L180LR";
         default: return "?";
     }
 }
@@ -374,6 +473,14 @@ static int KindPlaceNo(int kind) {
         case SLIP_N: return 5;
         case SLIP_NG: return 2; // (2,0) で北向き(左の組と同じ所)
         case SLIP_ST: return 1;
+        case SLIP_L90R: return 1;  // S
+        case SLIP_L90L: return 2;  // (3,0) 北向き
+        case SLIP_L90RR: return 3; // (0,2) 東向き
+        case SLIP_L90LR: return 4; // (3,2) 西向き
+        case SLIP_L180R: return 1;   // S
+        case SLIP_L180L: return 2;   // (3,0) 北向き
+        case SLIP_L180RR: return 3;  // (1,3) 南向き
+        case SLIP_L180LR: return 4;  // (2,3) 南向き
         default:
             // 階段の比べ相手は 8 か所あるので、LED の番号は 2〜5 を順に使う(置く所が変わったかは置く所の文字で見る)
             if (kind >= SLIP_RE1 && kind <= SLIP_RN3) return 2 + (kind - SLIP_RE1) % 4;
@@ -423,6 +530,14 @@ static const char *KindPlace(int kind) {
         case SLIP_RN1: return "(9,6) facing north, tail on the south wall";
         case SLIP_RN2: return "(12,9) facing north, tail on the south wall";
         case SLIP_RN3: return "(13,10) facing north, tail on the south wall";
+        case SLIP_L90L: return "(3,0) facing north, tail on the south wall";
+        case SLIP_L90LR: return "(3,2) facing west, tail on the east wall of (3,2)";
+        case SLIP_L90R: return "S (0,0) facing north, tail on the south wall";
+        case SLIP_L90RR: return "(0,2) facing east, tail on the west wall";
+        case SLIP_L180R: return "S (0,0) facing north, tail on the south wall";
+        case SLIP_L180RR: return "(1,3) facing south, tail on the north wall";
+        case SLIP_L180L: return "(3,0) facing north, tail on the south wall";
+        case SLIP_L180LR: return "(2,3) facing south, tail on the north wall";
         default: return "S (0,0) facing north, tail on the south wall";
     }
 }
@@ -468,23 +583,138 @@ static bool RunOneByHand(uint32_t run, int kind, float v) {
 }
 
 void SlipTurnTest_Run(void) {
-    static const float kEight[] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f };
-    int set = (int)ModeUI_SelectValue("SLIP(1 TURN 2 STRAIGHT 3 PIVOT 4 LR 5 LR REST 6 REF NG 7 STAIR 8 STAIR REF)", "",
-                                      kEight, 8u, 1.0f);
+    static const float kSets[] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f,
+                                   9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f };
+    int set = (int)ModeUI_SelectValue("SLIP(1 TURN 2 STRAIGHT 3 PIVOT 4 LR 5 LR REST 6 REF NG 7 CHECK REST 8 STAIR REF "
+                                      "9 LARGE90 10 LARGE90 REF 11 LARGE CHECK 12 LARGE180 13 LARGE180 REF "
+                                      "14 LARGE180 REST 15 RULER)", "", kSets, 15u, 1.0f);
     uint32_t run = 0;
     if (set <= 6) {
         printf("walls: south of S, east of (2,1), north of (1,3). keep open: east of (0,1), east and north of (1,1), "
                "(1,2)-(1,3). place by hand before every run\r\n");
     }
 
-    if (set == 7) {
-        // 2025 学生クラシック迷路の階段(2026-11-07): 小回りの手で足す調整なし・ありを交互に。曲がり始めの直前の前壁はログから読む
-        printf("SLIP STAIR (2025 students classic): S -> (8,6) -> 11 slaloms R,L,...,R from (8,6) to (13,11), "
-               "slalom adj OFF / ON in turn, v %.0f, %d runs\r\n", SLIP_ST_V, SLIP_ST_RUNS);
-        for (uint32_t k = 0; k < (uint32_t)SLIP_ST_RUNS; k++) {
-            s_raw_slalom = (k % 2u == 0u); // 1 本目は調整なし
-            printf("slalom adj %s\r\n", s_raw_slalom ? "OFF" : "ON");
-            if (!RunOneByHand(++run, SLIP_ST, SLIP_ST_V)) return;
+    if (set == 9) {
+        // 4×4 の大回り 90°(2026-11-08): 遅い順に、速さごとに右(L90R、S)を SLIP_L90_RUNS 本 → 左(L90L、(3,0))を同じだけ。
+        // 置く所ごとにまとめる。途中で止まったら(壁に当たってフェイルセーフなど)そこで終わる
+        const uint32_t n_speeds = (uint32_t)(sizeof(kLarge90Speeds) / sizeof(kLarge90Speeds[0]));
+        printf("SLIP LARGE90 (4x4): speeds 600-1000, R from S x%d then L from (3,0) x%d at each speed\r\n",
+               SLIP_L90_RUNS, SLIP_L90_RUNS);
+        for (uint32_t i = 0; i < n_speeds; i++) {
+            TurnShape s = LargeShapeFor(kLarge90Speeds[i]);
+            printf("v %.0f: omega %.0f alpha %.0f pre %.1f post %.1f\r\n", kLarge90Speeds[i], s.omega_dps, s.alpha_dps2,
+                   s.pre_mm, s.post_mm);
+        }
+        static const int kSides[] = { SLIP_L90R, SLIP_L90L };
+        for (uint32_t i = 0; i < n_speeds; i++) {
+            for (uint32_t j = 0; j < 2u; j++) {
+                for (uint32_t k = 0; k < (uint32_t)SLIP_L90_RUNS; k++) {
+                    if (!RunOneByHand(++run, kSides[j], kLarge90Speeds[i])) return;
+                }
+            }
+        }
+    } else if (set == 12) {
+        // 4×4 の大回り 180°(2026-11-08): LARGE90 と同じく、遅い順に速さごとに右(L180R、S)→ 左(L180L、(3,0))を
+        // SLIP_L90_RUNS 本ずつ。途中で止まったらそこで終わる
+        const uint32_t n_speeds = (uint32_t)(sizeof(kLarge180Speeds) / sizeof(kLarge180Speeds[0]));
+        printf("SLIP LARGE180 (4x4): speeds 600-1000, R from S x%d then L from (3,0) x%d at each speed\r\n",
+               SLIP_L90_RUNS, SLIP_L90_RUNS);
+        for (uint32_t i = 0; i < n_speeds; i++) {
+            TurnShape s = Large180ShapeFor(kLarge180Speeds[i]);
+            printf("v %.0f: omega %.0f alpha %.0f pre %.1f post %.1f\r\n", kLarge180Speeds[i], s.omega_dps, s.alpha_dps2,
+                   s.pre_mm, s.post_mm);
+        }
+        static const int kSides[] = { SLIP_L180R, SLIP_L180L };
+        for (uint32_t i = 0; i < n_speeds; i++) {
+            for (uint32_t j = 0; j < 2u; j++) {
+                for (uint32_t k = 0; k < (uint32_t)SLIP_L90_RUNS; k++) {
+                    if (!RunOneByHand(++run, kSides[j], kLarge180Speeds[i])) return;
+                }
+            }
+        }
+    } else if (set == 15) {
+        // 前壁の物差しの傾き(2026-11-08): LARGE180 の比べ相手と同じ置き方で、止まる所を kRulerExtraMm だけずらして読む。
+        // 調整(後ろ +19mm)で止まる所を 19mm 先にしたのに、読みは 12〜17mm しか動かなかったので、この壁での傾きを直接測る
+        const uint32_t n_extra = (uint32_t)(sizeof(kRulerExtraMm) / sizeof(kRulerExtraMm[0]));
+        printf("SLIP RULER (4x4): L180RR then L180LR, stop shifted by -10 / 0 / +10 / +20 mm, %d rounds, v %.0f\r\n",
+               SLIP_RULER_ROUNDS, SLIP_L90_REF_V);
+        static const int kRefs[] = { SLIP_L180RR, SLIP_L180LR };
+        for (uint32_t j = 0; j < 2u; j++) {
+            for (uint32_t k = 0; k < (uint32_t)SLIP_RULER_ROUNDS * n_extra; k++) {
+                s_stop_extra_mm = kRulerExtraMm[k % n_extra];
+                printf("stop shift %+.0f mm\r\n", s_stop_extra_mm);
+                bool ok = RunOneByHand(++run, kRefs[j], SLIP_L90_REF_V);
+                s_stop_extra_mm = 0.0f;
+                if (!ok) return;
+            }
+        }
+    } else if (set == 14) {
+        // LARGE180 の残り(2026-11-08): 1 回目は L180R の 800 を 1 本走ったところで終わった。FAST_LARGE180_POST_ADJ_MM を入れたので、
+        // まず 600 を左右 2 本ずつ(調整で比べ相手との差が 0 に近づいたかを見る)→ L180R 800 の残り 2 本 → L180L 800 → 900・1000 の左右
+        static const struct { int kind; float v; uint8_t n; } kRest[] = {
+            { SLIP_L180R, 600.0f, 2 }, { SLIP_L180L, 600.0f, 2 },
+            { SLIP_L180R, 800.0f, 2 }, { SLIP_L180L, 800.0f, 3 },
+            { SLIP_L180R, 900.0f, 3 }, { SLIP_L180L, 900.0f, 3 },
+            { SLIP_L180R, 1000.0f, 3 }, { SLIP_L180L, 1000.0f, 3 },
+        };
+        printf("SLIP LARGE180 REST (4x4): 600 R/L x2 (check the adjust), R 800 x2, L 800 x3, then 900 / 1000 R and L x3\r\n");
+        for (uint32_t j = 0; j < (uint32_t)(sizeof(kRest) / sizeof(kRest[0])); j++) {
+            for (uint32_t k = 0; k < kRest[j].n; k++) {
+                if (!RunOneByHand(++run, kRest[j].kind, kRest[j].v)) return;
+            }
+        }
+    } else if (set == 13) {
+        // 大回り 180° の比べ相手: 曲がった後の列の一番上に南向きに置き、まっすぐ同じ所で止まる
+        printf("SLIP LARGE180 REF (4x4): L180RR x%d then L180LR x%d, v %.0f\r\n", SLIP_L90_REF_RUNS,
+               SLIP_L90_REF_RUNS, SLIP_L90_REF_V);
+        static const int kRefs[] = { SLIP_L180RR, SLIP_L180LR };
+        for (uint32_t j = 0; j < 2u; j++) {
+            for (uint32_t k = 0; k < (uint32_t)SLIP_L90_REF_RUNS; k++) {
+                if (!RunOneByHand(++run, kRefs[j], SLIP_L90_REF_V)) return;
+            }
+        }
+    } else if (set == 11) {
+        // LARGE CHECK(2026-11-08。前の LARGE90 REST は取り終えたので置き換えた): スリップのモデル(SLALOM_SLIP_K)を大回りに
+        // 入れた後の確かめ。600 と 1000 で、S から L90R・L180R、(3,0) から L90L・L180L を SLIP_L90_RUNS 本ずつ。
+        // 迷路は LARGE90 と LARGE180 の両方が走れる形(4 列とも (x,0)〜(x,3) と 2 段目 (0,2)〜(3,2) と (0,3)〜(1,3)・(2,3)〜(3,3) を空け、
+        // (3,2) の東と 3 段目の北に壁)。比べ相手は前に取った LARGE90 REF・LARGE180 REF(RULER)を使う
+        static const float kCheckSpeeds[] = { 600.0f, 1000.0f };
+        static const int kChecks[2][2] = { { SLIP_L90R, SLIP_L180R }, { SLIP_L90L, SLIP_L180L } };
+        printf("SLIP LARGE CHECK (4x4): v 600 / 1000, from S: L90R L180R, from (3,0): L90L L180L, x%d each\r\n",
+               SLIP_L90_RUNS);
+        for (uint32_t i = 0; i < 2u; i++) {
+            for (uint32_t side = 0; side < 2u; side++) {
+                for (uint32_t j = 0; j < 2u; j++) {
+                    for (uint32_t k = 0; k < (uint32_t)SLIP_L90_RUNS; k++) {
+                        if (!RunOneByHand(++run, kChecks[side][j], kCheckSpeeds[i])) return;
+                    }
+                }
+            }
+        }
+    } else if (set == 10) {
+        // 大回り 90° の比べ相手: 曲がった後の道に、曲がらずにまっすぐ入って同じ所で止まる
+        printf("SLIP LARGE90 REF (4x4): L90RR x%d then L90LR x%d, v %.0f\r\n", SLIP_L90_REF_RUNS,
+               SLIP_L90_REF_RUNS, SLIP_L90_REF_V);
+        static const int kRefs[] = { SLIP_L90RR, SLIP_L90LR };
+        for (uint32_t j = 0; j < 2u; j++) {
+            for (uint32_t k = 0; k < (uint32_t)SLIP_L90_REF_RUNS; k++) {
+                if (!RunOneByHand(++run, kRefs[j], SLIP_L90_REF_V)) return;
+            }
+        }
+    } else if (set == 7) {
+        // LARGE CHECK の残り(2026-11-08。前の STAIR と置き換えた。迷路が変わって STAIR の道は使えない): 1 回目は 600 の右
+        // (L90R・L180R)まで取れた。600 の左((3,0) から L90L・L180L)→ 1000 の右(S)→ 1000 の左を SLIP_L90_RUNS 本ずつ
+        static const struct { int kind; float v; } kRest[] = {
+            { SLIP_L90L, 600.0f }, { SLIP_L180L, 600.0f },
+            { SLIP_L90R, 1000.0f }, { SLIP_L180R, 1000.0f },
+            { SLIP_L90L, 1000.0f }, { SLIP_L180L, 1000.0f },
+        };
+        printf("SLIP LARGE CHECK REST (4x4): 600 L90L L180L from (3,0), 1000 L90R L180R from S, 1000 L90L L180L, x%d each\r\n",
+               SLIP_L90_RUNS);
+        for (uint32_t j = 0; j < (uint32_t)(sizeof(kRest) / sizeof(kRest[0])); j++) {
+            for (uint32_t k = 0; k < (uint32_t)SLIP_L90_RUNS; k++) {
+                if (!RunOneByHand(++run, kRest[j].kind, kRest[j].v)) return;
+            }
         }
     } else if (set == 8) {
         // 階段の比べ相手: 同じ前壁へまっすぐ入り、階段の走りが曲がり始める所(調整なしの前のオフセット)で止まって読む

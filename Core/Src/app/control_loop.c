@@ -44,6 +44,7 @@ static volatile bool s_output_paused = false; // モーターの出力だけを 
 // 制御が無効の間は0にしておき、有効にした時点を基準にする。ISRからのみ触る。
 static float s_ref_x = 0.0f, s_ref_y = 0.0f;
 static float s_est_x = 0.0f, s_est_y = 0.0f;
+static float s_est_beta = 0.0f; // 推定の位置に入れるスリップアングル β[rad](SLIP_ESTIMATION_ENABLE のとき)
 static float s_lat_ofs_deg = 0.0f; // 目標の向きに足すずらし Δθ[deg]
 // 目標の位置に対する推定の位置のずれ[mm](目標の向きの前後: + なら目標が前、横: + なら機体が左)。ISRが書き、メインが読む
 static volatile float s_along_err_mm = 0.0f;
@@ -603,6 +604,19 @@ void App_ControlTick(void) {
         float th_r = s_angle_ref_deg * DEG_TO_RAD;
         float th_e = s_gyro_angle_deg * DEG_TO_RAD;
         float v_e = 0.5f * (s_actual.left_mm_s + s_actual.right_mm_s);
+#if SLIP_ESTIMATION_ENABLE
+        // 進む向き = 機体の向き − β。dβ/dt = (K v[m/s] ω[rad/s] − β) / C を、測った速さとジャイロで進める
+        // (logic/control/slalom.c の SlipTick と同じ式。曲がった外へ流れる分を推定に入れ、FB で打ち消す)
+        {
+            float target = SLALOM_SLIP_K * (v_e * MM_TO_M) * (s_gyro_z_dps * DEG_TO_RAD);
+            if (SLALOM_SLIP_C_S <= 0.0f) {
+                s_est_beta = target;
+            } else {
+                s_est_beta += (1.0f - expf(-CONTROL_DT_S / SLALOM_SLIP_C_S)) * (target - s_est_beta);
+            }
+            th_e -= s_est_beta;
+        }
+#endif
         s_ref_x += s_target_mm_s * CONTROL_DT_S * cosf(th_r);
         s_ref_y += s_target_mm_s * CONTROL_DT_S * sinf(th_r);
         s_est_x += v_e * CONTROL_DT_S * cosf(th_e);
@@ -616,6 +630,7 @@ void App_ControlTick(void) {
         s_dist_mm = 0.0f;
         s_ref_x = s_ref_y = 0.0f;
         s_est_x = s_est_y = 0.0f;
+        s_est_beta = 0.0f;
     }
 
     // ---- 壁切れ(横の壁がなくなった瞬間)を見つける ----

@@ -63,7 +63,8 @@ SlalomSlipError Slalom_SlipError90(const SlalomParams *p, float span_mm, float p
 // 小回り 90°(探索・最短走行・SLALOM の試験で共通)の前後のオフセット。p は曲がる速さにしてあること
 // (Slalom_ScaleToSpeed の後)。形で決まるオフセットに、次のモデルの調整を足す(速さごとの値は持たない):
 //   スリップ(SLALOM_SLIP_K, SLALOM_SLIP_C_S): 出口のずれを Slalom_SlipError90 で求め、打ち消すように
-//     前(外へのずれの分)と後ろ(前後のずれの分)を直す(tools/matlab の turn_sim の ADJ の提案と同じ。3回くり返す)
+//     前(外へのずれの分)と後ろ(前後のずれの分)を直す(tools/matlab の turn_sim の ADJ の提案と同じ。3回くり返す)。
+//     SLIP_ESTIMATION_ENABLE のときは推定の位置にスリップを入れて FB で打ち消すので、直さない(大回りも同じ)
 //   スリップ以外の遅れ(SLALOM_EXTRA_LAG_MM。速さによらず一定): 後ろを伸ばす
 //   SLALOM_PRE_ADJ_MM / SLALOM_POST_ADJ_MM: さらに手で足す分(ふつうは 0)
 typedef struct {
@@ -74,5 +75,26 @@ typedef struct {
 } SlalomOffsets;
 
 SlalomOffsets Slalom_SmallTurnOffsets(const SlalomParams *p);
+
+// ---- スリップを含めた旋回(角度によらない。2026-11-08)----
+// 同じ台形で回る旋回を、スリップあり(K, C)となしで CONTROL_DT_S 刻みで進め、曲がり終わってから extra_mm 進んだ所での
+// 位置の差を、出る向きの前後(+ で先、− で遅れ)と横(曲がった外が +)で返す。前後のオフセットの直進ではずれは生まれない
+// ので、オフセットによらない(曲がった後に β が戻る間のずれは extra_mm の中に入る)
+typedef struct {
+    float along_mm; // 出る向きの前後のずれ
+    float lat_mm;   // 横のずれ(外が +)
+} SlalomTurnSlip;
+
+SlalomTurnSlip Slalom_SlipErrorTurn(const SlalomParams *p, float extra_mm, float K, float C);
+
+// 大回り 90°(区画の中心 → 斜め隣の区画の中心)の前後のオフセット。p は曲がる速さにしてあること。形で決まるオフセットに、
+// スリップ(SLALOM_SLIP_K, SLALOM_SLIP_C_S)を打ち消す分(前のオフセットで横、後ろのオフセットで前後)と、
+// FAST_LARGE90_PRE/POST_ADJ_MM(スリップ以外の、速さによらない分)を足す
+SlalomOffsets Slalom_Large90Offsets(const SlalomParams *p);
+
+// 大回り 180°(区画の中心 → 隣の列の区画の中心)の前後のオフセット。p は曲がる速さ・横にちょうど 1 区画移る角速度にして
+// あること。スリップは後ろのオフセットで前後だけ打ち消す(出る向きが入る向きの逆なので、前のオフセットでは横を直せない)。
+// FAST_LARGE180_PRE/POST_ADJ_MM を足す
+SlalomOffsets Slalom_Large180Offsets(const SlalomParams *p);
 
 #endif
