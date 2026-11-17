@@ -3,6 +3,7 @@
 #include <math.h>
 #include "main.h"
 #include "interface/led.h"
+#include "interface/sound.h"
 
 // 発動原因と、発動時の値(電圧/速度偏差/角速度)。ISRが書き、メインが読む。
 static volatile FailSafeCause s_cause = FAILSAFE_NONE;
@@ -127,6 +128,12 @@ void FailSafe_Halt(void) {
     while (1) {
         printf("FAILSAFE: %s (value=%.2f, vbat=%.2f V)\r\n",
                FailSafe_CauseName(cause), s_trip_value, s_vbat_filtered);
+        // 2 秒ごとに音でも知らせる(電池の低下は高いピピピ、それ以外は下がる音)
+        if (cause == FAILSAFE_LOW_VOLTAGE) {
+            Sound_BattLow();
+        } else {
+            Sound_Error();
+        }
 
         for (int i = 0; i < 4; i++) {
             LED_SetDirectPattern(pattern);

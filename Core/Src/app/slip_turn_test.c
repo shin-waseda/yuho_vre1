@@ -8,6 +8,8 @@
 #include "app/failsafe.h"
 #include "app/logger.h"
 #include "app/log_event.h"
+#include "interface/button.h"
+#include "interface/sound.h"
 #include "logic/control/slalom.h"
 
 // ---- 位置 ----
@@ -90,7 +92,8 @@ static const float kLarge90Speeds[] = { 600.0f, 700.0f, 800.0f, 900.0f, 1000.0f 
 #define SLIP_L90_REF_V    600.0f // 比べ相手(まっすぐ)の速さ
 #define SLIP_L90_REF_RUNS 3      // 比べ相手を 1 か所あたり何本走るか
 // 大回り 180° の速さ(LARGE90 と同じく遅い順に 1 段ずつ。本数・比べ相手の速さと本数も LARGE90 と同じ)。最短走行の目標は 1000
-static const float kLarge180Speeds[] = { 600.0f, 700.0f, 800.0f, 900.0f, 1000.0f };
+// 2026-11-17: 1000 は横加速度 1.15G なので消した(モデルは 1G 未満でだけ扱う)
+static const float kLarge180Speeds[] = { 600.0f, 700.0f, 800.0f, 900.0f };
 
 typedef struct {
     float omega_dps, alpha_dps2, pre_mm, post_mm;
@@ -542,14 +545,62 @@ static const char *KindPlace(int kind) {
     }
 }
 
+// ---- 続きから走る(2026-11-17)----
+// セットを選んだ後に「何本目から走るか」を 2 回に分けて選ぶ(FROM x10 = 十の位 0〜9、FROM x1 = 一の位 0〜9。
+// 回さずに 2 回押すと 00 = 最初から)。それより前の本数は走らずに飛ばす(番号と置く所の並びは最初から走ったときと同じ)。
+// 途中で止まったら(電池・走りの失敗)、止まった本の番号を、起動音の電圧と同じ音階で 2 音(十の位・一の位。0 = ド、1 = レ、…)
+// 3 秒ごとに鳴らし、直結の LED を点滅させてボタンを待つ。その本はまだ取れていないので、次は同じ番号を選ぶ
+// (値を選ぶときも、番号 n の音は n の数字の音なので、同じ音になるまで回せばよい)。
+static uint32_t s_from_run = 1u;
+
+static void SelectFromRun(void) {
+    static const float kDigits[] = { 0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f };
+    uint32_t tens = (uint32_t)ModeUI_SelectValue("FROM x10", "", kDigits, 10u, 0.0f);
+    uint32_t ones = (uint32_t)ModeUI_SelectValue("FROM x1", "", kDigits, 10u, 0.0f);
+    s_from_run = 10u * tens + ones;
+    if (s_from_run < 1u) s_from_run = 1u;
+    printf("start from #%lu\r\n", (unsigned long)s_from_run);
+}
+
+// 止まった本の番号を音と LED で知らせて、ボタンが押されるまで待つ
+static void WaitClickTellingRun(uint32_t run) {
+    static SoundNote seq[4]; // 鳴らしている間も読まれるので static
+    static const uint16_t kScale[] = { NOTE_C7, NOTE_D7, NOTE_E7, NOTE_F7, NOTE_G7, NOTE_A7, NOTE_B7,
+                                       NOTE_C8, NOTE_D8, NOTE_E8 };
+    uint32_t n = (run > 99u) ? 99u : run;
+    seq[0] = (SoundNote){ kScale[n / 10u], 200u };
+    seq[1] = (SoundNote){ NOTE_REST, 100u };
+    seq[2] = (SoundNote){ kScale[n % 10u], 200u };
+    seq[3] = (SoundNote){ 0u, 0u };
+    printf("next time choose FROM x10 = %lu, FROM x1 = %lu\r\n", (unsigned long)(n / 10u), (unsigned long)(n % 10u));
+    uint32_t t0 = HAL_GetTick(), last_sound = t0 - 3000u;
+    while (!Button_IsPressed()) {
+        if (FailSafe_IsTripped()) FailSafe_Halt();
+        uint32_t now = HAL_GetTick();
+        if (now - last_sound >= 3000u) {
+            Sound_Play(seq);
+            last_sound = now;
+        }
+        LED_SetDirectPattern((((now - t0) / 100u) % 2u == 0u) ? SLIP_LED_STOPPED : 0u);
+        HAL_Delay(1);
+    }
+    LED_SetDirectPattern(0u);
+    while (Button_IsPressed()) HAL_Delay(10);
+    HAL_Delay(20);
+}
+
 // 1 本走る: 手で置いて手をかざすのを待ち、走って止まり、前壁を読んで保存する。続けてよければ true
 // (1 本ごとに手で置き直す。自動で戻って押し当てると、フェイルセーフが働いたり、向きと横の位置がそろわなかったりしたので、
-// やめた。2026-11-06)
+// やめた。2026-11-06)。run が選んだ始めの番号より前なら走らずに true
 static bool RunOneByHand(uint32_t run, int kind, float v) {
+    if (run < s_from_run) {
+        printf("#%lu %s v %.0f: skipped\r\n", (unsigned long)run, KindName(kind), v);
+        return true;
+    }
     float vbat = FailSafe_GetFilteredVoltage();
     if (vbat < LONG_LOG_MIN_VBAT_V) {
         printf("SLIP stopped before #%lu: battery %.2f V\r\n", (unsigned long)run, vbat);
-        ModeUI_WaitClickBlinking(SLIP_LED_STOPPED);
+        WaitClickTellingRun(run);
         return false;
     }
     if (FailSafe_IsTripped()) FailSafe_Halt();
@@ -577,7 +628,7 @@ static bool RunOneByHand(uint32_t run, int kind, float v) {
     if (ModeUI_SaveLogToSD() == SD_SAVE_FAILED) printf("SD save FAILED\r\n");
     if (!ok) {
         printf("SLIP stopped at #%lu (run)\r\n", (unsigned long)run);
-        ModeUI_WaitClickBlinking(SLIP_LED_STOPPED);
+        WaitClickTellingRun(run);
     }
     return ok;
 }
@@ -588,6 +639,7 @@ void SlipTurnTest_Run(void) {
     int set = (int)ModeUI_SelectValue("SLIP(1 TURN 2 STRAIGHT 3 PIVOT 4 LR 5 LR REST 6 REF NG 7 CHECK REST 8 STAIR REF "
                                       "9 LARGE90 10 LARGE90 REF 11 LARGE CHECK 12 LARGE180 13 LARGE180 REF "
                                       "14 LARGE180 REST 15 RULER)", "", kSets, 15u, 1.0f);
+    SelectFromRun();
     uint32_t run = 0;
     if (set <= 6) {
         printf("walls: south of S, east of (2,1), north of (1,3). keep open: east of (0,1), east and north of (1,1), "
@@ -654,10 +706,9 @@ void SlipTurnTest_Run(void) {
         static const struct { int kind; float v; uint8_t n; } kRest[] = {
             { SLIP_L180R, 600.0f, 2 }, { SLIP_L180L, 600.0f, 2 },
             { SLIP_L180R, 800.0f, 2 }, { SLIP_L180L, 800.0f, 3 },
-            { SLIP_L180R, 900.0f, 3 }, { SLIP_L180L, 900.0f, 3 },
-            { SLIP_L180R, 1000.0f, 3 }, { SLIP_L180L, 1000.0f, 3 },
+            { SLIP_L180R, 900.0f, 3 }, { SLIP_L180L, 900.0f, 3 }, // 1000 は 1G を超えるので消した(2026-11-17)
         };
-        printf("SLIP LARGE180 REST (4x4): 600 R/L x2 (check the adjust), R 800 x2, L 800 x3, then 900 / 1000 R and L x3\r\n");
+        printf("SLIP LARGE180 REST (4x4): 600 R/L x2 (check the adjust), R 800 x2, L 800 x3, then 900 R and L x3\r\n");
         for (uint32_t j = 0; j < (uint32_t)(sizeof(kRest) / sizeof(kRest[0])); j++) {
             for (uint32_t k = 0; k < kRest[j].n; k++) {
                 if (!RunOneByHand(++run, kRest[j].kind, kRest[j].v)) return;
@@ -678,15 +729,16 @@ void SlipTurnTest_Run(void) {
         // 入れた後の確かめ。600 と 1000 で、S から L90R・L180R、(3,0) から L90L・L180L を SLIP_L90_RUNS 本ずつ。
         // 迷路は LARGE90 と LARGE180 の両方が走れる形(4 列とも (x,0)〜(x,3) と 2 段目 (0,2)〜(3,2) と (0,3)〜(1,3)・(2,3)〜(3,3) を空け、
         // (3,2) の東と 3 段目の北に壁)。比べ相手は前に取った LARGE90 REF・LARGE180 REF(RULER)を使う
-        static const float kCheckSpeeds[] = { 600.0f, 1000.0f };
+        // 2026-11-17: 速い方は 1G 未満にした(大回り 90° は 1000 のまま 0.68G、大回り 180° は 1000 → 900 で 0.93G)
+        static const float kCheckSpeeds[2][2] = { { 600.0f, 600.0f }, { 1000.0f, 900.0f } }; // [遅い・速い][L90・L180]
         static const int kChecks[2][2] = { { SLIP_L90R, SLIP_L180R }, { SLIP_L90L, SLIP_L180L } };
-        printf("SLIP LARGE CHECK (4x4): v 600 / 1000, from S: L90R L180R, from (3,0): L90L L180L, x%d each\r\n",
+        printf("SLIP LARGE CHECK (4x4): v 600 / fast (L90 1000, L180 900), from S: L90R L180R, from (3,0): L90L L180L, x%d each\r\n",
                SLIP_L90_RUNS);
         for (uint32_t i = 0; i < 2u; i++) {
             for (uint32_t side = 0; side < 2u; side++) {
                 for (uint32_t j = 0; j < 2u; j++) {
                     for (uint32_t k = 0; k < (uint32_t)SLIP_L90_RUNS; k++) {
-                        if (!RunOneByHand(++run, kChecks[side][j], kCheckSpeeds[i])) return;
+                        if (!RunOneByHand(++run, kChecks[side][j], kCheckSpeeds[i][j])) return;
                     }
                 }
             }
@@ -706,10 +758,10 @@ void SlipTurnTest_Run(void) {
         // (L90R・L180R)まで取れた。600 の左((3,0) から L90L・L180L)→ 1000 の右(S)→ 1000 の左を SLIP_L90_RUNS 本ずつ
         static const struct { int kind; float v; } kRest[] = {
             { SLIP_L90L, 600.0f }, { SLIP_L180L, 600.0f },
-            { SLIP_L90R, 1000.0f }, { SLIP_L180R, 1000.0f },
-            { SLIP_L90L, 1000.0f }, { SLIP_L180L, 1000.0f },
+            { SLIP_L90R, 1000.0f }, { SLIP_L180R, 900.0f }, // 大回り 180° は 1G 未満の 900 にした(2026-11-17)
+            { SLIP_L90L, 1000.0f }, { SLIP_L180L, 900.0f },
         };
-        printf("SLIP LARGE CHECK REST (4x4): 600 L90L L180L from (3,0), 1000 L90R L180R from S, 1000 L90L L180L, x%d each\r\n",
+        printf("SLIP LARGE CHECK REST (4x4): 600 L90L L180L from (3,0), L90R 1000 L180R 900 from S, L90L 1000 L180L 900, x%d each\r\n",
                SLIP_L90_RUNS);
         for (uint32_t j = 0; j < (uint32_t)(sizeof(kRest) / sizeof(kRest[0])); j++) {
             for (uint32_t k = 0; k < (uint32_t)SLIP_L90_RUNS; k++) {

@@ -19,9 +19,11 @@
 #include "app/gyro_scale_test.h"
 #include "app/front_wall_test.h"
 #include "app/slip_turn_test.h"
+#include "app/lat_ruler_test.h"
 #include "app/failsafe.h"
 #include "app/logger.h"
 #include "interface/sdcard.h"
+#include "interface/sound.h"
 
 static const char *ModeName(RobotMode mode) {
     switch (mode) {
@@ -53,6 +55,7 @@ static const char *ModeName(RobotMode mode) {
         case MODE_FRONT_WALL_TEST: return "FRONT_WALL";
         case MODE_SLIP_TURN_TEST: return "SLIP";
         case MODE_FAST_ALL:      return "FAST_ALL";
+        case MODE_LAT_RULER_TEST: return "LAT_RULER";
         default:               return "UNKNOWN";
     }
 }
@@ -84,6 +87,7 @@ static const float s_preset_straight_acc[] = SHORTCUT_STRAIGHT_ACC;
 static const float s_preset_slalom_low[] = SHORTCUT_SLALOM_LOW;
 static const float s_preset_slalom_high[] = SHORTCUT_SLALOM_HIGH;
 static const float s_preset_long_log[] = SHORTCUT_LONG_LOG;
+static const float s_preset_straight_long[] = SHORTCUT_STRAIGHT_LONG;
 
 typedef struct {
     const char *name;
@@ -106,6 +110,8 @@ static const ModeMenu s_menus[] = {
     { "FAST_SWEEP",          s_fast_sweep_mode,     1u, NULL, 0u }, // 範囲は解析の後で決めるので選ぶ
     { "LONG_LOG",            s_long_log_mode,       1u, s_preset_long_log,     MENU_COUNT_OF(s_preset_long_log) },
     { "SENSOR_SPIN",         s_sensor_spin_mode,    1u, NULL, 0u }, // 値を選ぶ所はない
+    // 長い通路で 2000〜3000mm/s(2026-11-17。前からの番号を変えないよう最後に足した)
+    { "STRAIGHT_SWEEP(long)", s_straight_sweep_mode, 1u, s_preset_straight_long, MENU_COUNT_OF(s_preset_straight_long) },
 };
 
 // 選んだショートカットの値と、次に使う番号
@@ -132,9 +138,11 @@ SdSaveResult ModeUI_SaveLogToSD(void) {
     char path[64];
     if (!Logger_SaveFile(path, sizeof(path))) {
         printf("SD: save failed\r\n");
+        Sound_Error();
         return SD_SAVE_FAILED;
     }
     printf("SD: saved %s\r\n", path);
+    Sound_LogSaved();
     LED_SetDirectPattern(LED_DIRECT_ALL);
     HAL_Delay(SD_SAVE_OK_LIGHT_MS);
     LED_SetDirectPattern(0x00u);
@@ -262,7 +270,7 @@ void ModeUI_ShowBattery(float vbat, uint32_t hold_ms) {
     HAL_Delay(hold_ms);
 }
 
-// 選んでいる項目の表示(UART と LED)。番号は1始まりで出す。
+// 選んでいる項目の表示(UART と LED と音)。番号は1始まりで出す(音は 1 番がド、2 番がレ、…)。
 // s_show_values があれば値(ModeUI_SelectValue)、なければ s_show_menu が NULL なら一番上の階層、
 // そうでなければその中のモードを選んでいる。
 static const ModeMenu *s_show_menu = NULL;
@@ -271,6 +279,7 @@ static const char *s_show_name = "";
 static const char *s_show_unit = "";
 
 static void ShowItem(uint8_t i) {
+    Sound_Mode(i);
     if (s_show_values != NULL) {
         printf("%s %d: %.0f %s\r\n", s_show_name, (int)i + 1, s_show_values[i], s_show_unit);
         ShowValueIndex(i);
@@ -381,12 +390,13 @@ float ModeUI_SelectValueFrom(const char *name, const char *unit, const float *va
 // RUN の中の TEST: ログ取りの走行を、値を選ぶのと同じ画面(棒グラフ)で選んで始める
 static void RunTest_Run(void) {
     // SLIP は TEST の一覧が上限(15)で入らないので、ここに入れた(2026-11-06)
+    // LAT_RULER(横の物差し)も同じ理由でここに足した(2026-11-17)
     static const RobotMode kTests[] = { MODE_FAST_SWEEP, MODE_SEARCH_SPIN, MODE_FAST_BANDS, MODE_LONG_LOG,
-                                        MODE_SLIP_TURN_TEST };
-    static const float kValues[] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f };
-    printf("RUN TEST: 1 FAST_SWEEP, 2 SEARCH_SPIN, 3 FAST_BANDS, 4 LONG_LOG, 5 SLIP\r\n");
-    uint8_t n = (uint8_t)ModeUI_SelectValue("TEST(1 FAST_SWEEP 2 SEARCH_SPIN 3 FAST_BANDS 4 LONG_LOG 5 SLIP)", "", kValues,
-                                            MENU_COUNT_OF(kValues), 1.0f);
+                                        MODE_SLIP_TURN_TEST, MODE_LAT_RULER_TEST };
+    static const float kValues[] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
+    printf("RUN TEST: 1 FAST_SWEEP, 2 SEARCH_SPIN, 3 FAST_BANDS, 4 LONG_LOG, 5 SLIP, 6 LAT_RULER\r\n");
+    uint8_t n = (uint8_t)ModeUI_SelectValue("TEST(1 FAST_SWEEP 2 SEARCH_SPIN 3 FAST_BANDS 4 LONG_LOG 5 SLIP 6 LAT_RULER)", "",
+                                            kValues, MENU_COUNT_OF(kValues), 1.0f);
     RobotMode mode = kTests[n - 1u];
     printf("MODE: RUN / TEST / %s\r\n", ModeName(mode));
     s_current_mode = mode; // ログの MODE に、選んだ走行を残す
@@ -478,6 +488,9 @@ void ModeUI_Run(RobotMode mode) {
             break;
         case MODE_SLIP_TURN_TEST:
             SlipTurnTest_Run();
+            break;
+        case MODE_LAT_RULER_TEST:
+            LatRulerTest_Run();
             break;
         default:
             break;

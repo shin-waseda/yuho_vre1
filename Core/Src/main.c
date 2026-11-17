@@ -34,6 +34,7 @@
 #include "interface/encoder.h"
 #include "interface/sdcard.h"
 #include "interface/fault_diag.h"
+#include "interface/sound.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
 #include "app/mode_ui.h"
@@ -114,6 +115,7 @@ int main(void)
   setbuf(stdout, NULL);
 
   printf("Hello, World!\r\n");
+  Sound_Init(); // ブザー(鳴らしている間も止まらない。SysTick で進める)
   FaultDiag_Print(); // HardFault の後に起動したなら、LED の点滅(約2秒)でも知らせる
   HAL_Delay(100);
 
@@ -145,6 +147,8 @@ HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);  // ENC_R
   if (vbat < FAILSAFE_LOW_VOLTAGE_V) {
     printf("WARNING: low battery at startup (< %.2f V)\r\n", FAILSAFE_LOW_VOLTAGE_V);
   }
+  // 起動音: 電圧の 2 音 + リセットの原因の 2 音(interface/sound.c)。電池の表示の間に鳴り終わる
+  Sound_Startup(vbat, FaultDiag_GetBootInfo()->reset_flags);
   ModeUI_ShowBattery(vbat, 1500);
 
   // SDカードのマウント。失敗しても起動は続け、ログのSD保存だけ無効になる。

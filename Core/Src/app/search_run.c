@@ -10,6 +10,7 @@
 #include "interface/sdcard.h"
 #include "interface/flash.h"
 #include "interface/fault_diag.h"
+#include "interface/sound.h"
 #include "logic/wall_sense.h"
 #include "logic/maze/search_planner.h"
 #include "logic/maze/maze_print.h"
@@ -716,6 +717,12 @@ static void SaveMapAtGoal(void) {
     bool saved = Flash_WriteUserData(&s_map, sizeof(s_map));
     App_SetOutputPaused(false);
     Ev(LOG_EV_MAP_SAVED, saved ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    // ゴールの音は flash に書いた後に鳴らす(書いている間は SysTick も止まり、鳴っている音が切れずに続くため)
+    if (saved) {
+        Sound_Finish();
+    } else {
+        Sound_Error();
+    }
     DelayWatching(SEARCH_TURN_WAIT_MS);
     LED_SetDirectPattern(LedIdlePattern());
 }
@@ -903,6 +910,7 @@ static void PrepareStart(const char *log_name) {
     LED_SetDirectPattern(0x00u);
     s_log_file = Logger_StreamBegin(path, sizeof(path));
     printf("log: %s\r\n", s_log_file ? path : "(no SD, not saved)");
+    if (s_log_file) Sound_LogStart();
 }
 
 // ログのファイルを閉じる(探索・最短走行で共通)。
@@ -940,9 +948,11 @@ static void EndRunLog(void) {
         s_log_file = false;
         printf("log %s (dropped %lu rows)\r\n", saved ? "saved" : "save failed", (unsigned long)dropped);
         if (saved) {
+            Sound_LogSaved();
             ShowLogSaved();
         } else {
             s_log_failed = true;
+            Sound_Error();
             LED_SetDirectPattern(LedIdlePattern());
         }
     } else {
@@ -1478,6 +1488,7 @@ void FastRun_Run(void) {
         LogMap(); // 走った地図(flash から読んだもの)
         EndRunLog();
         printf("fast run (%s) %s\r\n", kTypes[type], done ? "finished" : "stopped");
+        if (done && !s_log_failed) Sound_Finish(); // ログを残せなかったときは EndRunLog の失敗の音のまま
     }
 }
 

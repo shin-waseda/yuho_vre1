@@ -18,7 +18,12 @@
 
 // 走行時間の見積もり[ms](台形: 距離/v_max + v_max/accel。三角形になる短距離では長めに出る)。
 // v_max は走る前に選ぶ(SPEED_SELECT_STRAIGHT_V_MM_S)。6区画/300mm/s/2000mm/s^2 で約3.75s。
-#define STRAIGHT_TEST_DISTANCE_MM (STRAIGHT_TEST_SECTIONS * SECTION_MM)
+// 走る区画の数。選んだ速さが STRAIGHT_LONG_FROM_V_MM_S 以上なら STRAIGHT_LONG_SECTIONS(長い通路。2026-11-17)
+static int s_sections = STRAIGHT_TEST_SECTIONS;
+#define STRAIGHT_TEST_DISTANCE_MM ((float)s_sections * SECTION_MM)
+static int SectionsFor(float v_max) {
+    return (v_max >= STRAIGHT_LONG_FROM_V_MM_S) ? STRAIGHT_LONG_SECTIONS : STRAIGHT_TEST_SECTIONS;
+}
 static float s_v_max = STRAIGHT_TEST_V_MAX;
 static const float kSpeeds[] = SPEED_SELECT_STRAIGHT_V_MM_S;
 static float s_accel = STRAIGHT_TEST_ACCEL;
@@ -137,8 +142,9 @@ void StraightTest_Run(void) {
                                  STRAIGHT_TEST_V_MAX);
     s_accel = ModeUI_SelectValue("ACCEL", "mm/s2", kAccels, (uint8_t)(sizeof(kAccels) / sizeof(kAccels[0])),
                                  STRAIGHT_TEST_ACCEL);
+    s_sections = SectionsFor(s_v_max);
     printf("STRAIGHT TEST: %d sections (%.0f mm), v_max=%.0f mm/s, accel=%.0f mm/s^2\r\n",
-           STRAIGHT_TEST_SECTIONS, STRAIGHT_TEST_DISTANCE_MM,
+           s_sections, STRAIGHT_TEST_DISTANCE_MM,
            s_v_max, s_accel);
     printf("motion ~%lu ms, timeout %lu ms, log %lu ms\r\n",
            (unsigned long)MotionMs(), (unsigned long)TimeoutMs(),
@@ -263,10 +269,12 @@ void StraightSweep_Run(void) {
     uint8_t a1 = IndexOf(kAccels, na, ModeUI_SelectValue("ACCEL TO", "mm/s2", kAccels, na, kAccels[na - 1u]));
     if (v1 < v0) v1 = v0;
     if (a1 < a0) a1 = a0;
+    // 走る距離は終わりの速さで決め、途中で変えない(行きと帰りで同じ所を往復するため)
+    s_sections = SectionsFor(kSpeeds[v1]);
     printf("STRAIGHT SWEEP: %d sections, speed %.0f..%.0f mm/s, accel %.0f..%.0f mm/s^2, x%u each\r\n",
-           STRAIGHT_TEST_SECTIONS, kSpeeds[v0], kSpeeds[v1], kAccels[a0], kAccels[a1], STRAIGHT_SWEEP_REPEAT);
+           s_sections, kSpeeds[v0], kSpeeds[v1], kAccels[a0], kAccels[a1], STRAIGHT_SWEEP_REPEAT);
     printf("put at an end cell of a corridor (%d cells), facing along it, with the tail on the end wall. hand: START\r\n",
-           STRAIGHT_TEST_SECTIONS + 1);
+           s_sections + 1);
     if (FailSafe_IsTripped()) FailSafe_Halt();
 
     LED_SetShiftPattern(0x0000u);

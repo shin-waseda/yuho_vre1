@@ -76,8 +76,15 @@ typedef enum {
     LOG_EV_SLIP_TURN = 62,    // a:index b:sum c:diff d:before e:adj
     LOG_EV_FAST_LARGE = 64,   // a:large90_v b:large180_v(最短走行の大回りの速さ。LOG_EV_FAST_PARAMS の続き。
                               // 63 は feature/diagonal-run の DIAG_TEST と重なったので 64 にした。fast_0067・0068 は 63 で残っている)
+    // ---- 横の物差しの試験(RUN の TEST の LAT_RULER。北を向いて止まって読んだ 1 点)----
+    LOG_EV_LAT_RULER = 65,    // a:index b:offset c:l d:r e:facing
+    LOG_EV_LAT_RULER2 = 66,   // a:index b:front_fl c:front_fr d:angle_err e:vbat
 } LogEventCode;
 
+// LOG_EV_LAT_RULER: offset は区画の真ん中からの横のずれ[mm](東が +。エンコーダーで寄った量の目標)、l・r は北を向いて
+//   止まって読んだ横のセンサーの平均。facing は直前に向いていた壁(0 なし、1 西、2 東)。
+// LOG_EV_LAT_RULER2: front_fl・front_fr はその壁を向いていたときの前のセンサーの平均(前壁の物差しで横の位置を確かめる用)、
+//   angle_err は読んだときの向きのずれ[deg](ジャイロ − 目標)。
 // LOG_EV_BOOT: 今の起動のリセットの原因(FAULT_RESET_*、interface/fault_diag.h)と、その前に HardFault があったか(1/0)。
 //   走り始めに毎回入れる。fault が 1 なら LOG_EV_FAULT_PC / LOG_EV_FAULT_REG も入れる。
 //   32bit の値は上位(_hi)と下位(_lo)の 16bit に分けて入れる(CSV は有効数字6桁なので)。値 = hi × 65536 + lo。
