@@ -134,6 +134,14 @@ static void FinishRun(bool failsafe) {
     s_dbg.v_d = 0.0f;
     s_dbg.v_d0 = 0.0f;
     s_dbg.dv = 0.0f;
+    s_dbg.omega_ref = 0.0f;
+    s_dbg.omega_dot_ref = 0.0f;
+    s_dbg.f_ff = 0.0f;
+    s_dbg.v_d_ff = 0.0f;
+    s_dbg.v_s_ff = 0.0f;
+    s_dbg.v_d_fb_w = 0.0f;
+    s_dbg.v_d_fb_th = 0.0f;
+    s_dbg.fb_sat = 0.0f;
     s_result.failsafe = failsafe;
     s_result.dist_mm = s_dbg.dist;
     s_result.angle_deg = s_gyro_angle_deg;
@@ -299,6 +307,15 @@ void SysidLoop_Tick(void) {
         s_dbg.v_d0 = s_ff.v_d0;
         s_dbg.dv = s_ff.dv_out;
         s_dbg.v_d_meas = s_ff.v_d_meas;
+        s_dbg.omega_ref = s_ff.omega_ref * (180.0f / 3.14159265f);
+        s_dbg.omega_dot_ref = s_ff.omega_dot_ref * (180.0f / 3.14159265f);
+        s_dbg.theta_ref = s_ff.theta_ref * (180.0f / 3.14159265f);
+        s_dbg.f_ff = s_ff.f_ff;
+        s_dbg.v_d_ff = s_ff.v_d_ff;
+        s_dbg.v_s_ff = s_ff.v_s_ff;
+        s_dbg.v_d_fb_w = s_ff.fb_w;
+        s_dbg.v_d_fb_th = s_ff.fb_th;
+        s_dbg.fb_sat = s_ff.vd_sat ? 1.0f : 0.0f;
     } else {
         s_dbg.step = (float)(s_step.cfg.step_base + s_step.step + 1u);
         s_dbg.seg = (float)s_step.seg;

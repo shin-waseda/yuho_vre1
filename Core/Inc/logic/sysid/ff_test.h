@@ -34,6 +34,20 @@
 //   E1W(b_ω を測る)では turn_seq_n(2 以上)で、ステップを turn_seq_dv[] の順に turn_ms ずつ続ける(V_d = V_d0 + turn_seq_dv[i]。
 //   角度では終わらない)。ログの seg 列は 1 加速、2 一定、3〜(2 + n) ステップの i 番目、3 + n 減速、4 + n 停止、9 中止
 //   (n = 4 なら 3・4・5・6 がステップ、7 減速、8 停止)。seg は V_d を変えた tick と同じ tick で変わる。
+//   E1C(9.38: モデルの逆の FF だけでターン)では turn_ff で、ステップの代わりに ω_ref の台形のターンをする:
+//   ターンの始め(区間2 の終わり)に θ を 0 に入れ直し、旋回の FB を切って毎 tick
+//     ω_ref・ω̇_ref を台形で作る(角加速 → 一定 → 残りの角度が止まるのに要る角度以下になったら角減速。ω_ref が 0 で終わる)、
+//     θ_ref += ω_ref·Δt、κ_ref = ω_ref / v_ref、h = A± asinh(κ_ref / κ₀(v_ref))(A は κ_ref の符号で選ぶ)、
+//     F_ff ← F_ff + min(v_ref·Δt/σ, 1)(h − F_ff)(ターンの始めに 0)、V_d = b_ω ω̇_ref + V_d0 + F_ff
+//   並進は FF に結合の項 k_couple·v_ref·ω_ref² を足す(v_ref[m/s]、ω_ref[rad/s])。並進の PI は続ける。
+//   ターンの後に区間「ターンの後」(FF_SEG_POST)を post_ms: ω_ref = 0 で F_ff の式を続け、V_d = V_d0 + F_ff(FB は切ったまま)。
+//   その後 θ を 0 に入れ直して FB を戻し、減速。ログの seg 列は 1 加速、2 一定、3 ターン、4 ターンの後、5 減速、6 停止、9 中止。
+//   中止に |θ − θ_ref| > abort_track_deg(区間1〜4。θ は区間2 の終わりまで走り始めからの角度)を足す。
+//   E1F(E1C に旋回の FB を足す)では fb_track で、旋回の FB を全区間で
+//     V_d = V_d,ff + sat±vd_max(k_omega·(ω_ref − ω) + k_theta·(θ_ref − θ))
+//   にする(V_d,ff は区間3・4 だけ。区間1・2・5 は 0 で、E1C と同じく V_d0 も入れない)。θ と θ_ref を 0 にするのは区間2 の終わりだけで、
+//   区間5 では入れ直さない(θ_ref はターンの終わりの値のまま)。|θ − θ_ref| の中止も区間5 まで見る。
+//   FB を上限で切った状態が abort_fb_sat_ms 続いたら中止。
 
 #define FF_TURN_SEQ_MAX 4u
 
@@ -44,6 +58,7 @@ typedef enum {
     FF_SEG_DEC = 3,
     FF_SEG_STOP = 4,
     FF_SEG_TURN = 5,  // 旋回のステップ(turn_test だけ)
+    FF_SEG_POST = 6,  // E1C: ターンの後の直進(turn_ff だけ)
     FF_SEG_ABORT = 9,
 } FfSegment;
 
@@ -74,6 +89,22 @@ typedef struct {
     bool cruise_theta_reset; // 一定の区間の始めに FB の θ を 0 に入れ直す(E1K0)
     uint8_t turn_seq_n;    // 2 以上ならステップを turn_seq_dv[] の順に turn_ms ずつ続ける(E1W。0・1 なら turn_dv の1段)
     float turn_seq_dv[FF_TURN_SEQ_MAX]; // 各段の V_d0 からの差[V]
+    bool turn_ff;          // ステップの代わりに、モデルの逆の FF で ω_ref の台形のターンをする(E1C)
+    float turn_sign;       // E1C: +1 左ターン、−1 右ターン
+    float turn_angle_deg;  // E1C: ターンの角度(大きさ)
+    float turn_omega_dps;  // E1C: ω_ref の最大(大きさ)
+    float turn_alpha_dps2; // E1C: 角加速度・角減速度(大きさ)
+    uint32_t post_ms;      // E1C: ターンの後の直進の長さ
+    float b_omega;         // E1C: モデルの b_ω[V·s²/rad]
+    float sigma_mm;        // E1C: モデルの σ[mm]
+    float a_pos, a_neg;    // E1C: モデルの A₊(κ ≥ 0、左)・A₋(κ < 0、右)[V]
+    const float *k0_v;     // E1C: κ₀ の表の速さ[mm/s](小さい順。間は直線でつなぎ、外は端の値)
+    const float *k0;       // E1C: κ₀ の表[1/m]
+    uint8_t k0_n;          // E1C: κ₀ の表の長さ
+    float k_couple;        // E1C: 並進の結合の項の係数[V/((m/s)·(rad/s)²)]
+    float abort_track_deg; // E1C: |θ − θ_ref| がこれを超えたら中止(区間1〜4。E1F は 1〜5。0 なら見ない)
+    bool fb_track;         // E1F: 旋回の FB を ω_ref・θ_ref に追わせ、ターンの間も FF に足す
+    uint32_t abort_fb_sat_ms; // E1F: FB を上限で切った状態がこれだけ続いたら中止(0 なら見ない)
     uint32_t vd_meas_ms;   // 一定の区間の最後のこの間の V_d を平均して v_d_meas にする
     float abort_dist_mm;   // |進んだ距離|(0 なら見ない)
     float abort_v_mm_s;    // |(vl + vr) / 2|(0 なら見ない)
@@ -111,13 +142,23 @@ typedef struct {
     float v_d0;             // E1T: ステップの V_d0(ステップの間だけ。ほかは 0)
     float dv_out;           // E1T: ステップの ±ΔV(ステップの間だけ。ほかは 0)
     uint8_t turn_idx;       // E1W: 今のステップの段(0 始まり)
+    float v_s_ff;           // 並進の FF に結合の項を足した値[V](E1C 以外は v_ff と同じ)
+    uint8_t turn_phase;     // E1C: 0 角加速、1 一定、2 角減速、3 終わった
+    float omega_ref;        // E1C: [rad/s](+ が左。ターンの間だけ。ほかは 0)
+    float omega_dot_ref;    // E1C: [rad/s²]
+    float theta_ref;        // E1C: [rad](ターンの始めが 0。ターンの後もその値のまま)
+    float f_ff;             // E1C: FF の中の F[V]
+    float v_d_ff;           // E1C: FF が出した V_d[V](区間3・4 だけ。ほかは 0)
+    float fb_w, fb_th;      // 旋回の FB の ω の項・θ の項[V](上限で切る前)
+    uint32_t fb_sat_ticks;  // E1F: FB を上限で切った状態が続いている tick 数
     uint32_t front_ticks;   // 前の壁センサーがしきい値を越え続けている tick 数
     float v_left, v_right;
 } FfTest;
 
 void FfTest_Start(FfTest *ft, const FfConfig *cfg, float dt_s);
 
-// ログの seg 列の値(E1T は 1 加速、2 一定、3 ステップ、4 減速、5 停止、9 中止。ほかは FfSegment のまま)
+// ログの seg 列の値(E1T は 1 加速、2 一定、3 ステップ、4 減速、5 停止、9 中止。E1C は 4 ターンの後、5 減速、6 停止。
+// ほかは FfSegment のまま)
 uint8_t FfTest_LogSeg(const FfTest *ft);
 
 // 1 tick 進め、この tick にかける電圧を ft->v_left / v_right に入れる(done の後は 0V のまま)。

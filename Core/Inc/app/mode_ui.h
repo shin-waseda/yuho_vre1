@@ -11,7 +11,7 @@
 //   1 E0(動き出し) / 2 E1(並進のステップ) / 3 E2(超信地旋回のステップ) / 4 E2S(超信地旋回の階段) /
 //   5 E1S(前進のステップを電圧ごとに) / 6 E1V(並進の FF + 旋回の FB で走る検証) / 7 E1B(減速の同定) /
 //   8 E1T(走りながら旋回のステップ) / 9 E1K0(V_d = 0 の曲がり具合) / 10 E1W(V_d の跳びで b_ω) /
-//   11 SD_DUMP / 12 SD_DUMP_ALL
+//   11 E1C(旋回のモデルの FF だけでターン) / 12 E1F(E1C に旋回の FB を足す) / 13 SD_DUMP / 14 SD_DUMP_ALL
 typedef enum {
     MODE_SYSID_E0 = 0,  // 電圧をゆっくり上げて、動き出す電圧を見る(app/sysid_mode)
     MODE_SYSID_E1,      // 並進のステップ(開ループ)
@@ -23,6 +23,8 @@ typedef enum {
     MODE_SYSID_E1T,     // 走りながら左右の差をステップで入れる(旋回の同定)
     MODE_SYSID_E1K0,    // V_d = 0 で走ったときの曲がり具合 κ₀ を測る
     MODE_SYSID_E1W,     // V_d を ±A で切り替え、ω̇ の跳びから b_ω を測る
+    MODE_SYSID_E1C,     // 旋回のモデルの逆の FF だけでターンして、モデルを確かめる
+    MODE_SYSID_E1F,     // E1C のターンと FF に、旋回の FB を全区間で足す
     MODE_SD_DUMP,
     MODE_SD_DUMP_ALL,
     MODE_COUNT

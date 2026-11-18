@@ -40,6 +40,8 @@ typedef enum {
     SYSID_E1T = 7, // 旋回の同定: 走りながら左右の差をステップで入れる(SYSID_E1T_*)
     SYSID_E1K0 = 8, // V_d = 0 で走ったときの曲がり具合 κ₀(SYSID_E1K0_*。走り方は E1T と同じ)
     SYSID_E1W = 9,  // b_ω を V_d の跳びで測る(SYSID_E1W_*。走り方は E1T と同じ)
+    SYSID_E1C = 10, // 旋回のモデルの逆の FF だけでターンする検証(SYSID_E1C_*。走り方は E1T と同じ)
+    SYSID_E1F = 11, // E1C のターンと FF に旋回の FB を全区間で足す(SYSID_E1F_*。ほかは E1C と同じ)
 } SysidTest;
 
 void SysidMode_Run(SysidTest test);

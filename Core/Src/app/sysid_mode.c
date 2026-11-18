@@ -61,6 +61,20 @@ _Static_assert(COUNT_OF(kE1wAccel) == COUNT_OF(kE1wSpeed) && COUNT_OF(kE1wCruise
                    COUNT_OF(kE1wNA) == COUNT_OF(kE1wSpeed),
                "SYSID_E1W_* tables must pair up");
 _Static_assert(COUNT_OF(kE1wSpeed) == 2u * SYSID_E1W_SET_SIZE, "SET 1 and SET 2 take SYSID_E1W_SET_SIZE speeds each");
+// E1C の条件 R1〜R6(step_no − 1 が条件の番号)と、9.37 のモデルの κ₀ の表
+static const float kE1cSpeed[] = SYSID_E1C_SPEED_MM_S;
+static const float kE1cAngle[] = SYSID_E1C_ANGLE_DEG;
+static const float kE1cOmega[] = SYSID_E1C_OMEGA_DPS;
+static const float kE1cAlpha[] = SYSID_E1C_ALPHA_DPS2;
+static const uint8_t kE1cLarge[] = SYSID_E1C_LARGE;
+static const uint8_t kE1cOrder[] = SYSID_E1C_ORDER;
+static const float kE1cK0V[] = SYSID_E1C_KAPPA0_V_MM_S;
+static const float kE1cK0[] = SYSID_E1C_KAPPA0;
+_Static_assert(COUNT_OF(kE1cAngle) == COUNT_OF(kE1cSpeed) && COUNT_OF(kE1cOmega) == COUNT_OF(kE1cSpeed) &&
+                   COUNT_OF(kE1cAlpha) == COUNT_OF(kE1cSpeed) && COUNT_OF(kE1cLarge) == COUNT_OF(kE1cSpeed) &&
+                   COUNT_OF(kE1cOrder) == COUNT_OF(kE1cSpeed),
+               "SYSID_E1C_* tables must pair up");
+_Static_assert(COUNT_OF(kE1cK0V) == COUNT_OF(kE1cK0), "SYSID_E1C_KAPPA0_V_MM_S and SYSID_E1C_KAPPA0 must pair up");
 _Static_assert(COUNT_OF(kE1vVmax) == 6u && COUNT_OF(kE1vAccel) == 6u, "fix the E1V run sets below");
 // E1V で走る台形(表の何本目か。0 始まり)。走る前に選ぶ(1 全部、2 時間がないときに先に取る 1・3・4・6、3 残りの 2・5)
 static const uint8_t kE1vSetAll[] = { 0u, 1u, 2u, 3u, 4u, 5u };
@@ -78,6 +92,7 @@ typedef struct {
 _Static_assert(COUNT_OF(kSelectMv) <= 5u && COUNT_OF(kSelectRepeat) <= 5u, "enlarge SYSID_MAX_RUNS");
 _Static_assert(COUNT_OF(kE1sMv) <= SYSID_MAX_RUNS, "enlarge SYSID_MAX_RUNS");
 _Static_assert(COUNT_OF(kE1wSpeed) * COUNT_OF(kE1wA) * SYSID_E1W_REPEAT <= SYSID_MAX_RUNS, "enlarge SYSID_MAX_RUNS");
+_Static_assert(COUNT_OF(kE1cSpeed) * 2u * SYSID_E1C_REPEAT <= SYSID_MAX_RUNS, "enlarge SYSID_MAX_RUNS");
 static RunPlan s_plan[SYSID_MAX_RUNS];
 
 // 選んだ設定
@@ -94,9 +109,16 @@ static uint8_t s_e1t_dv_count = COUNT_OF(kE1tDvB);
 static bool s_e1k0_vd = false;      // E1K0: V_d を振る組(SET 2)。false なら速さの組(SET 1)
 static uint8_t s_e1w_set = 0u;      // E1W: 0 = SET 1(1.0 → 0.5 → 1.5m/s)、1 = SET 2(0.3 → 0.75 → 2.0m/s)、2 = 速さを1つ
 static uint8_t s_e1w_speed = 0u;    // E1W: SET 3 で選んだ速さ(kE1wSpeed の番号)
+static bool s_e1c_all = true;       // E1C: true = R1〜R6 を全部(SYSID_E1C_ORDER の順)、false = 1つ
+static uint8_t s_e1c_cond = 0u;     // E1C: 1つ選んだときの条件の番号(0 = R1)
 static bool s_lifted = false;       // E2S・E1S: 機体を浮かせて空転させる(ファイル名を e2sl_・e1sl_ にする)
 
 static char s_file_name[24]; // Logger_SetFileName はポインタを持つので static に置く
+
+// E1C・E1F(FF のターン。条件・走り方・SET は同じで、E1F は旋回の FB を全区間で足す)
+static bool IsTurnFf(void) {
+    return s_test == SYSID_E1C || s_test == SYSID_E1F;
+}
 
 static const char *TestName(SysidTest test) {
     switch (test) {
@@ -110,6 +132,8 @@ static const char *TestName(SysidTest test) {
         case SYSID_E1T: return "E1T";
         case SYSID_E1K0: return "E1K0";
         case SYSID_E1W: return "E1W";
+        case SYSID_E1C: return "E1C";
+        case SYSID_E1F: return "E1F";
         default:        return "?";
     }
 }
@@ -132,6 +156,7 @@ static const char *AbortName(uint8_t abort) {
         case STEP_ABORT_BACKWARD: return "ABORT(moved backward)";
         case STEP_ABORT_VOLT:    return "ABORT(|V_L| or |V_R| over battery)";
         case STEP_ABORT_OBSTACLE: return "ABORT(obstacle in front)";
+        case STEP_ABORT_FB_SAT:  return "ABORT(yaw FB limited too long)";
         default:                 return "ABORT(?)";
     }
 }
@@ -160,6 +185,17 @@ static uint8_t BuildPlan(float from_mv, float to_mv, uint8_t repeat) {
                     s_plan[n++] = (RunPlan){ kE1wSpeed[s], +1.0f, (uint16_t)(s * COUNT_OF(kE1wA) + a + 1u) };
                 }
             }
+        }
+        return n;
+    }
+    if (IsTurnFf()) { // 条件ごとに 左 → 右 を REPEAT 回(条件は step_no で表を引く。sign +1 左、−1 右)
+        for (uint8_t k = 0; k < COUNT_OF(kE1cOrder); k++) {
+            uint8_t c = s_e1c_all ? kE1cOrder[k] : s_e1c_cond;
+            for (uint8_t r = 0; r < SYSID_E1C_REPEAT; r++) {
+                s_plan[n++] = (RunPlan){ kE1cSpeed[c], +1.0f, (uint16_t)(c + 1u) };
+                s_plan[n++] = (RunPlan){ kE1cSpeed[c], -1.0f, (uint16_t)(c + 1u) };
+            }
+            if (!s_e1c_all) break;
         }
         return n;
     }
@@ -299,6 +335,15 @@ static uint8_t SelectSettings(void) {
             float v = ModeUI_SelectValue("SPEED", "mm/s", kSpeeds, COUNT_OF(kSpeeds), kSpeeds[0]);
             s_e1w_speed = IndexOf(kE1wSpeed, COUNT_OF(kE1wSpeed), v);
         }
+    } else if (IsTurnFf()) {
+        s_rotate = false;
+        static const float kSets[] = { 1.0f, 2.0f };
+        s_e1c_all = (ModeUI_SelectValue("SET(1 all R1-R2-R5-R6-R3-R4, 2 one)", "", kSets, COUNT_OF(kSets), 1.0f) == 1.0f);
+        if (!s_e1c_all) {
+            static const float kConds[] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
+            _Static_assert(COUNT_OF(kConds) == COUNT_OF(kE1cSpeed), "kConds must list R1-R6");
+            s_e1c_cond = (uint8_t)(ModeUI_SelectValue("R", "", kConds, COUNT_OF(kConds), 1.0f) - 1.0f);
+        }
     } else if (s_test == SYSID_E1B) {
         s_rotate = false; // 選ぶものはない(表の順に進む)
     } else if (s_test == SYSID_E1V) {
@@ -337,7 +382,7 @@ static uint8_t SelectSettings(void) {
     }
     uint8_t repeat = 1u; // E1S・E1V・E1B は条件ごとに1本(もう一度取るときは、クリックで戻るか2周目で)
     if (s_test != SYSID_E1S && s_test != SYSID_E1V && s_test != SYSID_E1B && s_test != SYSID_E1T &&
-        s_test != SYSID_E1K0 && s_test != SYSID_E1W) {
+        s_test != SYSID_E1K0 && s_test != SYSID_E1W && !IsTurnFf()) {
         repeat = (uint8_t)ModeUI_SelectValueFrom("REPEAT", "times", kSelectRepeat, COUNT_OF(kSelectRepeat),
                                                  SYSID_SELECT_REPEAT_START, 1.0f);
     }
@@ -399,6 +444,33 @@ static uint8_t SelectSettings(void) {
         printf("  abort: dist %.0f mm / |angle| > %.0f deg / |omega| > %.0f dps / |V_L| or |V_R| > vbat / front IR > %.0f for %lu ms\r\n",
                SYSID_E1W_ABORT_DIST_MM, SYSID_E1W_ABORT_ANGLE_DEG, SYSID_E1W_ABORT_OMEGA_DPS, SYSID_E1T_OBSTACLE_TH,
                (unsigned long)SYSID_E1T_OBSTACLE_MS);
+    } else if (IsTurnFf()) {
+        bool e1f = (s_test == SYSID_E1F);
+        printf("%s: accel %.0f mm/s2 -> straight %lu ms (yaw FB, V_d0 = mean V_d of the last %lu ms, theta reset)"
+               " -> %s turn (seg 3) -> straight %lu ms, V_d = V_d0 + F%s (seg 4) -> stop (seg 5, %s,"
+               " decel %.0f mm/s2), %u runs (L, R x%u per condition):\r\n",
+               TestName(s_test), SYSID_E1C_ACCEL_MM_S2, (unsigned long)SYSID_E1C_CRUISE_MS, (unsigned long)SYSID_E1C_MEAS_MS,
+               e1f ? "FF + yaw FB" : "FF-only", (unsigned long)SYSID_E1C_POST_MS, e1f ? " + FB" : "",
+               e1f ? "yaw FB keeps theta_ref" : "theta reset, yaw FB", SYSID_E1T_DECEL_MM_S2, (unsigned)n,
+               (unsigned)SYSID_E1C_REPEAT);
+        for (uint8_t k = 0; k < n; k += (uint8_t)(2u * SYSID_E1C_REPEAT)) { // 条件ごとに1行
+            uint8_t c = (uint8_t)(s_plan[k].step_no - 1u);
+            printf("  R%u: v %.0f mm/s, %s %.0f deg, w %.0f dps, dw %.0f dps2\r\n", (unsigned)(c + 1u), kE1cSpeed[c],
+                   kE1cLarge[c] ? "large" : "small", kE1cAngle[c], kE1cOmega[c], kE1cAlpha[c]);
+        }
+        printf("  model: b_w %.2fe-3, sigma %.2f mm, A+ %.3f / A- %.3f V, k_couple %.4f; speed PI as E1T (|I| <= %.2f V)\r\n",
+               SYSID_E1C_B_OMEGA * 1000.0f, SYSID_E1C_SIGMA_MM, e1f ? SYSID_E1F_A_POS : SYSID_E1C_A_POS, SYSID_E1C_A_NEG,
+               SYSID_E1C_K_COUPLE, e1f ? SYSID_E1F_I_MAX : SYSID_E1T_I_MAX);
+        if (e1f) {
+            printf("  yaw FB (seg 1-5): V_d = V_d,ff + sat(+-%.1f V)(%.3f (w_ref - w) + %.2f (th_ref - th))\r\n",
+                   SYSID_E1F_FB_MAX, SYSID_E1F_K_OMEGA, SYSID_E1F_K_THETA);
+        }
+        printf("  abort: dist %.0f mm / |theta - theta_ref| > %.0f deg / |omega| > %.0f dps / |V_L| or |V_R| > vbat /"
+               " front IR > %.0f for %lu ms",
+               SYSID_E1C_ABORT_DIST_MM, SYSID_E1C_ABORT_TRACK_DEG, SYSID_E1T_ABORT_OMEGA_DPS, SYSID_E1T_OBSTACLE_TH,
+               (unsigned long)SYSID_E1T_OBSTACLE_MS);
+        if (e1f) printf(" / yaw FB limited for %lu ms", (unsigned long)SYSID_E1F_ABORT_FB_SAT_MS);
+        printf("\r\n");
     } else if (s_test == SYSID_E1B) {
         printf("%s: accel %.0f mm/s2 (V_s = %.3f v + %.3f + %.3f a) -> cruise %lu ms -> brake V until v < %.0f mm/s -> 0V, %u runs:",
                TestName(s_test), SYSID_E1B_ACCEL_MM_S2, SYSID_E1V_KV, SYSID_E1V_V0, SYSID_E1V_KA,
@@ -474,7 +546,8 @@ static void SetupLogger(const char *file) {
     Logger_AddField("acc_z", &d->acc_z);
     Logger_AddField("dist", &d->dist);
     Logger_AddField("angle", &d->angle);
-    if (s_test == SYSID_E1T || s_test == SYSID_E1K0 || s_test == SYSID_E1W) { // 仕様の列に v_ref を足した 25 列(100B/行)
+    if (s_test == SYSID_E1T || s_test == SYSID_E1K0 || s_test == SYSID_E1W ||
+        IsTurnFf()) { // 仕様の列に v_ref を足した 25 列(100B/行)
         Logger_AddField("v_ref", &d->v_ref);
         Logger_AddField("v_ff", &d->v_ff);
         Logger_AddField("v_p", &d->v_p);
@@ -483,6 +556,19 @@ static void SetupLogger(const char *file) {
         Logger_AddField("v_d0", &d->v_d0);
         Logger_AddField("dv", &d->dv);
         Logger_AddField("v_d_meas", &d->v_d_meas);
+    }
+    if (IsTurnFf()) { // 9.38 で足す列(31 列、124B/行)
+        Logger_AddField("omega_ref", &d->omega_ref);
+        Logger_AddField("omega_dot_ref", &d->omega_dot_ref);
+        Logger_AddField("theta_ref", &d->theta_ref);
+        Logger_AddField("F_ff", &d->f_ff);
+        Logger_AddField("v_d_ff", &d->v_d_ff);
+        Logger_AddField("v_s_ff", &d->v_s_ff);
+    }
+    if (s_test == SYSID_E1F) { // 旋回の FB の項(34 列、136B/行)
+        Logger_AddField("v_d_fb_w", &d->v_d_fb_w);
+        Logger_AddField("v_d_fb_th", &d->v_d_fb_th);
+        Logger_AddField("fb_sat", &d->fb_sat);
     }
     if (ff) { // 旋回のフィードバック
         Logger_AddField("v_s", &d->v_s);
@@ -516,9 +602,12 @@ static void PrintResult(const SysidResult *r, bool saved, uint32_t dropped) {
                                     (unsigned long)kE1tSetMeasMs[s_e1t_set], r->v_d_meas);
     if (s_test == SYSID_E1K0) printf("  v_d_meas (mean V_d of seg 2) %+.3f V\r\n", r->v_d_meas);
     if (s_test == SYSID_E1W) printf("  v_d_meas (mean V_d, last part of seg 2) %+.3f V\r\n", r->v_d_meas);
+    if (IsTurnFf()) printf("  v_d_meas (V_d0 = mean V_d, last %lu ms of seg 2) %+.3f V\r\n",
+                           (unsigned long)SYSID_E1C_MEAS_MS, r->v_d_meas);
     if (s_test == SYSID_E1V || s_test == SYSID_E1B || s_test == SYSID_E1T || s_test == SYSID_E1K0 ||
-        s_test == SYSID_E1W) {
-        printf("  V_d limited (|V_d| > %.2f V) %lu ticks", SYSID_E1V_VD_MAX, (unsigned long)r->vd_sat_ticks);
+        s_test == SYSID_E1W || IsTurnFf()) {
+        printf("  V_d limited (|V_d| > %.2f V) %lu ticks", (s_test == SYSID_E1F) ? SYSID_E1F_FB_MAX : SYSID_E1V_VD_MAX,
+               (unsigned long)r->vd_sat_ticks);
         if (r->vd_sat_ticks > 0u) printf(", first at %.3f s (time_s)", (float)r->vd_sat_first_tick * CONTROL_DT_S);
         printf("\r\n");
     }
@@ -585,6 +674,10 @@ static bool RunOne(const RunPlan *p, bool last) {
     } else if (s_test == SYSID_E1W) { // 例: e1w_1000mms_a020(速さ[mm/s]、A の 0.01V)
         float amp = kE1wA[(p->step_no - 1u) % COUNT_OF(kE1wA)];
         snprintf(s_file_name, sizeof(s_file_name), "e1w_%dmms_a%03d", (int)lroundf(p->volt), (int)lroundf(amp * 100.0f));
+    } else if (IsTurnFf()) { // 例: e1c_700mms_s90_L・e1f_700mms_s90_L(速さ[mm/s]、s 小回り・l 大回りと角度、L 左・R 右)
+        uint8_t c = (uint8_t)(p->step_no - 1u);
+        snprintf(s_file_name, sizeof(s_file_name), "%s_%dmms_%c%d_%c", (s_test == SYSID_E1F) ? "e1f" : "e1c",
+                 (int)lroundf(p->volt), kE1cLarge[c] ? 'l' : 's', (int)lroundf(kE1cAngle[c]), (p->sign > 0.0f) ? 'L' : 'R');
     } else if (s_test == SYSID_E1K0 && s_e1k0_vd) { // 例: e1k0_1000mms_m005(V_d の向き p = +・m = −、|V_d| の 0.01V)
         float vd = kE1k0Vd[p->step_no - 1u];
         snprintf(s_file_name, sizeof(s_file_name), "e1k0_%dmms_%c%03d", (int)lroundf(p->volt), (vd < 0.0f) ? 'm' : 'p',
@@ -651,12 +744,13 @@ static bool RunOne(const RunPlan *p, bool last) {
         .rest_after = e1s,             // 止まった後の休み(区間4)まで記録する
     };
     if (s_test == SYSID_E1V || s_test == SYSID_E1B || s_test == SYSID_E1T || s_test == SYSID_E1K0 ||
-        s_test == SYSID_E1W) {
+        s_test == SYSID_E1W || IsTurnFf()) {
         bool e1b = (s_test == SYSID_E1B);
         bool e1k0 = (s_test == SYSID_E1K0);
         bool e1w = (s_test == SYSID_E1W);
-        // E1K0・E1W も E1T と同じ走り方(E1K0 の区間3 は V_d = 0。E1W は下で段の並びに書き換える)
-        bool e1t = (s_test == SYSID_E1T) || e1k0 || e1w;
+        bool e1c = IsTurnFf(); // E1F も E1C と同じ FF のターン(下で旋回の FB を足す)
+        // E1K0・E1W・E1C も E1T と同じ走り方(E1K0 の区間3 は V_d = 0。E1W は下で段の並びに、E1C は FF のターンに書き換える)
+        bool e1t = (s_test == SYSID_E1T) || e1k0 || e1w || e1c;
         float accel = e1b ? SYSID_E1B_ACCEL_MM_S2 : (e1t ? kE1tSetAccel[s_e1t_set] : kE1vAccel[p->step_no - 1u]);
         uint32_t cruise_ms = e1b ? SYSID_E1B_CRUISE_MS : (e1t ? kE1tSetStraightMs[s_e1t_set] : SYSID_E1V_CRUISE_MS);
         // E1K0: 区間3 の V_d(速さの組は 0、V_d を振る組は表の値)と長さ
@@ -724,6 +818,41 @@ static bool RunOne(const RunPlan *p, bool last) {
             ff.abort_dist_mm = SYSID_E1W_ABORT_DIST_MM;
             ff.abort_angle_deg = SYSID_E1W_ABORT_ANGLE_DEG;
             ff.abort_omega_dps = SYSID_E1W_ABORT_OMEGA_DPS;
+        }
+        if (e1c) { // 区間2 の後に、9.37 のモデルの逆の FF だけで ω_ref の台形のターン → ターンの後の直進
+            uint8_t c = (uint8_t)(p->step_no - 1u);
+            ff.accel_mm_s2 = SYSID_E1C_ACCEL_MM_S2;
+            ff.cruise_ms = SYSID_E1C_CRUISE_MS;
+            ff.vd_meas_ms = SYSID_E1C_MEAS_MS;
+            ff.turn_dv = 0.0f;
+            ff.turn_ms = 0u;   // 時間・角度では終わらない(ω_ref が 0 に戻ったら終わる)
+            ff.turn_deg = 0.0f;
+            ff.turn_ff = true;
+            ff.turn_sign = p->sign;
+            ff.turn_angle_deg = kE1cAngle[c];
+            ff.turn_omega_dps = kE1cOmega[c];
+            ff.turn_alpha_dps2 = kE1cAlpha[c];
+            ff.post_ms = SYSID_E1C_POST_MS;
+            ff.b_omega = SYSID_E1C_B_OMEGA;
+            ff.sigma_mm = SYSID_E1C_SIGMA_MM;
+            ff.a_pos = SYSID_E1C_A_POS;
+            ff.a_neg = SYSID_E1C_A_NEG;
+            ff.k0_v = kE1cK0V;
+            ff.k0 = kE1cK0;
+            ff.k0_n = COUNT_OF(kE1cK0);
+            ff.k_couple = SYSID_E1C_K_COUPLE;
+            ff.abort_dist_mm = SYSID_E1C_ABORT_DIST_MM;
+            ff.abort_angle_deg = 0.0f; // 走り始めからの角度は見ず、|θ − θ_ref| を見る
+            ff.abort_track_deg = SYSID_E1C_ABORT_TRACK_DEG;
+        }
+        if (s_test == SYSID_E1F) { // 旋回の FB を全区間で(ターンの間は FF に足す)。θ・θ_ref は区間2 の終わりだけ 0 に
+            ff.a_pos = SYSID_E1F_A_POS;
+            ff.k_theta = SYSID_E1F_K_THETA;
+            ff.k_omega = SYSID_E1F_K_OMEGA;
+            ff.vd_max = SYSID_E1F_FB_MAX;
+            ff.i_max = SYSID_E1F_I_MAX;
+            ff.fb_track = true;
+            ff.abort_fb_sat_ms = SYSID_E1F_ABORT_FB_SAT_MS;
         }
         SysidLoop_StartFfRun(&ff); // 記録も同じ tick から始まる
     } else {
@@ -805,6 +934,15 @@ void SysidMode_Run(SysidTest test) {
             printf("next %u/%u: %s v %.0f mm/s, A %.2f V, start at the CENTER (hand: RUN, click: back one)\r\n",
                    (unsigned)(i + 1u), (unsigned)n, TestName(s_test), p->volt,
                    kE1wA[(p->step_no - 1u) % COUNT_OF(kE1wA)]);
+        } else if (IsTurnFf()) {
+            // ターンする側に 0.3m 以上あける。毎回タイヤを掃除する
+            uint8_t c = (uint8_t)(p->step_no - 1u);
+            bool left = (p->sign > 0.0f);
+            printf("next %u/%u: %s R%u v %.0f mm/s, %s %s %.0f deg (w %.0f dps), keep >= 0.3 m free on the %s, clean the tires"
+                   " (hand: RUN, click: back one)\r\n",
+                   (unsigned)(i + 1u), (unsigned)n, TestName(s_test), (unsigned)(c + 1u), p->volt,
+                   kE1cLarge[c] ? "large" : "small", left ? "LEFT" : "RIGHT", kE1cAngle[c], kE1cOmega[c],
+                   left ? "LEFT" : "RIGHT");
         } else if (s_test == SYSID_E1K0 && s_e1k0_vd) {
             // 右に曲がる本もあるので真ん中から出る
             printf("next %u/%u: %s v %.0f mm/s, V_d %+.2f V for %lu ms, start at the CENTER (hand: RUN, click: back one)\r\n",

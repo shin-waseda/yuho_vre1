@@ -77,8 +77,17 @@ typedef struct {
     float v_d;      // FF の検証の旋回のフィードバックの出力 V_d[V](+ で左に曲がる向き)
     float theta;    // FF の検証のフィードバックに使った角度 θ[rad](+ が左)
     float v_d0;     // E1T: ステップの V_d0[V](ステップの間だけ。ほかは 0)
-    float dv;       // E1T: ステップの ±ΔV[V](ステップの間だけ。ほかは 0)
+    float dv;       // E1T: ステップの ±ΔV[V](ステップの間だけ。ほかは 0)。E1C: b_ω ω̇_ref + F_ff(区間3・4)
     float v_d_meas; // E1T: 一定の区間の最後の V_d の平均[V](区間2 の後に決まる。それまで 0)
+    float omega_ref;     // E1C: [dps](+ が左。ターンの間だけ。ほかは 0)
+    float omega_dot_ref; // E1C: [dps/s]
+    float theta_ref;     // E1C: [deg](ターンの始めが 0。ターンの後もその値のまま)
+    float f_ff;          // E1C: FF の中の F[V]
+    float v_d_ff;        // E1C: FF が出した V_d[V](区間3・4 だけ。ほかは 0)
+    float v_s_ff;        // E1C: 並進の FF に結合の項を足した値[V](v_ff との差が結合の項)
+    float v_d_fb_w;      // 旋回の FB の ω の項[V](上限で切る前)
+    float v_d_fb_th;     // 旋回の FB の θ の項[V](上限で切る前)
+    float fb_sat;        // 旋回の FB を上限で切ったら 1
     float pwm_l, pwm_r; // 実際に出した PWM の比較値(-PWM_MAX〜PWM_MAX)
     float vbat;     // 電池の電圧(フィルタ後、duty の計算に使った値)[V]
     float vl, vr;   // 車輪の速度[mm/s](前進が正)

@@ -52,6 +52,7 @@ typedef enum {
     STEP_ABORT_BACKWARD = 8, // ブレーキの試験(E1B)で並進の速度 < −abort_back_mm_s(後ろに戻った)
     STEP_ABORT_VOLT = 9,     // FF の試験で |V_L| か |V_R| が電池の電圧を越えた(E1T)
     STEP_ABORT_OBSTACLE = 10, // FF の試験で前の壁センサーが障害物を見た(E1T)
+    STEP_ABORT_FB_SAT = 11,   // FF の試験で旋回の FB が上限で切られた状態が abort_fb_sat_ms 続いた(E1F)
 } StepAbort;
 
 typedef struct {

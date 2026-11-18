@@ -294,4 +294,50 @@
 #define SYSID_E1W_ABORT_ANGLE_DEG 45.0f
 #define SYSID_E1W_ABORT_OMEGA_DPS 573.0f // 10rad/s
 
+// 9.37 の旋回のモデルを、モデルの逆の FF だけのターンで確かめる(E1C。9.38)。走り方は E1T と同じ状態機械(ff_test の turn_ff):
+// 1 加速 ACCEL(並進 PI + 旋回 FB) → 2 直進 CRUISE_MS(FB あり。最後の MEAS_MS の V_d の平均を V_d0 に。終わりで θ を 0 に)
+// → 3 ターン(旋回 FB を切り、FF だけ。並進 PI は残す) → 4 ターンの後の直進 POST_MS(V_d = V_d0 + F_ff。FB は切ったまま)
+// → 5 θ を 0 に入れ直して FB を戻し、SYSID_E1T_DECEL_MM_S2 で止まる → 6 0V で止まるまで。9 中止。
+// ターンの FF: ω_ref は台形(角加速 → 一定 → 角減速。1 ms 刻みで、残りの角度で角減速に入る)、
+//   F_ff ← F_ff + min(v·Δt/σ, 1)(A± asinh(κ_ref / κ₀(v)) − F_ff)、V_d = b_ω ω̇_ref + V_d0 + F_ff、
+//   V_s = KV·v + V0 + K_COUPLE·v·ω_ref² + 並進 PI(v[m/s]、ω[rad/s])。
+// 条件は下の表の R1〜R6(大会 2026 東北 832f354 のターンの v と ω の形だけ。小回りは 500mm/s・450dps・8000dps² から
+// ω ∝ v、ω̇ ∝ v²)。走る前に SET を選ぶ: 1 = 全部(ORDER の順)、2 = 1つ選ぶ。条件ごとに 左 → 右 を REPEAT 回。
+// 迷路の壁は使わない。ターンする側に 0.3m 以上あける。ファイル名 e1c_<v>mms_<s90|l90|l180>_<L|R>_NNNN(例 e1c_700mms_s90_L)。
+// 中止(区間1〜5): 距離、|θ − θ_ref| > ABORT_TRACK_DEG(区間1〜4)、|ω| > SYSID_E1T_ABORT_OMEGA_DPS、障害物、
+// |V_L|・|V_R| > 電池(E1T と同じく残した)。
+#define SYSID_E1C_SPEED_MM_S     { 300.0f, 500.0f, 600.0f, 700.0f, 600.0f, 500.0f }    // R1〜R6
+#define SYSID_E1C_ANGLE_DEG      { 90.0f, 90.0f, 90.0f, 90.0f, 90.0f, 180.0f }
+#define SYSID_E1C_OMEGA_DPS      { 270.0f, 450.0f, 540.0f, 630.0f, 230.0f, 323.0f }
+#define SYSID_E1C_ALPHA_DPS2     { 2880.0f, 8000.0f, 11520.0f, 15680.0f, 3000.0f, 3000.0f }
+#define SYSID_E1C_LARGE          { 0u, 0u, 0u, 0u, 1u, 1u } // 0 小回り(ファイル名 s)、1 大回り(l)
+#define SYSID_E1C_ORDER          { 0u, 1u, 4u, 5u, 2u, 3u } // SET 1 の順(R1 → R2 → R5 → R6 → R3 → R4。電圧の小さい方から)
+#define SYSID_E1C_REPEAT         2u
+#define SYSID_E1C_ACCEL_MM_S2    3000.0f
+#define SYSID_E1C_CRUISE_MS      200u
+#define SYSID_E1C_MEAS_MS        100u
+#define SYSID_E1C_POST_MS        100u
+// 9.37 のモデル(145 本で当てはめ。κ₀ は速さごと)
+#define SYSID_E1C_B_OMEGA        9.20e-3f // [V·s²/rad]
+#define SYSID_E1C_SIGMA_MM       3.02f
+#define SYSID_E1C_A_POS          0.296f   // [V](左、κ ≥ 0)
+#define SYSID_E1C_A_NEG          0.216f   // [V](右、κ < 0)
+#define SYSID_E1C_KAPPA0_V_MM_S  { 300.0f, 500.0f, 750.0f, 1000.0f, 1500.0f }
+#define SYSID_E1C_KAPPA0         { 1.03f, 1.14f, 0.80f, 0.89f, 0.92f } // [1/m]
+#define SYSID_E1C_K_COUPLE       0.0041f  // [V/((m/s)·(rad/s)²)](9.24 の結合の項)
+#define SYSID_E1C_ABORT_DIST_MM  1000.0f
+#define SYSID_E1C_ABORT_TRACK_DEG 30.0f
+
+// E1C のターンと FF に、旋回の FB を全区間で足す(E1F。ωn 30rad/s、ζ 0.7、積分なし)。条件・走り方・SET・中止は E1C と同じで、違うのは:
+//   V_d = V_d,ff + sat±FB_MAX(K_OMEGA·(ω_ref − ω) + K_THETA·(θ_ref − θ))(区間1〜5。V_d,ff は区間3・4 だけ。ω はフィルタなしのジャイロ)。
+//   θ と θ_ref を 0 にするのは区間2 の終わりだけ(区間5 では入れ直さず、ターンの終わりの θ_ref を追う。|θ − θ_ref| の中止も区間5 まで)。
+//   A₊ は yuho_model_v2 の値。並進の積分の上限は I_MAX。FB を上限で切った状態が ABORT_FB_SAT_MS 続いたら中止。
+// ファイル名 e1f_<v>mms_<s90|l90|l180>_<L|R>_NNNN(例 e1f_700mms_s90_L)。
+#define SYSID_E1F_A_POS          0.32f    // [V](左。E1C は 0.296)
+#define SYSID_E1F_K_THETA        8.28f    // [V/rad](0.1445V/deg)
+#define SYSID_E1F_K_OMEGA        0.386f   // [V/(rad/s)](6.74e-3V/dps)
+#define SYSID_E1F_FB_MAX         1.5f     // FB の項の上限[V]
+#define SYSID_E1F_I_MAX          0.5f     // 並進の積分の上限[V](E1C は SYSID_E1T_I_MAX)
+#define SYSID_E1F_ABORT_FB_SAT_MS 50u
+
 #endif

@@ -23,6 +23,8 @@ static const char *ModeName(RobotMode mode) {
         case MODE_SYSID_E1T:   return "E1T(turn step)";
         case MODE_SYSID_E1K0:  return "E1K0(curve at V_d = 0)";
         case MODE_SYSID_E1W:   return "E1W(V_d jumps, b_w)";
+        case MODE_SYSID_E1C:   return "E1C(FF-only turn)";
+        case MODE_SYSID_E1F:   return "E1F(FF + yaw FB turn)";
         case MODE_SD_DUMP:     return "SD_DUMP";
         case MODE_SD_DUMP_ALL: return "SD_DUMP_ALL";
         default:               return "UNKNOWN";
@@ -32,7 +34,8 @@ static const char *ModeName(RobotMode mode) {
 // モードの一覧。並び順がエンコーダで送る順になる。
 static const RobotMode s_modes[] = {
     MODE_SYSID_E0, MODE_SYSID_E1, MODE_SYSID_E2, MODE_SYSID_E2S, MODE_SYSID_E1S, MODE_SYSID_E1V, MODE_SYSID_E1B,
-    MODE_SYSID_E1T, MODE_SYSID_E1K0, MODE_SYSID_E1W, MODE_SD_DUMP, MODE_SD_DUMP_ALL,
+    MODE_SYSID_E1T, MODE_SYSID_E1K0, MODE_SYSID_E1W, MODE_SYSID_E1C, MODE_SYSID_E1F, MODE_SD_DUMP,
+    MODE_SD_DUMP_ALL,
 };
 
 #define MENU_COUNT_OF(a) ((uint8_t)(sizeof(a) / sizeof((a)[0])))
@@ -306,6 +309,12 @@ void ModeUI_Run(RobotMode mode) {
             break;
         case MODE_SYSID_E1W:
             SysidMode_Run(SYSID_E1W);
+            break;
+        case MODE_SYSID_E1C:
+            SysidMode_Run(SYSID_E1C);
+            break;
+        case MODE_SYSID_E1F:
+            SysidMode_Run(SYSID_E1F);
             break;
         case MODE_SD_DUMP:
             SdDump_Run();
