@@ -33,7 +33,7 @@ MENU
 │   ├─ 10 SLALOM_SWEEP ─── FROM(s90) → TO(s90)
 │   ├─ 11 STRAIGHT_SWEEP ─ SPEED FROM → SPEED TO → ACCEL FROM → ACCEL TO
 │   ├─ 12 SENSOR_SPIN ──── なし(真ん中に置いて手かざし)
-│   └─ 13 LED_ALL_ON ───── なし(すべての LED を点けたまま)
+│   └─ 13 CAMERA_LED ───── なし(直結の LED_1〜6 だけ点けたまま)
 ├─ 3 SD
 │   ├─ 1 SD_DUMP ───── まだ送っていないログを UART へ送る
 │   ├─ 2 SD_DUMP_ALL ─ 全部のログを UART へ送る

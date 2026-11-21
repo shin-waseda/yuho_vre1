@@ -47,6 +47,8 @@ static float s_est_x = 0.0f, s_est_y = 0.0f;
 static float s_est_beta = 0.0f; // 推定の位置に入れるスリップアングル β[rad](SLIP_ESTIMATION_ENABLE のとき)
 // 目標の向きに足すスリップの分(SLIP_FF_ENABLE のとき)。β[rad] と dβ/dt・d²β/dt²(角速度・角加速度の FF に足す)
 static float s_ff_beta = 0.0f, s_ff_beta_rate = 0.0f, s_ff_beta_acc = 0.0f;
+// false の間は推定・目標の向きのスリップの分を 0 にする(K を 0 として扱う。App_SetSlipModel)。メインが書き、ISRが読む
+static volatile bool s_slip_model_on = true;
 static float s_lat_ofs_deg = 0.0f; // 目標の向きに足すずらし Δθ[deg]
 // 目標の位置に対する推定の位置のずれ[mm](目標の向きの前後: + なら目標が前、横: + なら機体が左)。ISRが書き、メインが読む
 static volatile float s_along_err_mm = 0.0f;
@@ -285,6 +287,10 @@ void App_SetWallControl(bool en) {
 
 void App_SetLateralControl(bool en) {
     s_lat_ctrl_on = en;
+}
+
+void App_SetSlipModel(bool en) {
+    s_slip_model_on = en;
 }
 
 void App_SetOutputPaused(bool paused) {
@@ -610,7 +616,8 @@ void App_ControlTick(void) {
         // 進む向き = 機体の向き − β。dβ/dt = (K v[m/s] ω[rad/s] − β) / C を、測った速さとジャイロで進める
         // (logic/control/slalom.c の SlipTick と同じ式。曲がった外へ流れる分を推定に入れ、FB で打ち消す)
         {
-            float target = SLALOM_SLIP_K * (v_e * MM_TO_M) * (s_gyro_z_dps * DEG_TO_RAD);
+            float k = s_slip_model_on ? SLALOM_SLIP_K : 0.0f;
+            float target = k * (v_e * MM_TO_M) * (s_gyro_z_dps * DEG_TO_RAD);
             if (SLALOM_SLIP_C_S <= 0.0f) {
                 s_est_beta = target;
             } else {
@@ -622,7 +629,7 @@ void App_ControlTick(void) {
         // 目標の向きに足す β。推定の β は測った角速度 ω_道 + dβ/dt で進むので、それと合うように
         // dβ/dt = (K v ω_道 − β) / (C − K v) で進める(v, ω_道 は目標の値)。C − K v が小さすぎるときは遅れなし
         {
-            float kv = SLALOM_SLIP_K * (s_target_mm_s * MM_TO_M);
+            float kv = (s_slip_model_on ? SLALOM_SLIP_K : 0.0f) * (s_target_mm_s * MM_TO_M);
             float target = kv * (s_target_omega_dps * DEG_TO_RAD);
             float tau = SLALOM_SLIP_C_S - kv;
             float beta = (tau > CONTROL_DT_S)

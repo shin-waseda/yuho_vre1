@@ -50,7 +50,7 @@ static const char *ModeName(RobotMode mode) {
         case MODE_FAST_BANDS:    return "FAST_BANDS";
         case MODE_RUN_TEST:      return "TEST";
         case MODE_AUTONOMOUS:    return "AUTO";
-        case MODE_LED_ALL_ON:    return "LED_ALL_ON";
+        case MODE_CAMERA_LED:    return "CAMERA_LED";
         case MODE_GYRO_SCALE_TEST: return "GYRO_SCALE";
         case MODE_FRONT_WALL_TEST: return "FRONT_WALL";
         case MODE_SLIP_TURN_TEST: return "SLIP";
@@ -64,7 +64,7 @@ static const char *ModeName(RobotMode mode) {
 // 一番上の階層の各項目が、その中のモードの一覧を持つ。並び順がエンコーダで送る順になる。
 static const RobotMode s_test_modes[] = {
     MODE_SENSOR, MODE_SENSOR_LOG, MODE_VEL_PID, MODE_STRAIGHT_TEST, MODE_PIVOT_TEST, MODE_SLALOM_TEST, MODE_LED_TEST, MODE_PARTY,
-    MODE_LONG_LOG, MODE_SLALOM_SWEEP, MODE_STRAIGHT_SWEEP, MODE_SENSOR_SPIN, MODE_LED_ALL_ON, MODE_GYRO_SCALE_TEST,
+    MODE_LONG_LOG, MODE_SLALOM_SWEEP, MODE_STRAIGHT_SWEEP, MODE_SENSOR_SPIN, MODE_CAMERA_LED, MODE_GYRO_SCALE_TEST,
     MODE_FRONT_WALL_TEST, // シフトレジスタの LED で出せる上限(15)。SLIP は RUN の TEST に入れた
 };
 static const RobotMode s_run_modes[] = {
@@ -417,8 +417,8 @@ void ModeUI_Run(RobotMode mode) {
         case MODE_LED_TEST:
             LEDTest_Run();
             break;
-        case MODE_LED_ALL_ON:
-            LEDAllOn_Run();
+        case MODE_CAMERA_LED:
+            CameraLED_Run();
             break;
         case MODE_STRAIGHT_TEST:
             StraightTest_Run();

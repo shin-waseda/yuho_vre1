@@ -27,10 +27,10 @@ void LEDTest_Run(void) {
     }
 }
 
-void LEDAllOn_Run(void) {
-    printf("LED ALL ON\r\n");
+void CameraLED_Run(void) {
+    printf("CAMERA LED: direct LED_1-6 on, shift LEDs off\r\n");
 
-    LED_SetShiftPattern((uint16_t)((1u << LED_SHIFT_COUNT) - 1u));
+    LED_SetShiftPattern(0x0000u);
     LED_SetDirectPattern(LED_DIRECT_ALL);
 
     while (1) {

@@ -20,6 +20,9 @@
 // ---- 走り ----
 #define SLIP_RUNS_EACH   3       // 1 つの速さで T1・T2 を何本ずつ走るか(交互に走る)
 #define SLIP_ACCEL       3000.0f // 加速度・減速度[mm/s²](探索と同じ)
+// CAMERA の加速度・減速度[mm/s²](最短走行の FAST_DECEL_MAX_MM_S2 と同じ)。3000 では大回り 90° の 1200 に
+// 曲がり始め(置いた所から 231mm)までに届かない(要る距離 240mm。5000 なら 144mm)
+#define SLIP_CAMERA_ACCEL 5000.0f
 #define SLIP_START_DELAY_MS 1000 // 手を離してから動き出すまで[ms](この中でジャイロのゼロ点を測り直す)
 #define SLIP_TIMEOUT_MS  3000    // 1つの動きがこれを過ぎても終わらなければ打ち切る
 #define SLIP_SETTLE_MS   300     // 止まってから測り始めるまで[ms]
@@ -107,6 +110,17 @@ static bool s_raw_slalom = false;
 static float s_stop_extra_mm = 0.0f;
 static const float kRulerExtraMm[] = { -10.0f, 0.0f, 10.0f, 20.0f };
 #define SLIP_RULER_ROUNDS 2 // 置く所ごとに kRulerExtraMm を何回まわすか
+
+// CAMERA(2026-11-20): true の間は、止まって保存した後に直結の LED_1〜6 だけを点けて、ボタンが押されるまで待つ(真上から写真を撮る)
+static bool s_camera = false;
+static float s_accel = SLIP_ACCEL; // 直進の加速度・減速度(CAMERA の間だけ SLIP_CAMERA_ACCEL)
+// CAMERA の速さ(50 刻み、横加速度 1G 未満まで。tools/camera/analyze_slip_camera.m の並びと合わせる)。1 つの速さで 1 本ずつ
+// (K の誤差は本数の平方根でしか減らないので、同じ速さをくり返すより速さを増やす)。横加速度: 小回り 750 で 0.90G、
+// 大回り 90° 1200 で 0.98G、大回り 180° 900 で 0.93G
+static const float kCamTurnSpeeds[] = { 300.0f, 350.0f, 400.0f, 450.0f, 500.0f, 550.0f, 600.0f, 650.0f, 700.0f, 750.0f };
+static const float kCamLarge90Speeds[] = { 500.0f, 550.0f, 600.0f, 650.0f, 700.0f, 750.0f, 800.0f, 850.0f, 900.0f, 950.0f,
+                                           1000.0f, 1050.0f, 1100.0f, 1150.0f, 1200.0f };
+static const float kCamLarge180Speeds[] = { 500.0f, 550.0f, 600.0f, 650.0f, 700.0f, 750.0f, 800.0f, 850.0f, 900.0f };
 
 // 探索と同じ形の小回りを、速さ v に合わせて作る(前後のオフセットも探索と同じ計算)
 static TurnShape ShapeFor(float v) {
@@ -209,7 +223,7 @@ static bool WaitTargetDistance(float target_mm) {
 static void StraightTo(float target_mm, float v_max, float v_end) {
     float d = target_mm - App_GetTargetDistance();
     if (d < 1.0f) d = 1.0f;
-    App_StartStraight(d, v_max, v_end, SLIP_ACCEL);
+    App_StartStraight(d, v_max, v_end, s_accel);
 }
 
 // 境界(*ref_mm)から小回りで曲がり、曲がった先の境界を *ref_mm に入れる(探索の SlalomTurn と同じ数え方)。
@@ -494,16 +508,19 @@ static int KindPlaceNo(int kind) {
 // 手かざしを待つ。待つ間、シフトレジスタの LED を置く所の番号 × 3 個つける(1 番 3 個 … 5 番 15 個)。
 // 置く所が前の 1 本から変わったときは、それと直結の LED 全部を 0.15 秒ごとに点滅させる(置き直しを見落とさないため)。
 // 手をかざしたら消して、あとは ModeUI_WaitHandStart と同じ(かざし続けて離すまで待つ)
+// CAMERA のときは置いた所も撮るので、シフトレジスタの LED は消し、直結の LED_1〜6 を点けたままにする
+// (置く所が変わったときだけ、初めの 2 秒は点滅させる)。手をかざす前に撮る
 static void WaitHandShowingPlace(int place, bool changed) {
-    uint16_t bar = (uint16_t)((1u << (3u * (uint32_t)place)) - 1u);
+    uint16_t bar = s_camera ? 0u : (uint16_t)((1u << (3u * (uint32_t)place)) - 1u);
     uint32_t t0 = HAL_GetTick();
     int shown = -1;
     while (ad_fl <= SENSOR_START_THRESHOLD) {
         if (FailSafe_IsTripped()) FailSafe_Halt();
-        int on = (!changed || ((HAL_GetTick() - t0) / 150u) % 2u == 0u) ? 1 : 0;
+        bool blink = changed && (!s_camera || HAL_GetTick() - t0 < 2000u);
+        int on = (!blink || ((HAL_GetTick() - t0) / 150u) % 2u == 0u) ? 1 : 0;
         if (on != shown) { // 変わったときだけ書く(シフトレジスタを毎回送らない)
             LED_SetShiftPattern(on ? bar : 0u);
-            if (changed) LED_SetDirectPattern(on ? LED_DIRECT_ALL : 0u);
+            if (changed || s_camera) LED_SetDirectPattern(on ? LED_DIRECT_ALL : 0u);
             shown = on;
         }
         HAL_Delay(1);
@@ -589,6 +606,20 @@ static void WaitClickTellingRun(uint32_t run) {
     HAL_Delay(20);
 }
 
+// CAMERA: 止まった機体の直結の LED_1〜6 だけを点け(カメラの校正の CAMERA_LED と同じ)、写真を撮ってボタンが押されるまで待つ
+static void WaitPhoto(uint32_t run) {
+    printf("#%lu: take a photo from above, then click\r\n", (unsigned long)run);
+    LED_SetShiftPattern(0u);
+    LED_SetDirectPattern(LED_DIRECT_ALL);
+    while (!Button_IsPressed()) {
+        if (FailSafe_IsTripped()) FailSafe_Halt();
+        HAL_Delay(1);
+    }
+    LED_SetDirectPattern(0u);
+    while (Button_IsPressed()) HAL_Delay(10);
+    HAL_Delay(20);
+}
+
 // 1 本走る: 手で置いて手をかざすのを待ち、走って止まり、前壁を読んで保存する。続けてよければ true
 // (1 本ごとに手で置き直す。自動で戻って押し当てると、フェイルセーフが働いたり、向きと横の位置がそろわなかったりしたので、
 // やめた。2026-11-06)。run が選んだ始めの番号より前なら走らずに true
@@ -610,6 +641,7 @@ static bool RunOneByHand(uint32_t run, int kind, float v) {
     s_last_place = KindPlace(kind);
     printf("#%lu %s v %.0f: %splace at %s (place %d), then hand over front-left sensor to RUN\r\n", (unsigned long)run,
            KindName(kind), v, changed ? "NEW PLACE! " : "", KindPlace(kind), place);
+    if (s_camera) printf("#%lu: take a photo of the start from above BEFORE the hand\r\n", (unsigned long)run);
     WaitHandShowingPlace(place, changed);
     HAL_Delay(SLIP_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
     SetupLogger(kind, v);
@@ -626,6 +658,7 @@ static bool RunOneByHand(uint32_t run, int kind, float v) {
                m.fl - m.fr, m.l, m.r);
     }
     if (ModeUI_SaveLogToSD() == SD_SAVE_FAILED) printf("SD save FAILED\r\n");
+    if (ok && s_camera) WaitPhoto(run);
     if (!ok) {
         printf("SLIP stopped at #%lu (run)\r\n", (unsigned long)run);
         WaitClickTellingRun(run);
@@ -638,7 +671,7 @@ void SlipTurnTest_Run(void) {
                                    9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f };
     int set = (int)ModeUI_SelectValue("SLIP(1 TURN 2 STRAIGHT 3 PIVOT 4 LR 5 LR REST 6 REF NG 7 CHECK REST 8 STAIR REF "
                                       "9 LARGE90 10 LARGE90 REF 11 LARGE CHECK 12 LARGE180 13 LARGE180 REF "
-                                      "14 LARGE180 REST 15 RULER)", "", kSets, 15u, 1.0f);
+                                      "14 CAMERA 15 RULER)", "", kSets, 15u, 1.0f);
     SelectFromRun();
     uint32_t run = 0;
     if (set <= 6) {
@@ -701,19 +734,36 @@ void SlipTurnTest_Run(void) {
             }
         }
     } else if (set == 14) {
-        // LARGE180 の残り(2026-11-08): 1 回目は L180R の 800 を 1 本走ったところで終わった。FAST_LARGE180_POST_ADJ_MM を入れたので、
-        // まず 600 を左右 2 本ずつ(調整で比べ相手との差が 0 に近づいたかを見る)→ L180R 800 の残り 2 本 → L180L 800 → 900・1000 の左右
-        static const struct { int kind; float v; uint8_t n; } kRest[] = {
-            { SLIP_L180R, 600.0f, 2 }, { SLIP_L180L, 600.0f, 2 },
-            { SLIP_L180R, 800.0f, 2 }, { SLIP_L180L, 800.0f, 3 },
-            { SLIP_L180R, 900.0f, 3 }, { SLIP_L180L, 900.0f, 3 }, // 1000 は 1G を超えるので消した(2026-11-17)
-        };
-        printf("SLIP LARGE180 REST (4x4): 600 R/L x2 (check the adjust), R 800 x2, L 800 x3, then 900 R and L x3\r\n");
-        for (uint32_t j = 0; j < (uint32_t)(sizeof(kRest) / sizeof(kRest[0])); j++) {
-            for (uint32_t k = 0; k < kRest[j].n; k++) {
-                if (!RunOneByHand(++run, kRest[j].kind, kRest[j].v)) return;
+        // CAMERA(2026-11-20。LARGE180 REST は取り終えたので置き換えた): スリップのモデルを切って走り(App_SetSlipModel)、
+        // 止まった所を真上から撮って K を出す。機体は滑りを知らずに走るので、止まった所のずれがそのまま滑りの分になる。
+        // 1 TURN(小回り 90°: T1・T1L を 300〜750)/ 2 LARGE90(L90R・L90L を 500〜1200)/ 3 LARGE180(L180R・L180L を 500〜900)。
+        // 50 刻みの速さを 1 本ずつ。置く所ごとにまとめ、右を遅い順に全部 → 左を遅い順に全部(2026-11-20 に、速さごとに 3 本から変えた)
+        static const float kTypes[] = { 1.0f, 2.0f, 3.0f };
+        int type = (int)ModeUI_SelectValue("CAMERA(1 TURN 2 LARGE90 3 LARGE180)", "", kTypes, 3u, 1.0f);
+        const float *speeds = (type == 2) ? kCamLarge90Speeds : (type == 3) ? kCamLarge180Speeds : kCamTurnSpeeds;
+        uint32_t n_speeds = (type == 2) ? (uint32_t)(sizeof(kCamLarge90Speeds) / sizeof(kCamLarge90Speeds[0]))
+                          : (type == 3) ? (uint32_t)(sizeof(kCamLarge180Speeds) / sizeof(kCamLarge180Speeds[0]))
+                          : (uint32_t)(sizeof(kCamTurnSpeeds) / sizeof(kCamTurnSpeeds[0]));
+        int kinds[2] = { SLIP_T1, SLIP_T1L };
+        if (type == 2) { kinds[0] = SLIP_L90R; kinds[1] = SLIP_L90L; }
+        if (type == 3) { kinds[0] = SLIP_L180R; kinds[1] = SLIP_L180L; }
+        printf("SLIP CAMERA %s: slip model OFF, %s at %.0f-%.0f then %s, one run per speed, photos at start and stop\r\n",
+               (type == 2) ? "LARGE90" : (type == 3) ? "LARGE180" : "TURN", KindName(kinds[0]), speeds[0],
+               speeds[n_speeds - 1u], KindName(kinds[1]));
+        if (type == 1) printf("walls: also keep open (2,0)-(2,1), (2,1)-(1,1), (1,1)-(0,1)\r\n");
+        App_SetSlipModel(false);
+        s_camera = true;
+        s_accel = SLIP_CAMERA_ACCEL;
+        bool ok = true;
+        for (uint32_t j = 0; ok && j < 2u; j++) {
+            for (uint32_t i = 0; ok && i < n_speeds; i++) {
+                ok = RunOneByHand(++run, kinds[j], speeds[i]);
             }
         }
+        s_camera = false;
+        s_accel = SLIP_ACCEL;
+        App_SetSlipModel(true);
+        if (!ok) return;
     } else if (set == 13) {
         // 大回り 180° の比べ相手: 曲がった後の列の一番上に南向きに置き、まっすぐ同じ所で止まる
         printf("SLIP LARGE180 REF (4x4): L180RR x%d then L180LR x%d, v %.0f\r\n", SLIP_L90_REF_RUNS,
