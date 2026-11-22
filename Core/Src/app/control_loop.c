@@ -44,6 +44,11 @@ static volatile bool s_output_paused = false; // モーターの出力だけを 
 // 制御が無効の間は0にしておき、有効にした時点を基準にする。ISRからのみ触る。
 static float s_ref_x = 0.0f, s_ref_y = 0.0f;
 static float s_est_x = 0.0f, s_est_y = 0.0f;
+static float s_est_beta = 0.0f; // 推定の位置に入れるスリップアングル β[rad](SLIP_ESTIMATION_ENABLE のとき)
+// 目標の向きに足すスリップの分(SLIP_FF_ENABLE のとき)。β[rad] と dβ/dt・d²β/dt²(角速度・角加速度の FF に足す)
+static float s_ff_beta = 0.0f, s_ff_beta_rate = 0.0f, s_ff_beta_acc = 0.0f;
+// false の間は推定・目標の向きのスリップの分を 0 にする(K を 0 として扱う。App_SetSlipModel)。メインが書き、ISRが読む
+static volatile bool s_slip_model_on = true;
 static float s_lat_ofs_deg = 0.0f; // 目標の向きに足すずらし Δθ[deg]
 // 目標の位置に対する推定の位置のずれ[mm](目標の向きの前後: + なら目標が前、横: + なら機体が左)。ISRが書き、メインが読む
 static volatile float s_along_err_mm = 0.0f;
@@ -282,6 +287,10 @@ void App_SetWallControl(bool en) {
 
 void App_SetLateralControl(bool en) {
     s_lat_ctrl_on = en;
+}
+
+void App_SetSlipModel(bool en) {
+    s_slip_model_on = en;
 }
 
 void App_SetOutputPaused(bool paused) {
@@ -603,6 +612,36 @@ void App_ControlTick(void) {
         float th_r = s_angle_ref_deg * DEG_TO_RAD;
         float th_e = s_gyro_angle_deg * DEG_TO_RAD;
         float v_e = 0.5f * (s_actual.left_mm_s + s_actual.right_mm_s);
+#if SLIP_ESTIMATION_ENABLE
+        // 進む向き = 機体の向き − β。dβ/dt = (K v[m/s] ω[rad/s] − β) / C を、測った速さとジャイロで進める
+        // (logic/control/slalom.c の SlipTick と同じ式。曲がった外へ流れる分を推定に入れ、FB で打ち消す)
+        {
+            float k = s_slip_model_on ? SLALOM_SLIP_K : 0.0f;
+            float target = k * (v_e * MM_TO_M) * (s_gyro_z_dps * DEG_TO_RAD);
+            if (SLALOM_SLIP_C_S <= 0.0f) {
+                s_est_beta = target;
+            } else {
+                s_est_beta += (1.0f - expf(-CONTROL_DT_S / SLALOM_SLIP_C_S)) * (target - s_est_beta);
+            }
+            th_e -= s_est_beta;
+        }
+#if SLIP_FF_ENABLE
+        // 目標の向きに足す β。推定の β は測った角速度 ω_道 + dβ/dt で進むので、それと合うように
+        // dβ/dt = (K v ω_道 − β) / (C − K v) で進める(v, ω_道 は目標の値)。C − K v が小さすぎるときは遅れなし
+        {
+            float kv = (s_slip_model_on ? SLALOM_SLIP_K : 0.0f) * (s_target_mm_s * MM_TO_M);
+            float target = kv * (s_target_omega_dps * DEG_TO_RAD);
+            float tau = SLALOM_SLIP_C_S - kv;
+            float beta = (tau > CONTROL_DT_S)
+                       ? s_ff_beta + (1.0f - expf(-CONTROL_DT_S / tau)) * (target - s_ff_beta)
+                       : target;
+            float rate = (beta - s_ff_beta) / CONTROL_DT_S;
+            s_ff_beta_acc = (rate - s_ff_beta_rate) / CONTROL_DT_S;
+            s_ff_beta_rate = rate;
+            s_ff_beta = beta;
+        }
+#endif
+#endif
         s_ref_x += s_target_mm_s * CONTROL_DT_S * cosf(th_r);
         s_ref_y += s_target_mm_s * CONTROL_DT_S * sinf(th_r);
         s_est_x += v_e * CONTROL_DT_S * cosf(th_e);
@@ -616,6 +655,8 @@ void App_ControlTick(void) {
         s_dist_mm = 0.0f;
         s_ref_x = s_ref_y = 0.0f;
         s_est_x = s_est_y = 0.0f;
+        s_est_beta = 0.0f;
+        s_ff_beta = s_ff_beta_rate = s_ff_beta_acc = 0.0f;
     }
 
     // ---- 壁切れ(横の壁がなくなった瞬間)を見つける ----
@@ -695,8 +736,9 @@ void App_ControlTick(void) {
     float v_ref = s_target_mm_s * MM_TO_M;
     float a_ref = s_target_acc * MM_TO_M;
     float v_cmd = (s_target_mm_s + pos_corr) * MM_TO_M; // 並進の FB の目標(位置の補正を含む)
-    float omega_ref = s_target_omega_dps * DEG_TO_RAD;
-    float alpha_ref = s_target_alpha_dps2 * DEG_TO_RAD;
+    // 角速度・角加速度の目標には、スリップの分だけ余分に回る dβ/dt・d²β/dt² を足す(SLIP_FF_ENABLE でないときは 0)
+    float omega_ref = s_target_omega_dps * DEG_TO_RAD + s_ff_beta_rate;
+    float alpha_ref = s_target_alpha_dps2 * DEG_TO_RAD + s_ff_beta_acc;
     float omega_meas = s_gyro_z_dps * DEG_TO_RAD;
     float v_meas = 0.5f * (s_actual.left_mm_s + s_actual.right_mm_s) * MM_TO_M;
 
@@ -798,8 +840,8 @@ void App_ControlTick(void) {
     // ---- 旋回の FB(PD．超信地旋回の合わせ込みの間だけ積分を足す) ----
     // 制御が有効な間は，止まっていても常に効かせる(止まっている間も向きを保つ)．
     float vd_fb = 0.0f;
-    // 目標の向きに、横のずれの FB のずらしと、横壁追従のずらしを足す(どちらも直進の間だけ 0 でない)
-    float angle_err_rad = (s_angle_ref_deg + s_lat_ofs_deg + s_wall_ofs_deg - s_gyro_angle_deg) * DEG_TO_RAD;
+    // 目標の向きに、横のずれの FB のずらしと、横壁追従のずらし(どちらも直進の間だけ 0 でない)と、スリップの分 β を足す
+    float angle_err_rad = (s_angle_ref_deg + s_lat_ofs_deg + s_wall_ofs_deg - s_gyro_angle_deg) * DEG_TO_RAD + s_ff_beta;
     float vd_settle_i = UpdatePivotSettle(angle_err_rad); // FB を切っていても，合わせ込みは打ち切りで終わる
     if (ANGULAR_CONTROL_ENABLE) {
         vd_fb = Clamp(DRIVE_VD_K_OMEGA * (omega_ref - omega_meas) + DRIVE_VD_K_THETA * angle_err_rad

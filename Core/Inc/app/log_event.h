@@ -68,15 +68,26 @@ typedef enum {
     // ---- 小回りの滑りの試験(TEST の SLIP)----
     LOG_EV_SLIP_POINT = 57,   // a:kind b:v c:stop d:fl e:fr
     LOG_EV_SLIP_POINT2 = 58,  // a:dist b:l c:r d:sum_std e:vbat
-    LOG_EV_SLIP_RUN = 59,     // a:kind b:v c:pre d:post
+    LOG_EV_SLIP_RUN = 59,     // a:kind b:v c:pre d:post e:stop_extra(RULER で止まる所をずらした量)
     // ---- 最短走行の ADJ CHECK(小回りの調整のあり・なしを比べる．2026-11-07 に消した．fast_0045〜0060 を読むため残す)----
     LOG_EV_FAST_CHECK = 60,   // a:adj b:fl c:fr d:l e:r
     LOG_EV_FAST_CHECK2 = 61,  // a:dist b:stop c:sum_std d:vbat e:no
-    // (62 は SLIP の STAIR が使う。feature/turnback-alternate)
+    // ---- SLIP の STAIR(小回りの曲がり始めの直前に前壁を読む)----
+    LOG_EV_SLIP_TURN = 62,    // a:index b:sum c:diff d:before e:adj
     // ---- 斜めの旋回の試験(RUN の TEST の DIAG。2026-11-07)----
     LOG_EV_DIAG_TEST = 63,    // a:pattern b:right
+    LOG_EV_FAST_LARGE = 64,   // a:large90_v b:large180_v c:corr
+                              // (最短走行の大回りの速さと選んだ壁の補正(探索の corr と同じビット)。LOG_EV_FAST_PARAMS の続き。
+                              // c は 2026-11-21 に足した(前は 0)。63 は feature/diagonal-run の DIAG_TEST と重なったので 64 にした。fast_0067・0068 は 63 で残っている)
+    // ---- 横の物差しの試験(RUN の TEST の LAT_RULER。北を向いて止まって読んだ 1 点)----
+    LOG_EV_LAT_RULER = 65,    // a:index b:offset c:l d:r e:facing
+    LOG_EV_LAT_RULER2 = 66,   // a:index b:front_fl c:front_fr d:angle_err e:vbat
 } LogEventCode;
 
+// LOG_EV_LAT_RULER: offset は区画の真ん中からの横のずれ[mm](東が +。エンコーダーで寄った量の目標)、l・r は北を向いて
+//   止まって読んだ横のセンサーの平均。facing は直前に向いていた壁(0 なし、1 西、2 東)。
+// LOG_EV_LAT_RULER2: front_fl・front_fr はその壁を向いていたときの前のセンサーの平均(前壁の物差しで横の位置を確かめる用)、
+//   angle_err は読んだときの向きのずれ[deg](ジャイロ − 目標)。
 // LOG_EV_BOOT: 今の起動のリセットの原因(FAULT_RESET_*、interface/fault_diag.h)と、その前に HardFault があったか(1/0)。
 //   走り始めに毎回入れる。fault が 1 なら LOG_EV_FAULT_PC / LOG_EV_FAULT_REG も入れる。
 //   32bit の値は上位(_hi)と下位(_lo)の 16bit に分けて入れる(CSV は有効数字6桁なので)。値 = hi × 65536 + lo。
@@ -98,6 +109,12 @@ typedef enum {
 // LOG_EV_SLIP_RUN / LOG_EV_SLIP_POINT / LOG_EV_SLIP_POINT2: 小回りの滑りの試験(app/slip_turn_test)。RUN は 1 本の始め
 //   (kind 1 = T1 小回り 1 回、2 = T2 右 → 左、3 = E 東へまっすぐ、4 = N 北へまっすぐ、5 = P1 超信地旋回で右、6 = P2 超信地旋回で右 → 小回りで左、
 //   7 = T1L 小回りで左、8 = P1L 超信地旋回で左、9 = EW 西へまっすぐ、10 = T2L 小回りで左 → 右、11 = P2L 超信地旋回で左 → 小回りで右。
+//   12 = NG、13 = ST(2025 学生クラシック迷路の階段)、14〜18 = RE1〜RE5・19〜21 = RN1〜RN3(階段の比べ相手)、
+//   22 = L90L・23 = L90LR・24 = L90R・25 = L90RR(4×4 の大回り 90°。L90 の pre / post は大回りのオフセット)、
+//   26 = L180R・27 = L180RR・28 = L180L・29 = L180LR(4×4 の大回り 180°)。
+// LOG_EV_SLIP_TURN: STAIR の小回りごとに、曲がり始めの SLIP_TURN_READ_MM 手前から曲がり始めまでの前壁の平均(sum = FL + FR、
+//   diff = FL − FR)。index は 0 から(S からの全部の小回りを数える)、before は読んだ所が曲がり始めより平均で何 mm 手前か(目標の距離)、
+//   adj は小回りの手で足す調整を入れたか(1/0)。
 //   LR の組(7〜11 と同じ回の 1〜6)の小回りは手で足す調整を引いた形(pre / post に出る)、v は小回り(直進)の速さ、pre / post は小回りの前後のオフセット)。POINT・POINT2 は
 //   止まって 0.5 秒読んだ値(stop は止まる所の目標の距離、dist はその間のエンコーダの道のりの平均。ほかは FW1 と同じ)。
 // LOG_EV_GYRO_BIAS:走っている途中で止まっている間にジャイロ Z のゼロ点を測り直した続きが終わった所(app/control_loop)。

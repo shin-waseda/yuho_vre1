@@ -139,10 +139,15 @@ typedef struct {
 // 直進の最高速度 vmax・加速度 accel・小回りの速さ small_v で走るときの、旋回の動き(turns[RunType]、右と左に同じ値)と、
 // それを使う RunProfile を作る。小回りは探索と同じ形(SLALOM_*)を small_v にして、前後のオフセットはスラロームのずれの
 // モデル(Slalom_SmallTurnOffsets)で計算する。大回り 90°・180° は FAST_LARGE* の速さと形(+ *_ADJ)。
+// 2026-11-08: 大回りの前後のオフセットにもスリップのモデルを入れた(Slalom_Large90Offsets / Slalom_Large180Offsets)。
 // 斜めの旋回は FAST_D45*・FAST_D135*・FAST_DV90* の速さと形で、前後のオフセットは角までの折れ線から(Slalom_TurnOffsets。
 // 入りと出は同じ形で、折れ線の前後が入れ替わる)。斜めの直進の最高速度は直進と同じ vmax。
 // turns は NULL でもよい。
 RunProfile RunProfile_ForSpeeds(float vmax, float accel, float small_v, RunTurnSpec turns[RUN_TYPE_COUNT]);
+
+// RunProfile_ForSpeeds と同じだが、大回り 90°・180° の速さも選ぶ(形は FAST_LARGE* を曲がる軌跡を変えずにその速さにしたもの)
+RunProfile RunProfile_ForSpeedsLarge(float vmax, float accel, float small_v, float large90_v, float large180_v,
+                                     RunTurnSpec turns[RUN_TYPE_COUNT]);
 
 // 探索の既知の区間(SearchPlanner_KnownRun の moves[0..m])を、最短走行の指令の列にする。区画 C0 の入口の境界にいて
 // C0 をまっすぐ抜ける所から始まるので、1つ手前の区画 P の真ん中から「P → C0 → C1 → moves[1..m]」の経路として作り、

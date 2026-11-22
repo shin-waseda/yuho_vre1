@@ -5,6 +5,7 @@
 #include "interface/sdcard.h"
 #include "interface/uart.h"
 #include "interface/led.h"
+#include "interface/sound.h"
 #include "app/mode_ui.h"
 
 // 1回の一覧で集めるファイル数。これより多ければページをめくるように続きを読む。
@@ -119,6 +120,11 @@ void SdDump_Run(void) {
         int sent = SendUnsentAndMove(&failed);
         printf("SD DUMP: sent %d file(s)%s\r\n", sent, failed ? ", stopped by an error" : "");
         LED_SetShiftPattern(failed ? 0x0055u : 0x007Fu);
+        if (failed) {
+            Sound_Error();
+        } else {
+            Sound_LogSent();
+        }
     }
 }
 
@@ -134,5 +140,10 @@ void SdDumpAll_Run(void) {
         sent += SendAllUnder(SDCARD_SENT_DIR, &failed);     // 送信済み
         printf("SD DUMP ALL: sent %d file(s)%s\r\n", sent, failed ? ", some failed" : "");
         LED_SetShiftPattern(failed ? 0x0055u : 0x007Fu);
+        if (failed) {
+            Sound_Error();
+        } else {
+            Sound_LogSent();
+        }
     }
 }
