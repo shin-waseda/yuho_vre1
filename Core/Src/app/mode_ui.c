@@ -52,6 +52,8 @@ static const char *ModeName(RobotMode mode) {
         case MODE_GYRO_SCALE_TEST: return "GYRO_SCALE";
         case MODE_FRONT_WALL_TEST: return "FRONT_WALL";
         case MODE_SLIP_TURN_TEST: return "SLIP";
+        case MODE_DIAG_TEST:     return "DIAG";
+        case MODE_PLAN_BENCH:    return "PLAN";
         case MODE_FAST_ALL:      return "FAST_ALL";
         default:               return "UNKNOWN";
     }
@@ -382,10 +384,10 @@ float ModeUI_SelectValueFrom(const char *name, const char *unit, const float *va
 static void RunTest_Run(void) {
     // SLIP は TEST の一覧が上限(15)で入らないので、ここに入れた(2026-11-06)
     static const RobotMode kTests[] = { MODE_FAST_SWEEP, MODE_SEARCH_SPIN, MODE_FAST_BANDS, MODE_LONG_LOG,
-                                        MODE_SLIP_TURN_TEST };
-    static const float kValues[] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f };
-    printf("RUN TEST: 1 FAST_SWEEP, 2 SEARCH_SPIN, 3 FAST_BANDS, 4 LONG_LOG, 5 SLIP\r\n");
-    uint8_t n = (uint8_t)ModeUI_SelectValue("TEST(1 FAST_SWEEP 2 SEARCH_SPIN 3 FAST_BANDS 4 LONG_LOG 5 SLIP)", "", kValues,
+                                        MODE_SLIP_TURN_TEST, MODE_DIAG_TEST, MODE_PLAN_BENCH };
+    static const float kValues[] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f };
+    printf("RUN TEST: 1 FAST_SWEEP, 2 SEARCH_SPIN, 3 FAST_BANDS, 4 LONG_LOG, 5 SLIP, 6 DIAG, 7 PLAN\r\n");
+    uint8_t n = (uint8_t)ModeUI_SelectValue("TEST(1 FAST_SWEEP 2 SEARCH_SPIN 3 FAST_BANDS 4 LONG_LOG 5 SLIP 6 DIAG 7 PLAN)", "", kValues,
                                             MENU_COUNT_OF(kValues), 1.0f);
     RobotMode mode = kTests[n - 1u];
     printf("MODE: RUN / TEST / %s\r\n", ModeName(mode));
@@ -478,6 +480,12 @@ void ModeUI_Run(RobotMode mode) {
             break;
         case MODE_SLIP_TURN_TEST:
             SlipTurnTest_Run();
+            break;
+        case MODE_DIAG_TEST:
+            DiagTest_Run();
+            break;
+        case MODE_PLAN_BENCH:
+            PlanBench_Run();
             break;
         default:
             break;

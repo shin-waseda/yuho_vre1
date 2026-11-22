@@ -38,6 +38,13 @@ void Slalom_ScaleToSpeed(SlalomParams *p, float v_mm_s);
 //   大回り 90°(区画の中心 → 斜め隣の区画の中心): span_mm = 1区画
 void Slalom_Turn90Offsets(const SlalomShape *s, float span_mm, float *pre_mm, float *post_mm);
 
+// angle_deg(180° 未満)曲がる旋回の前後のオフセット。経路を折れ線で表し、曲がり始めの所から角(折れる点)まで
+// leg_in_mm、角から曲がり終わりの所まで leg_out_mm とする。前のオフセット → 曲がる(s) → 後ろのオフセット で
+// ちょうど曲がり終わりの所に着くように決める(角度が 90° なら Slalom_Turn90Offsets と同じ)。負なら収まらない。
+// 斜めの旋回(logic/maze/run_path の 45°・135°・V90)に使う。
+void Slalom_TurnOffsets(const SlalomShape *s, float angle_deg, float leg_in_mm, float leg_out_mm,
+                        float *pre_mm, float *post_mm);
+
 // 大回り 180°(区画の中心 → 隣の列の区画の中心、柱を回る U ターン)用に、曲がる側へちょうど
 // side_mm(= 1区画)移るような最高角速度を求めて p->omega_dps に書く(v と角加速度は p のまま)。
 void Slalom_SolveOmegaForSide(SlalomParams *p, float side_mm);
@@ -73,4 +80,6 @@ typedef struct {
     float post_adj_mm; // 形で決まる後ろのオフセットからの調整分
 } SlalomOffsets;
 
-SlalomOffsets Slalom_SmallTurnOffsets(const SlalomParams *p);#endif
+SlalomOffsets Slalom_SmallTurnOffsets(const SlalomParams *p);
+
+#endif

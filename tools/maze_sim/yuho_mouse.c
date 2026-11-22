@@ -5,13 +5,15 @@
 // maze_sim はアルゴリズムの確認だけ。時間は「計算上の速さ」の運動だけで数え、滑り・ログで合わせた補正・
 // 尻当てや待ち・超信地旋回の時間は数えない(時間で選ぶ経路などの、時間に依存するアルゴリズムを確かめるため)。
 //   - 最短走行: logic 層の RunProfile_Default() の形(理想の円弧、オフセットなし、減速度 = 加速度)に、
-//               オプション run の速さを入れる。経路は時間 Dijkstra と「コストで最短 + 大回り」の2つ
+//               オプション run の速さを入れる。経路は時間 Dijkstra と「コストで最短」の2つで、後者の曲がり方はオプション turn で選ぶ
+//               (超信地旋回・小回り・大回り・大回りと斜め。斜めは diag_cost で区画の経路から選び直す)
 //   - 探索    : オプション search の速さで、指令ごとの運動を足す
 // 時間の数え方は ideal_time.h(C の CLI maze_sim.c と同じ)。
 //
 // 状態はこのファイルの static に1組だけ持つ(シミュレータは1つの迷路しか扱わない)。
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "msim.h"
@@ -22,6 +24,7 @@
 #include "logic/maze/search_planner.h"
 #include "logic/maze/run_path.h"
 #include "logic/maze/time_dijkstra.h"
+#include "logic/maze/diag_route.h"
 
 // 探索の行き先
 typedef enum { SCOPE_ROUND, SCOPE_ONE_WAY, SCOPE_FULL } Scope;
@@ -33,6 +36,8 @@ static MazeSolver s_value_solver; // 区画の値の表示用(プランナーは
 static CommandList s_route;
 static TimeSolver s_time_solver;  // 最短走行(時間)の計算用
 static RunList s_run;
+static DiagRouteSolver s_diag_solver; // 斜めのコストで区画の経路を選ぶ(オプション turn = diag)
+static DiagRouteSolver s_full_diag_solver; // 全面探索で、最短経路の候補を斜めのコストで選ぶ(全面探索 + turn = diag)
 
 static MazePos s_start;
 static MazePos s_goals[MAZE_GOAL_MAX];
@@ -43,6 +48,10 @@ static Scope s_scope;
 static SearchSpeeds s_speeds;    // 探索の速さ(オプション search)
 static SearchTime s_st;
 static RunProfile s_prof;         // 最短走行の速さ(オプション run)
+// 最短走行の2つめの経路の曲がり方(オプション turn)と、斜めの1区画のコスト(オプション diag_cost。直進の1区画を 10 とした値。turn = diag のとき)
+typedef enum { TURN_PIVOT, TURN_SMALL, TURN_LARGE, TURN_DIAG } TurnMode;
+static TurnMode s_turn_mode = TURN_DIAG;
+static uint16_t s_diag_cost = MAZE_COST_DIAG_CELL_X10;
 static bool s_has_values;         // リセット後、プランナーが一度でも経路を計算したか
 static bool s_decided_shown;      // 全面探索で最短経路が決まったことを出したか
 static char s_note[128];          // 状態の行に出す出来事(LOST など)
@@ -117,6 +126,27 @@ MSIM_EXPORT int msim_api_version(void) {
     return MSIM_API_VERSION;
 }
 
+// "pivot" | "small" | "large" | "diag"
+static bool ParseTurnMode(const char *text, TurnMode *out) {
+    static const char *const kNames[] = { "pivot", "small", "large", "diag" };
+    for (int i = 0; i < 4; i++) {
+        if (strcmp(text, kNames[i]) == 0) {
+            *out = (TurnMode)i;
+            return true;
+        }
+    }
+    return false;
+}
+
+// 0〜100 の整数
+static bool ParseDiagCost(const char *text, uint16_t *out) {
+    char *end;
+    long v = strtol(text, &end, 10);
+    if (end == text || *end != '\0' || v < 0 || v > 100) return false;
+    *out = (uint16_t)v;
+    return true;
+}
+
 MSIM_EXPORT int msim_reset(const MsimMaze *maze, const char *options, char *err, int err_len) {
     char v[96];
     if (maze->size != MAZE_SIZE) {
@@ -150,6 +180,18 @@ MSIM_EXPORT int msim_reset(const MsimMaze *maze, const char *options, char *err,
         snprintf(err, (size_t)err_len, "back_cost must be S,T90,T180,K (S >= 1, fits in 13 bits): %s", v);
         return 0;
     }
+    TurnMode turn_mode = TURN_DIAG;
+    if (FindOption(options, "turn", v, sizeof(v)) && v[0] && !ParseTurnMode(v, &turn_mode)) {
+        snprintf(err, (size_t)err_len, "turn must be pivot, small, large or diag: %s", v);
+        return 0;
+    }
+    uint16_t diag_cost = MAZE_COST_DIAG_CELL_X10;
+    if (FindOption(options, "diag_cost", v, sizeof(v)) && v[0] && !ParseDiagCost(v, &diag_cost)) {
+        snprintf(err, (size_t)err_len, "diag_cost must be 0..100: %s", v);
+        return 0;
+    }
+    s_turn_mode = turn_mode;
+    s_diag_cost = diag_cost;
     s_speeds = sp;
     s_prof = prof;
 
@@ -165,7 +207,14 @@ MSIM_EXPORT int msim_reset(const MsimMaze *maze, const char *options, char *err,
     SearchPlanner_Init(&s_planner, &s_map, s_algo, s_start, (Direction)maze->start_dir, s_goals, s_goal_count);
     s_planner.cost_to_goal = to_goal;
     s_planner.cost_to_start = to_start;
-    if (s_scope == SCOPE_FULL) SearchPlanner_StartFull(&s_planner);
+    if (s_scope == SCOPE_FULL) {
+        SearchPlanner_StartFull(&s_planner);
+        // 斜めで走るなら、全面探索で確かめる経路も斜めのコストで選ぶ(遠回りの長い斜めも見に行く)
+        if (s_turn_mode == TURN_DIAG) {
+            s_planner.full_diag = &s_full_diag_solver;
+            s_planner.full_diag_cell_x10 = s_diag_cost;
+        }
+    }
     // 往復は機体と同じく、ゴールで止まって 180° 回らず、ゴールの区画を全部回ってから戻る(app/search_run の RunSearch)
     s_planner.goal_tour = (s_scope == SCOPE_ROUND);
     SearchTime_Init(&s_st, &s_speeds);
@@ -277,16 +326,22 @@ MSIM_EXPORT void msim_options(char *buf, int len) {
              "search\t%.0f,%.0f,%.0f\t\t探索の速さ V,TURN_V,ACCEL(直進の最高速度, 小回りの速さ [mm/s], 加速度 [mm/s^2])\t\n"
              "run\t%.0f,%.0f,%.0f,%.0f,%.0f\t\t最短走行の速さ VMAX,ACCEL,SMALL90,LARGE90,LARGE180 [mm/s, mm/s^2]\t\n"
              "goal_cost\t%u,%u,%u,%u\t\t行きの Dijkstra のコスト S,T90,T180,K(直進, 90°, 180°, 既知区画の上乗せ)\t\n"
-             "back_cost\t%u,%u,%u,%u\t\t帰りのコスト S,T90,T180,K\t\n",
+             "back_cost\t%u,%u,%u,%u\t\t帰りのコスト S,T90,T180,K\t\n"
+             "turn\tdiag\tpivot|small|large|diag\t最短走行(2つめの経路)の曲がり方: 超信地旋回・小回り・大回り・大回りと斜め\tk\n"
+             "diag_cost\t%u\t\tturn = diag の経路で、ジグザグを続ける1区画のコスト(直進の1区画を 10 とした値で、直進 + 90° の %u の代わり。0 なら斜めを考えずに選ぶ)\t\n",
              (double)SEARCH_V_MM_S, (double)SLALOM_V_MM_S, (double)SEARCH_ACCEL_MM_S2,
              (double)RUN_VMAX_MM_S, (double)RUN_ACCEL_MM_S2, (double)RUN_V_SMALL90_MM_S,
              (double)RUN_V_LARGE90_MM_S, (double)RUN_V_LARGE180_MM_S,
-             g.straight, g.turn90, g.turn180, g.known_cell, b.straight, b.turn90, b.turn180, b.known_cell);
+             g.straight, g.turn90, g.turn180, g.known_cell, b.straight, b.turn90, b.turn180, b.known_cell,
+             (unsigned)MAZE_COST_DIAG_CELL_X10, 10u * (unsigned)(MAZE_COST_STRAIGHT + MAZE_COST_TURN90));
 }
 
-// 最短走行の速さは探索に関係しないので、探索をやり直さずに変える
+// 最短走行の速さ・曲がり方は探索に関係しないので、探索をやり直さずに変える
 MSIM_EXPORT int msim_set_option(const char *name, const char *value) {
     if (strcmp(name, "run") == 0) return IdealRun_Parse(value, &s_prof) ? 1 : 0;
+    // 全面探索では、確かめる経路の選び方が変わるので、探索からやり直す
+    if (strcmp(name, "turn") == 0) return (s_scope != SCOPE_FULL && ParseTurnMode(value, &s_turn_mode)) ? 1 : 0;
+    if (strcmp(name, "diag_cost") == 0) return (s_scope != SCOPE_FULL && ParseDiagCost(value, &s_diag_cost)) ? 1 : 0;
     return 0;
 }
 
@@ -374,7 +429,8 @@ MSIM_EXPORT void msim_results(const MsimMaze *truth, char *buf, int len) {
 // 最短走行
 // ------------------------------------------------------------
 
-// kind: 0 走行時間が最短の経路(TimeDijkstra)、1 コストが最短の経路を大回りに置き換えたもの
+// kind: 0 走行時間が最短の経路(TimeDijkstra。turn = diag なら斜めも使う)、1 コストが最短の経路を、オプション turn の曲がり方にしたもの
+// (diag は、斜めのコスト diag_cost で選んだ区画の経路を大回りと斜めに置き換える)
 MSIM_EXPORT int msim_run_plan_count(void) {
     return 2;
 }
@@ -389,14 +445,27 @@ MSIM_EXPORT int msim_run_plan(int kind, const MsimMaze *maze, MsimRun *out, int 
     RunProfile prof = s_prof;
     memset(info, 0, sizeof(*info));
     if (kind == 1) {
-        Dijkstra_Compute(&s_solver, map, WALL_VIEW_KNOWN, NULL, s_goals, s_goal_count);
-        if (!Dijkstra_BuildRoute(&s_solver, s_start, DIR_NORTH, true, &s_route)) return 0;
-        if (!RunPath_FromRoute(&s_route, &prof, true, &s_run)) return 0;
-        snprintf(info->name, sizeof(info->name), "cost + large");
+        if (s_turn_mode == TURN_DIAG) {
+            DiagRoute_Compute(&s_diag_solver, map, WALL_VIEW_KNOWN, NULL, s_diag_cost, s_goals, s_goal_count);
+            if (!DiagRoute_BuildRoute(&s_diag_solver, s_start, DIR_NORTH, &s_route)) return 0;
+        } else {
+            Dijkstra_Compute(&s_solver, map, WALL_VIEW_KNOWN, NULL, s_goals, s_goal_count);
+            if (!Dijkstra_BuildRoute(&s_solver, s_start, DIR_NORTH, true, &s_route)) return 0;
+        }
+        bool ok = (s_turn_mode == TURN_PIVOT) ? RunPath_FromRoutePivot(&s_route, &s_run)
+                                              : RunPath_FromRouteEx(&s_route, &prof, s_turn_mode != TURN_SMALL,
+                                                                    s_turn_mode == TURN_DIAG, &s_run);
+        if (!ok) return 0;
+        static const char *const kNames[] = { "cost + pivot", "cost + small", "cost + large", "cost + diag" };
+        if (s_turn_mode == TURN_DIAG) snprintf(info->name, sizeof(info->name), "cost + diag (%u)", (unsigned)s_diag_cost);
+        else snprintf(info->name, sizeof(info->name), "%s", kNames[s_turn_mode]);
     } else {
-        TimeDijkstra_Compute(&s_time_solver, map, WALL_VIEW_KNOWN, &prof, s_goals, s_goal_count, s_start, DIR_NORTH);
+        // turn = diag なら、斜めも使って走行時間が最短の経路
+        bool diag = (s_turn_mode == TURN_DIAG);
+        TimeDijkstra_ComputeEx(&s_time_solver, map, WALL_VIEW_KNOWN, &prof, s_goals, s_goal_count, s_start, DIR_NORTH,
+                               diag);
         if (!TimeDijkstra_BuildRun(&s_time_solver, &s_run)) return 0;
-        snprintf(info->name, sizeof(info->name), "time-optimal");
+        snprintf(info->name, sizeof(info->name), diag ? "time-optimal + diag" : "time-optimal");
     }
     static float t[RUN_LIST_MAX];
     float total = 0.0f;
@@ -412,7 +481,7 @@ MSIM_EXPORT int msim_run_plan(int kind, const MsimMaze *maze, MsimRun *out, int 
         out[n].type = c->type; // RunType と MSIM_RUN_* は同じ番号
         out[n].halves = c->halves;
         out[n].time_s = t[i];
-        out[n].v = (c->type == RUN_STRAIGHT) ? 0.0f : prof.v_turn[c->type];
+        out[n].v = RunType_IsTurn((RunType)c->type) ? prof.v_turn[c->type] : 0.0f;
         n++;
     }
     return n;

@@ -40,6 +40,16 @@ void Slalom_Turn90Offsets(const SlalomShape *s, float span_mm, float *pre_mm, fl
     *post_mm = span_mm - s->side_mm;
 }
 
+void Slalom_TurnOffsets(const SlalomShape *s, float angle_deg, float leg_in_mm, float leg_out_mm,
+                        float *pre_mm, float *post_mm) {
+    // 曲がり始めの向きを x、曲がる側を y とすると、曲がり終わりの所は leg_in·(1, 0) + leg_out·(cos θ, sin θ)。
+    // pre·(1, 0) + (forward, side) + post·(cos θ, sin θ) がそこに着くように、post は y から、pre は x から決める
+    float th = angle_deg * DEG_TO_RAD;
+    float c = cosf(th), sn = sinf(th);
+    *post_mm = leg_out_mm - s->side_mm / sn;
+    *pre_mm = leg_in_mm + leg_out_mm * c - s->forward_mm - *post_mm * c;
+}
+
 void Slalom_SolveOmegaForSide(SlalomParams *p, float side_mm) {
     // 最高角速度が大きいほど小さく回る(横に移る量が減る)ので、二分法で求める
     float lo = 30.0f, hi = 3000.0f;

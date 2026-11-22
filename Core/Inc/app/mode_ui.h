@@ -39,13 +39,15 @@ typedef enum {
     MODE_SENSOR_SPIN,   // 区画の真ん中で回りながら壁センサーを記録する(plant_sim の壁センサーのモデル用)
     MODE_SEARCH_SPIN,   // 探索(Dijkstra)で、初めて入った区画ごとに真ん中で回る(壁センサーのモデル用)
     MODE_FAST_BANDS,    // 速度帯の最短走行(速度帯を順に、行きと帰りを自動でくり返す)
-    MODE_RUN_TEST,      // RUN の中の TEST(ログ取りの走行: FAST_SWEEP / SEARCH_SPIN / FAST_BANDS / LONG_LOG / SLIP から選ぶ)
+    MODE_RUN_TEST,      // RUN の中の TEST(ログ取りの走行: FAST_SWEEP / SEARCH_SPIN / FAST_BANDS / LONG_LOG / SLIP / DIAG / PLAN から選ぶ)
     MODE_AUTONOMOUS,    // 自立賞(探索 → 最短走行と帰り道を何本か。触らずに最後まで)
     MODE_LED_ALL_ON,    // すべての LED(シフトレジスタの16個と直結の6個)を点けたままにする
     MODE_GYRO_SCALE_TEST, // ジャイロの倍率の試験(前の壁を見ながら左右に何回も回る)
     MODE_FRONT_WALL_TEST, // 前壁の物差しの試験(FW1 止めて測る / FW2 走って測る)
     MODE_SLIP_TURN_TEST,  // 小回りの滑りを止めて測る試験(T1 小回り 1 回 / T2 右 → 左)
     MODE_FAST_ALL,        // 最短走行の制御全部乗せ(横壁追従・壁切れ補正・小回りの前壁補正・ゴールの前壁合わせ)
+    MODE_DIAG_TEST,       // 斜めの旋回の試験(45°・135°・V90・柱を回る V90 を1つ走る。RUN の TEST の中)
+    MODE_PLAN_BENCH,      // 経路の計算時間の試験(モーターは動かさない。RUN の TEST の中)
     MODE_COUNT
 } RobotMode;
 

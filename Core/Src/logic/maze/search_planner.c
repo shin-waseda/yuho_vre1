@@ -26,6 +26,8 @@ void SearchPlanner_Init(SearchPlanner *sp, WallMap *map, SearchAlgo algo,
     sp->full_route_valid = false;
     sp->full_target_count = 0;
     sp->full_pending = false;
+    sp->full_diag = NULL;
+    sp->full_diag_cell_x10 = MAZE_COST_DIAG_CELL_X10;
     sp->goal_tour = false;
     sp->goal_visited = 0;
     sp->tour_target_count = 0;
@@ -45,6 +47,16 @@ void SearchPlanner_StartFull(SearchPlanner *sp) {
 // コストは最短走行(PrepareFastRoute)と同じ MazeCost_Default()。ゴールへ行けなければ false。
 // 計算にはプランナーの作業領域を使う(この後の NextDir で上書きするので、足立法でも使える)。
 static bool FullComputeRoute(SearchPlanner *sp) {
+    if (sp->full_diag != NULL) { // 斜めのコストで選ぶ
+        // スタートのノードのコストが決まったら止める(経路はスタートからたどるので同じ。計算の時間を短くするため)
+        DiagRoute_ComputeFrom(sp->full_diag, sp->map, WALL_VIEW_SEARCH, NULL, sp->full_diag_cell_x10,
+                              sp->goals, sp->goal_count, sp->start, sp->start_heading);
+        sp->full_route_len = DiagRoute_BuildDirs(sp->full_diag, sp->start, sp->start_heading,
+                                                 sp->full_route, MAZE_CELL_COUNT);
+        MazePos q = sp->start;
+        for (uint16_t i = 0; i < sp->full_route_len; i++) MazePos_Step(q, (Direction)sp->full_route[i], &q);
+        return MazePos_InList(q, sp->goals, sp->goal_count);
+    }
     MazeSolver *s = &sp->work.solver;
     Dijkstra_ComputeFrom(s, sp->map, WALL_VIEW_SEARCH, NULL, sp->goals, sp->goal_count,
                          sp->start, sp->start_heading);

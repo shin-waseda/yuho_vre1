@@ -326,6 +326,16 @@
 #define MAZE_COST_STRAIGHT 1
 #define MAZE_COST_TURN90   7
 #define MAZE_COST_TURN180  50
+// 最短走行で斜めを使うときの経路(logic/maze/diag_route)で、前の区画と逆の向きへ曲がって抜ける(ジグザグを続ける)区画の
+// コスト。その区画の 直進 + 90° の代わりに使い、直進の1区画を 10 とした値で持つ。小さいほど斜めの区間の多い経路を選ぶ。
+// 7 は斜めの1区間と直進の1区画の道のりの比(127/180)。直進より小さくしないと、遠回りの長い斜めは選ばれない
+// (2026-11-07。2023 学生クラシックの 26 区画の斜め。今は maze_sim だけで使う)
+#define MAZE_COST_DIAG_CELL_X10 7
+// 全面探索で確かめる最短経路の候補を、斜めのコストの経路(logic/maze/diag_route)で選ぶ(1)か、今までの Dijkstra(0)か。
+// 1 なら、最短走行の DIAG で使う経路の上の壁を確かめに行く(遠回りの長い斜めも)。2026-11-07
+#define SEARCH_FULL_DIAG 1
+// 経路の計算時間の試験(RUN の TEST の PLAN)で、1つの計算をくり返す回数(HAL_GetTick の 1ms 刻みで割るので多めに)
+#define PLAN_BENCH_REPEAT 100u
 
 // 探索の帰りに、4方向の壁がすべて分かっている区画へ入るときに上乗せするコスト。
 // 大きいほど、まだ見ていない区画を通って帰ろうとする(帰りの距離は延びる)。
@@ -535,6 +545,26 @@
 #define FAST_LARGE180_ALPHA_DPS2  3000.0f
 #define FAST_LARGE180_PRE_ADJ_MM  0.0f
 #define FAST_LARGE180_POST_ADJ_MM 0.0f
+// 斜め(2026-11-07．logic/maze/run_path の表の位置．入りと出は同じ形)．前後のオフセットは角までの折れ線から計算する
+// (Slalom_TurnOffsets．入りと出で前後が入れ替わる)．実機ではまだ走らせていない(最短走行の DIAG と，RUN の TEST の DIAG で走る)．
+// どれも仮の値で，横加速度を大回りと同じくらい(0.25〜0.3G)にし，オフセットが負にならないようにした
+// 45°: 境目 → 前 1.5区画・横 0.5区画の斜めの点(折れ線 180mm + 127mm)
+#define FAST_D45_V_MM_S           600.0f
+#define FAST_D45_OMEGA_DPS        240.0f
+#define FAST_D45_ALPHA_DPS2       3000.0f
+// 135°: 境目 → 前 0・横 1区画の斜めの点(折れ線 180mm + 255mm)．回れる半径が 75mm までなので遅め
+#define FAST_D135_V_MM_S          400.0f
+#define FAST_D135_OMEGA_DPS       400.0f
+#define FAST_D135_ALPHA_DPS2      5000.0f
+// V90: 斜めの点 → 斜めの点(折れ線 127mm + 127mm)
+#define FAST_DV90_V_MM_S          500.0f
+#define FAST_DV90_OMEGA_DPS       300.0f
+#define FAST_DV90_ALPHA_DPS2      4000.0f
+// 柱を回る V90(DV90P．斜めの点 → 斜めの点．角はジグザグが通り抜ける境目で，内側に柱が1本入る)．折れ線は V90 と同じだが，
+// 柱に近づかないよう小さく回る(柱との隙間 ≒ 90 − 0.41 × 回る半径 mm．仮の値で前後のオフセット約 34mm，角から曲がり始めまで約 93mm)
+#define FAST_DV90P_V_MM_S         450.0f
+#define FAST_DV90P_OMEGA_DPS      330.0f
+#define FAST_DV90P_ALPHA_DPS2     5000.0f
 
 // ============================================================
 // スラローム(小回り 90°。探索・最短走行・SLALOM の試験で共通)
@@ -582,7 +612,8 @@
 // 2026-11-06: K・C を測る探索のため，0 に戻して MAZE_GOALS((7,7)〜(8,8))を使う
 // 2026-11-06: 小回りの調整(SLALOM_PRE/POST_ADJ_MM)を探索で確かめるため，1 にして SEARCH_TEST_GOALS を使う
 // 2026-11-07: ユーザーの依頼で 0 に戻して MAZE_GOALS((7,7)〜(8,8))を使う
-#define SEARCH_USE_TEST_GOAL    0
+// 2026-11-07: 試しの迷路のゴールが (1,0) なので(ユーザー談)，1 にして SEARCH_TEST_GOALS を使う(feature/diagonal-run)
+#define SEARCH_USE_TEST_GOAL    1
 #define SEARCH_TEST_GOAL_COUNT  1
 #define SEARCH_TEST_GOALS       { { 1, 0 } }
 
@@ -600,5 +631,10 @@
 #define RUN_V_SMALL90_MM_S     600.0f // 小回り90°(探索と同じスラローム)
 #define RUN_V_LARGE90_MM_S     850.0f // 大回り90°
 #define RUN_V_LARGE180_MM_S    850.0f // 大回り180°
+// 斜め(2026-11-07)．円弧は角までの折れ線の短い方に収まる一番大きなもの(RunType_TurnLength)で，同じく v = √(a × r)
+#define RUN_V_D45_MM_S        1100.0f // 45°(r ≈ 307mm)
+#define RUN_V_D135_MM_S        550.0f // 135°(r ≈ 75mm)
+#define RUN_V_DV90_MM_S        700.0f // V90(r ≈ 127mm)
+#define RUN_V_DV90P_MM_S       600.0f // 柱を回る V90(r = 半区画 = 90mm に抑える．柱との隙間 約 53mm)
 
 #endif
