@@ -13,6 +13,7 @@ MENU
 │   ├─ 1 SEARCH ─ MAP[1 NEW, 2 CONTINUE] → SCOPE[1 往復, 2 片道, 3 全面] → ALGO[1 Dijkstra, 2 足立法]
 │   │             → SPEED → ACCEL → SLALOM → TURN[1 スラローム, 2 超信地旋回] → 手かざし(終わったら次の手かざしを待つ)
 │   ├─ 2 FAST ─── SPEED → ACCEL(最初は SPEED に合う値) → SMALL TURN → TURN[1 SMALL, 2 LARGE, 3 PIVOT]
+│   │             → (LARGE なら LARGE90 → LARGE180) → ピピピ → 補正[WALL, EDGE, SLALOM FRONT, TURN BACK ALIGN: 1 OFF, 2 ON][LAT FB: 1 ON, 2 OFF]
 │   │             → 手かざし(終わったら次の手かざしを待つ)
 │   ├─ 3 TEST ─── TEST で選ぶ
 │   │   ├─ 1 FAST_SWEEP ── SPEED FROM → SPEED TO → SMALL FROM → SMALL TO → TYPE[1 SMALL, 2 LARGE, 3 両方] → 手かざし
@@ -33,7 +34,7 @@ MENU
 │   ├─ 10 SLALOM_SWEEP ─── FROM(s90) → TO(s90)
 │   ├─ 11 STRAIGHT_SWEEP ─ SPEED FROM → SPEED TO → ACCEL FROM → ACCEL TO
 │   ├─ 12 SENSOR_SPIN ──── なし(真ん中に置いて手かざし)
-│   └─ 13 LED_ALL_ON ───── なし(すべての LED を点けたまま)
+│   └─ 13 CAMERA_LED ───── なし(直結の LED_1〜6 だけ点けたまま)
 ├─ 3 SD
 │   ├─ 1 SD_DUMP ───── まだ送っていないログを UART へ送る
 │   ├─ 2 SD_DUMP_ALL ─ 全部のログを UART へ送る

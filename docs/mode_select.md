@@ -36,8 +36,8 @@
 
 | 番号 | モード | 選ぶもの(この順．最後に手かざし) | ログ |
 |---|---|---|---|
-| 1 | SEARCH | MAP(1 初期化，2 重ねる) → SCOPE(1 往復，2 片道，3 全面) → ALGO(1 Dijkstra，2 足立法) → SPEED → ACCEL → SLALOM → TURN(1 スラローム，2 超信地旋回) | `search/search_NNNN` |
-| 2 | FAST | SPEED → ACCEL(最初は SPEED に合う値) → SMALL TURN → TURN(1 SMALL，2 LARGE，3 PIVOT) | `search/fast_NNNN` |
+| 1 | SEARCH | MAP(1 初期化，2 重ねる) → SCOPE(1 往復，2 片道，3 全面) → ALGO(1 Dijkstra，2 足立法) → SPEED → ACCEL → SLALOM → TURN(1 スラローム，2 超信地旋回)(壁の補正は選ばず全部入る) | `search/search_NNNN` |
+| 2 | FAST | SPEED → ACCEL(最初は SPEED に合う値) → SMALL TURN → TURN(1 SMALL，2 LARGE，3 PIVOT) → (LARGE なら LARGE90 → LARGE180) → ピピピ → WALL → EDGE → SLALOM FRONT → TURN BACK ALIGN(どれも 1 OFF，2 ON) → LAT FB(1 ON，2 OFF) | `search/fast_NNNN` |
 | 3 | TEST | TEST(1 FAST_SWEEP，2 SEARCH_SPIN，3 FAST_BANDS，4 LONG_LOG) → それぞれの選ぶもの | 下を見る |
 | 4 | **AUTO**(自立賞) | なし(設定は `params.h` の `AUTONOMOUS_*`) | `search/search_NNNN`，`search/fast_NNNN`，`search/back_NNNN` |
 
@@ -85,7 +85,7 @@
 | 10 | SLALOM_SWEEP | FROM(s90) → TO(s90) | `slalom/s90r_NNNN`，`slalom/s90l_NNNN` |
 | 11 | STRAIGHT_SWEEP | SPEED FROM → SPEED TO → ACCEL FROM → ACCEL TO | `straight/sweep_NNNN` |
 | 12 | SENSOR_SPIN | なし(真ん中に手で置いて手かざし．左に1周・右に1周) | `sensor/spin_NNNN` |
-| 13 | LED_ALL_ON | なし(すべての LED を点けたままにする．戻るにはリセット) | ― |
+| 13 | CAMERA_LED | なし(カメラの校正用に直結の LED_1〜6 だけを点けたままにする．戻るにはリセット) | ― |
 
 - **LONG_LOG**: 探索を速さを変えて，次に最短走行を小回り・大回りで，続けて走る．PART 1〜4 は探索(直進の速さ 300 / 400 / 500 / 600)，
   5 は最短走行の小回り，6 は大回り．STEP は PART の中の番号(電池を替えた後に続きから始めるため)．

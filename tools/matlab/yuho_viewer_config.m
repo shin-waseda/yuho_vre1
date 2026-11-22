@@ -7,6 +7,7 @@ function cfg = yuho_viewer_config(root)
 %   - 列の組: yc.plot_groups
 %   - イベントの名前と中身: Core/Inc/app/log_event.h の LOG_EV_名前 = 番号, // a:名前 ...
 %   - 迷路の大きさ: Core/Inc/params.h の MAZE_SIZE
+%   - 軌道のスリップアングル: Core/Inc/params.h の SLALOM_SLIP_K・SLALOM_SLIP_C_S
 %   - 軌道の基準: 尻当て(SETPOS)が2回終わった所 → なければ最初の STEP → なければ記録の始め
 %   - 合わせ直し: STEP のたびに区画の境界(止まっていれば真ん中)へ
 %   - 壁: 機体の地図(MAP_CELLS イベント)と、STEP で読んだ壁
@@ -31,8 +32,11 @@ cfg.maze.kind = 'classic';
 try
     p = yc.read_params(fullfile(root, 'Core', 'Inc', 'params.h'));
     if isfield(p, 'MAZE_SIZE'), cfg.maze.size = p.MAZE_SIZE; end
+    % スリップアングルは機体と同じモデル・係数(slalom.c の SlipTick)
+    if isfield(p, 'SLALOM_SLIP_K'), cfg.trajectory.slip_k = p.SLALOM_SLIP_K; end
+    if isfield(p, 'SLALOM_SLIP_C_S'), cfg.trajectory.slip_c_s = p.SLALOM_SLIP_C_S; end
 catch
-    % params.h が読めなければ、クラシックの 16
+    % params.h が読めなければ、クラシックの 16・スリップなし
 end
 
 cfg.trajectory.anchor = @anchor;

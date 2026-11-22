@@ -127,20 +127,82 @@ SlalomOffsets Slalom_SmallTurnOffsets(const SlalomParams *p) {
     const float half = SECTION_MM * 0.5f; // 小回りは境界の真ん中 → 隣の境界の真ん中
     Slalom_Turn90Offsets(&sh, half, &pre0, &post0);
 
-    // スリップ: 出口のずれを打ち消すように直す(前を伸ばすと出口の線が外へずれ、後ろを伸ばすと出口が先へ進む)
     float pre_adj = 0.0f, post_adj = 0.0f;
+#if !SLIP_ESTIMATION_ENABLE
+    // スリップ: 出口のずれを打ち消すように直す(前を伸ばすと出口の線が外へずれ、後ろを伸ばすと出口が先へ進む)。
+    // SLIP_ESTIMATION_ENABLE のときは推定の位置にスリップを入れて FB で打ち消すので、ここでは直さない
     for (int i = 0; i < 3; i++) {
         SlalomSlipError e = Slalom_SlipError90(p, half, pre0 + pre_adj, post0 + post_adj,
                                                SECTION_MM, SLALOM_SLIP_K, SLALOM_SLIP_C_S);
         pre_adj -= e.lat_final_mm;
         post_adj -= e.along_mm;
     }
+#endif
     // スリップ以外の遅れ(速さによらず一定。300〜600mm/s のログで確かめた)
     post_adj += SLALOM_EXTRA_LAG_MM;
     // 手で足す分
     pre_adj += SLALOM_PRE_ADJ_MM;
     post_adj += SLALOM_POST_ADJ_MM;
 
+    SlalomOffsets o = { pre0 + pre_adj, post0 + post_adj, pre_adj, post_adj };
+    return o;
+}
+
+SlalomTurnSlip Slalom_SlipErrorTurn(const SlalomParams *p, float extra_mm, float K, float C) {
+    SlalomTurnSlip e = { 0.0f, 0.0f };
+    if (p->v_mm_s <= 0.0f) return e;
+    // 左に曲がるとして、入る点 (0, 0)・入る向き +x(0°)。スリップなしの機体を一緒に進めて比べる
+    SlipSim s = { 0.0f, 0.0f, 0.0f, 0.0f, p->v_mm_s, K, C };
+    SlipSim ideal = { 0.0f, 0.0f, 0.0f, 0.0f, p->v_mm_s, 0.0f, 0.0f };
+    VelocityProfile prof;
+    VelocityProfile_Start(&prof, p->angle_deg, 0.0f, p->omega_dps, 0.0f, p->alpha_dps2);
+    uint32_t ticks = 0;
+    while (!prof.done && ticks < 100000u) {
+        VelocityProfile_Step(&prof, CONTROL_DT_S);
+        SlipTick(&s, prof.v, CONTROL_DT_S);
+        SlipTick(&ideal, prof.v, CONTROL_DT_S);
+        ticks++;
+    }
+    SlipStraight(&s, extra_mm);
+    SlipStraight(&ideal, extra_mm);
+    // 出る向き a の前後と、外(左に曲がったので右手 = (sin a, −cos a))へのずれ
+    float a = p->angle_deg * DEG_TO_RAD;
+    float dx = s.x - ideal.x, dy = s.y - ideal.y;
+    e.along_mm = dx * cosf(a) + dy * sinf(a);
+    e.lat_mm = dx * sinf(a) - dy * cosf(a);
+    return e;
+}
+
+// オフセットで打ち消すスリップのずれ。SLIP_ESTIMATION_ENABLE のときは推定の位置にスリップを入れて FB で打ち消すので 0
+static SlalomTurnSlip OffsetSlip(const SlalomParams *p) {
+#if SLIP_ESTIMATION_ENABLE
+    (void)p;
+    SlalomTurnSlip e = { 0.0f, 0.0f };
+    return e;
+#else
+    return Slalom_SlipErrorTurn(p, SECTION_MM, SLALOM_SLIP_K, SLALOM_SLIP_C_S);
+#endif
+}
+
+SlalomOffsets Slalom_Large90Offsets(const SlalomParams *p) {
+    SlalomShape sh = Slalom_ComputeShape(p);
+    float pre0, post0;
+    Slalom_Turn90Offsets(&sh, SECTION_MM, &pre0, &post0);
+    // スリップ: 前を伸ばすと出口の線が外へずれ、後ろを伸ばすと出口が先へ進む(小回りと同じ)。ずれはオフセットによらないので 1 回で決まる
+    SlalomTurnSlip e = OffsetSlip(p);
+    float pre_adj = -e.lat_mm + FAST_LARGE90_PRE_ADJ_MM;
+    float post_adj = -e.along_mm + FAST_LARGE90_POST_ADJ_MM;
+    SlalomOffsets o = { pre0 + pre_adj, post0 + post_adj, pre_adj, post_adj };
+    return o;
+}
+
+SlalomOffsets Slalom_Large180Offsets(const SlalomParams *p) {
+    SlalomShape sh = Slalom_ComputeShape(p);
+    float pre0, post0;
+    Slalom_Turn180Offsets(&sh, SECTION_MM, &pre0, &post0);
+    SlalomTurnSlip e = OffsetSlip(p);
+    float pre_adj = FAST_LARGE180_PRE_ADJ_MM;
+    float post_adj = -e.along_mm + FAST_LARGE180_POST_ADJ_MM;
     SlalomOffsets o = { pre0 + pre_adj, post0 + post_adj, pre_adj, post_adj };
     return o;
 }

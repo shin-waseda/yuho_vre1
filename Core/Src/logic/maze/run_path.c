@@ -34,13 +34,17 @@ static void SetTurn(RunTurnSpec turns[RUN_TYPE_COUNT], RunType r, RunType l, con
 }
 
 RunProfile RunProfile_ForSpeeds(float vmax, float accel, float small_v, RunTurnSpec turns[RUN_TYPE_COUNT]) {
+    return RunProfile_ForSpeedsLarge(vmax, accel, small_v, FAST_LARGE90_V_MM_S, FAST_LARGE180_V_MM_S, turns);
+}
+
+RunProfile RunProfile_ForSpeedsLarge(float vmax, float accel, float small_v, float large90_v, float large180_v,
+                                     RunTurnSpec turns[RUN_TYPE_COUNT]) {
     RunTurnSpec local[RUN_TYPE_COUNT];
     if (turns == NULL) turns = local;
     for (int t = 0; t < RUN_TYPE_COUNT; t++) {
         RunTurnSpec zero = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
         turns[t] = zero;
     }
-    float pre, post;
 
     // 小回り: 探索と同じ形(SLALOM_*)を small_v にする。前後のオフセットはずれのモデルから
     SlalomParams small = { SLALOM_V_MM_S, SLALOM_OMEGA_DPS, SLALOM_ALPHA_DPS2, 90.0f };
@@ -48,16 +52,18 @@ RunProfile RunProfile_ForSpeeds(float vmax, float accel, float small_v, RunTurnS
     SlalomOffsets so = Slalom_SmallTurnOffsets(&small);
     SetTurn(turns, RUN_SMALL90_R, RUN_SMALL90_L, &small, so.pre_mm, so.post_mm);
 
+    // 大回り: FAST_LARGE* の形を、曲がる軌跡を変えずに large90_v・large180_v にする(角速度は速さに比例、角加速度は2乗に比例)。
+    // 前後のオフセットはスリップのモデル + *_ADJ(Slalom_Large90Offsets / Slalom_Large180Offsets。SLIP の LARGE90・LARGE180 と同じ)
     SlalomParams l90 = { FAST_LARGE90_V_MM_S, FAST_LARGE90_OMEGA_DPS, FAST_LARGE90_ALPHA_DPS2, 90.0f };
-    SlalomShape sh = Slalom_ComputeShape(&l90);
-    Slalom_Turn90Offsets(&sh, SECTION_MM, &pre, &post);
-    SetTurn(turns, RUN_LARGE90_R, RUN_LARGE90_L, &l90, pre + FAST_LARGE90_PRE_ADJ_MM, post + FAST_LARGE90_POST_ADJ_MM);
+    Slalom_ScaleToSpeed(&l90, large90_v);
+    SlalomOffsets o90 = Slalom_Large90Offsets(&l90);
+    SetTurn(turns, RUN_LARGE90_R, RUN_LARGE90_L, &l90, o90.pre_mm, o90.post_mm);
 
     SlalomParams l180 = { FAST_LARGE180_V_MM_S, 0.0f, FAST_LARGE180_ALPHA_DPS2, 180.0f };
-    Slalom_SolveOmegaForSide(&l180, SECTION_MM); // 横にちょうど1区画移る角速度
-    sh = Slalom_ComputeShape(&l180);
-    Slalom_Turn180Offsets(&sh, SECTION_MM, &pre, &post);
-    SetTurn(turns, RUN_LARGE180_R, RUN_LARGE180_L, &l180, pre + FAST_LARGE180_PRE_ADJ_MM, post + FAST_LARGE180_POST_ADJ_MM);
+    Slalom_SolveOmegaForSide(&l180, SECTION_MM); // 横にちょうど1区画移る角速度(FAST_LARGE180_V_MM_S のとき)
+    Slalom_ScaleToSpeed(&l180, large180_v);
+    SlalomOffsets o180 = Slalom_Large180Offsets(&l180);
+    SetTurn(turns, RUN_LARGE180_R, RUN_LARGE180_L, &l180, o180.pre_mm, o180.post_mm);
 
     RunProfile prof = RunProfile_Default();
     prof.accel = accel;

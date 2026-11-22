@@ -10,13 +10,13 @@
 
 // 実行するモード(メニューの末端)。メニューの階層と並び順は mode_ui.c の表で決める。
 //   RUN : SEARCH(地図・行き先・アルゴリズム・速さなどを選ぶ) / FAST(最短走行) /
-//         TEST(ログ取りの走行: FAST_SWEEP / SEARCH_SPIN / FAST_BANDS / LONG_LOG / SLIP) / AUTO(自立賞)
+//         TEST(ログ取りの走行: FAST_SWEEP / SEARCH_SPIN / FAST_BANDS / LONG_LOG / SLIP / LAT_RULER) / AUTO(自立賞)
 //   TEST: SENSOR / SENSOR_LOG / VEL_PID / STRAIGHT / PIVOT / SLALOM / LED_TEST / PARTY /
-//         LONG_LOG / SLALOM_SWEEP / STRAIGHT_SWEEP / SENSOR_SPIN / LED_ALL_ON / GYRO_SCALE / FRONT_WALL
+//         LONG_LOG / SLALOM_SWEEP / STRAIGHT_SWEEP / SENSOR_SPIN / CAMERA_LED / GYRO_SCALE / FRONT_WALL
 //   SD  : DUMP / DUMP_ALL / STREAM_TEST
 //   4〜9: ログ取りのモードへのショートカット(選ぶとすぐ決まる。FAST_SWEEP 以外は値も params.h の SHORTCUT_* で決まっていて選ばない)
 //         4 STRAIGHT_SWEEP(v)，5 STRAIGHT_SWEEP(acc)，6 SLALOM_SWEEP(low)，7 SLALOM_SWEEP(high)，8 FAST_SWEEP，9 LONG_LOG，
-//         10 SENSOR_SPIN
+//         10 SENSOR_SPIN，11 STRAIGHT_SWEEP(long)
 typedef enum {
     MODE_SENSOR = 0,    // センサー・ジャイロ・エンコーダの値を表示し続ける
     MODE_SENSOR_LOG,    // 壁センサーの値を数秒ぶん記録する(止まった状態)
@@ -41,11 +41,12 @@ typedef enum {
     MODE_FAST_BANDS,    // 速度帯の最短走行(速度帯を順に、行きと帰りを自動でくり返す)
     MODE_RUN_TEST,      // RUN の中の TEST(ログ取りの走行: FAST_SWEEP / SEARCH_SPIN / FAST_BANDS / LONG_LOG / SLIP から選ぶ)
     MODE_AUTONOMOUS,    // 自立賞(探索 → 最短走行と帰り道を何本か。触らずに最後まで)
-    MODE_LED_ALL_ON,    // すべての LED(シフトレジスタの16個と直結の6個)を点けたままにする
+    MODE_CAMERA_LED,    // カメラの校正用に直結の LED_1〜6 だけを点けたままにする(LED_ALL_ON と差し替え。番号はそのまま)
     MODE_GYRO_SCALE_TEST, // ジャイロの倍率の試験(前の壁を見ながら左右に何回も回る)
     MODE_FRONT_WALL_TEST, // 前壁の物差しの試験(FW1 止めて測る / FW2 走って測る)
     MODE_SLIP_TURN_TEST,  // 小回りの滑りを止めて測る試験(T1 小回り 1 回 / T2 右 → 左)
     MODE_FAST_ALL,        // 最短走行の制御全部乗せ(横壁追従・壁切れ補正・小回りの前壁補正・ゴールの前壁合わせ)
+    MODE_LAT_RULER_TEST,  // 横の物差しの試験(区画の中で横に 5mm ずつ寄って、止まって横のセンサーを読む。RUN の TEST の 6)
     MODE_COUNT
 } RobotMode;
 

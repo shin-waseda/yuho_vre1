@@ -10,6 +10,7 @@
 #include "interface/sdcard.h"
 #include "interface/flash.h"
 #include "interface/fault_diag.h"
+#include "interface/sound.h"
 #include "logic/wall_sense.h"
 #include "logic/maze/search_planner.h"
 #include "logic/maze/maze_print.h"
@@ -84,6 +85,8 @@ static SearchAlgo s_search_algo = SEARCH_ALGO_DIJKSTRA; // 今の探索のアル
 static float s_fast_v = FAST_V_MM_S;     // 最短走行の直進の最高速度
 static float s_fast_small_v = FAST_SMALL_V_MM_S; // 最短走行の小回りの速さ
 static float s_fast_accel = FAST_ACCEL_MM_S2;    // 最短走行の直進の加速度
+static float s_fast_large90_v = FAST_LARGE90_V_MM_S;   // 最短走行の大回り 90° の速さ(RUN の FAST で LARGE のときに選ぶ)
+static float s_fast_large180_v = FAST_LARGE180_V_MM_S; // 最短走行の大回り 180° の速さ
 static float s_fast_decel = 0.0f;                // 最短走行の直進の減速度(0 なら加速度と FAST_DECEL_MAX_MM_S2 の小さい方)
 
 // 最短走行の直進の減速度(RunProfile の decel にも同じ値を入れる)
@@ -95,6 +98,9 @@ static const float kSearchSpeeds[] = SPEED_SELECT_SEARCH_V_MM_S;
 static const float kSearchTurnSpeeds[] = SPEED_SELECT_SEARCH_TURN_V_MM_S;
 static const float kFastSpeeds[] = SPEED_SELECT_FAST_V_MM_S;
 static const float kFastSmallSpeeds[] = SPEED_SELECT_FAST_SMALL_V_MM_S;
+static const float kLongFastSmallSpeeds[] = LONG_LOG_FAST_SMALL_V_MM_S; // 長い走行の最短走行の小回りの速さ
+static const float kFastLarge90Speeds[] = SPEED_SELECT_FAST_LARGE90_V_MM_S;
+static const float kFastLarge180Speeds[] = SPEED_SELECT_FAST_LARGE180_V_MM_S;
 static const float kAccels[] = SPEED_SELECT_ACCEL_MM_S2; // 探索・最短走行で選ぶ加速度(RUN の SEARCH・FAST)
 static const float kFastAccelForSpeed[] = FAST_ACCEL_FOR_SPEED_MM_S2; // kFastSpeeds と同じ並び
 static const float kFastDecelForSpeed[] = FAST_DECEL_FOR_SPEED_MM_S2;
@@ -306,14 +312,32 @@ static bool AlongSync(void) {
 // 前の壁で合わせる → 横の壁のほうへ 90° → その壁(前になる)で合わせる → 90°(横の壁は左を先に使う)。
 // 壁がない所は合わせを飛ばす(どこにも壁がなければ、その場で 180° 回るだけ)。
 // 探索で 180° の前壁合わせを選んだとき(CORR_FALIGN)も、前壁合わせを使う。
+// 回る向きは、180° のたびに左・右を入れ替える(2026-11-07。いつも左だと、ジャイロの倍率のずれが回った量だけたまる。
+// search_0044〜0047 では 180° で左回りが 1440° たまり、横壁追従が直した向きが 2° まで育った。前壁合わせで横の壁が
+// 片側にしかないときは、その壁のほうへ回る)。向きは走りの始め(StartRunBegin)で左に戻す
+static bool s_turn_back_left = true;
+
+// 横の壁に寄っているときは、寄っていない側へ回る(2026-11-07。寄っている側へ回ると、その側の前の角が壁に当たって回れない。
+// search_0081 は L 705 で左へ、search_0091 は R 600 で右へ回って止まった)。横の壁センサーが真ん中の基準(WALL_REF_L/R)より
+// TURN_BACK_AVOID_COUNTS 以上大きい側を「寄っている側」とし、両方ならより大きい側。どちらでもなければ左右交互の向き。
+// 壁の有無は見ない(壁がなければ値は小さいので寄っている側にならない。最短走行のゴールのように壁の観測がない所でも使える)
+static float TurnBackDir(float alt_dir) {
+    float near_l = (float)ad_l - (float)WALL_REF_L;
+    float near_r = (float)ad_r - (float)WALL_REF_R;
+    if (near_l < TURN_BACK_AVOID_COUNTS && near_r < TURN_BACK_AVOID_COUNTS) return alt_dir;
+    return (near_l > near_r) ? -1.0f : 1.0f; // 左に寄っていれば右へ、右に寄っていれば左へ
+}
+
 static bool TurnBack(DrivePos *dp, WallObservation walls) {
+    float dir = TurnBackDir(s_turn_back_left ? 1.0f : -1.0f); // + 左
+    s_turn_back_left = !s_turn_back_left;
     if (!SEARCH_FRONT_ALIGN_ENABLE && !(s_search_corr & CORR_FALIGN)) {
-        if (!SEARCH_TURN_BACK_SPLIT) return Pivot(180.0f);
-        return AlongSync() && Pivot(90.0f) && AlongSync() && Pivot(90.0f);
+        if (!SEARCH_TURN_BACK_SPLIT) return Pivot(180.0f * dir);
+        return AlongSync() && Pivot(90.0f * dir) && AlongSync() && Pivot(90.0f * dir);
     }
     if (walls.front && !FrontAlign(dp)) return false;
-    float side = walls.left ? 90.0f : walls.right ? -90.0f : 0.0f;
-    if (side == 0.0f) return Pivot(180.0f);
+    float side = (walls.left && walls.right) ? 90.0f * dir : walls.left ? 90.0f : walls.right ? -90.0f : 0.0f;
+    if (side == 0.0f) return Pivot(180.0f * dir);
     return Pivot(side) && FrontAlign(dp) && Pivot(side);
 }
 
@@ -640,6 +664,7 @@ static uint16_t s_band_total = 0;
 
 // 走り出す前の準備(探索・最短走行・帰り道で共通): 制御を有効にし、記録を始める。今いる所(区画の真ん中)が基準になる。
 static void StartRunBegin(DrivePos *dp) {
+    s_turn_back_left = true; // 180° の向きは、走りごとに左から始める(TurnBack)
     App_SetPositionHold(true);
     App_SetWallControl(false); // 横壁追従を使うのは、壁の補正を選んだときの境界から境界への直進の間だけ
     App_SetLateralControl(!(s_search_corr & CORR_LAT_OFF)); // 探索で切ると選んだときだけ切る(ほかの走りは使う)
@@ -654,6 +679,7 @@ static void StartRunBegin(DrivePos *dp) {
     LogBootInfo();
     if (s_run_kind == 1.0f) {
         Ev(LOG_EV_FAST_PARAMS, s_fast_v, s_fast_accel, s_fast_small_v, s_run_type, FastDecel());
+        Ev(LOG_EV_FAST_LARGE, s_fast_large90_v, s_fast_large180_v, (float)s_search_corr, 0.0f, 0.0f);
     } else {
         Ev(LOG_EV_SEARCH_PARAMS, s_search_v, s_search_turn_v, s_search_accel, s_search_slalom ? 1.0f : 0.0f,
            (float)s_search_corr);
@@ -691,6 +717,12 @@ static void SaveMapAtGoal(void) {
     bool saved = Flash_WriteUserData(&s_map, sizeof(s_map));
     App_SetOutputPaused(false);
     Ev(LOG_EV_MAP_SAVED, saved ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    // ゴールの音は flash に書いた後に鳴らす(書いている間は SysTick も止まり、鳴っている音が切れずに続くため)
+    if (saved) {
+        Sound_Finish();
+    } else {
+        Sound_Error();
+    }
     DelayWatching(SEARCH_TURN_WAIT_MS);
     LED_SetDirectPattern(LedIdlePattern());
 }
@@ -878,6 +910,7 @@ static void PrepareStart(const char *log_name) {
     LED_SetDirectPattern(0x00u);
     s_log_file = Logger_StreamBegin(path, sizeof(path));
     printf("log: %s\r\n", s_log_file ? path : "(no SD, not saved)");
+    if (s_log_file) Sound_LogStart();
 }
 
 // ログのファイルを閉じる(探索・最短走行で共通)。
@@ -915,9 +948,11 @@ static void EndRunLog(void) {
         s_log_file = false;
         printf("log %s (dropped %lu rows)\r\n", saved ? "saved" : "save failed", (unsigned long)dropped);
         if (saved) {
+            Sound_LogSaved();
             ShowLogSaved();
         } else {
             s_log_failed = true;
+            Sound_Error();
             LED_SetDirectPattern(LedIdlePattern());
         }
     } else {
@@ -1024,14 +1059,9 @@ void SearchMenu_Run(void) {
                                          (uint8_t)(sizeof(kSearchTurnSpeeds) / sizeof(kSearchTurnSpeeds[0])),
                                          SLALOM_V_MM_S);
     s_search_slalom = (ModeUI_SelectValue("TURN(1 SLALOM 2 PIVOT)", "", kTwo, 2u, 1.0f) == 1.0f);
-    // 壁の補正を1つずつ選ぶ(どれも回さずに決めると OFF)。補正の影響を比べるため(2026-11-05)
-    s_search_corr = 0u;
-    if (ModeUI_SelectValue("WALL(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_WALL;
-    if (ModeUI_SelectValue("EDGE(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_EDGE;
-    if (ModeUI_SelectValue("SLALOM FRONT(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_SFRONT;
-    if (ModeUI_SelectValue("TURN BACK ALIGN(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_FALIGN;
-    // エンコーダとジャイロで見た横のずれの FB(回さずに決めると今までどおり ON)。横壁追従だけで走るときは OFF にする
-    if (ModeUI_SelectValue("LAT FB(1 ON 2 OFF)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_LAT_OFF;
+    // 壁の補正は全部入れる(横のずれの FB も入れたまま)。2026-11-21 にユーザーの依頼で選ぶのをやめた
+    // (前は 2026-11-05 から1つずつ選んでいた。補正を選ぶのは最短走行の FastRun_Run に移した)
+    s_search_corr = CORR_ALL;
 
     static const char *const kMapNames[] = { "", "NEW", "CONTINUE" };
     static const char *const kScopeNames[] = { "", "ROUND", "ONE-WAY", "FULL" };
@@ -1083,7 +1113,8 @@ static FastTurn s_fast_turn[RUN_TYPE_COUNT];
 
 // 旋回の形を計算し、経路の計算に使う RunProfile も作る(計算は logic の RunProfile_ForSpeeds。maze_sim と同じ)
 static RunProfile ComputeFastTurns(void) {
-    RunProfile prof = RunProfile_ForSpeeds(s_fast_v, s_fast_accel, s_fast_small_v, s_fast_turn);
+    RunProfile prof = RunProfile_ForSpeedsLarge(s_fast_v, s_fast_accel, s_fast_small_v, s_fast_large90_v,
+                                                s_fast_large180_v, s_fast_turn);
     prof.decel = FastDecel(); // 速度帯で減速度を決めたとき(FAST_BANDS)も、経路の時間の計算を走りに合わせる
 
     static const RunType kTurns[] = { RUN_SMALL90_R, RUN_LARGE90_R, RUN_LARGE180_R };
@@ -1381,7 +1412,8 @@ void FastRun_Run(void) {
     const MazePos *goals;
     uint8_t goal_count = GetGoals(&goals);
 
-    // 直進の最高速度・加速度・小回り(スラローム)の速さ・走り方を選ぶ(大回りは FAST_LARGE* のまま。電源を切るまでそのまま)。
+    // 直進の最高速度・加速度・小回り(スラローム)の速さ・走り方を選ぶ。走り方が LARGE なら大回り 90°・180° の速さも選ぶ
+    // (選ばなければ FAST_LARGE* の速さ。電源を切るまでそのまま)。
     // 加速度は、最高速度に合う値(FAST_ACCEL_FOR_SPEED_MM_S2)から始める(回さずに決めればその値)。
     // 減速度は加速度から決める(FAST_DECEL_MAX_MM_S2 まで)
     s_fast_v = ModeUI_SelectValue("SPEED", "mm/s", kFastSpeeds,
@@ -1401,8 +1433,36 @@ void FastRun_Run(void) {
     static const float kTurnValues[] = { 1.0f, 2.0f, 3.0f };
     float turn = ModeUI_SelectValue("TURN(1 SMALL 2 LARGE 3 PIVOT)", "", kTurnValues, 3u, 1.0f);
     uint8_t type = (turn == 3.0f) ? 0u : (turn == 2.0f) ? 2u : 1u;
-    printf("FAST RUN: v=%.0f mm/s accel=%.0f decel=%.0f, small turn %.0f mm/s\r\n",
-           s_fast_v, s_fast_accel, FastDecel(), s_fast_small_v);
+    if (type == 2u) {
+        // 大回りの速さ(2026-11-08)。回さずに決めれば FAST_LARGE* の速さ
+        s_fast_large90_v = ModeUI_SelectValue("LARGE90", "mm/s", kFastLarge90Speeds,
+                                              (uint8_t)(sizeof(kFastLarge90Speeds) / sizeof(kFastLarge90Speeds[0])),
+                                              FAST_LARGE90_V_MM_S);
+        s_fast_large180_v = ModeUI_SelectValue("LARGE180", "mm/s", kFastLarge180Speeds,
+                                               (uint8_t)(sizeof(kFastLarge180Speeds) / sizeof(kFastLarge180Speeds[0])),
+                                               FAST_LARGE180_V_MM_S);
+    }
+    // 速さを選び終えたらピピピと鳴らし、続けて壁の補正を1つずつ選ぶ(回さずに決めると補正なし、横のずれの FB は ON)。
+    // どれかを入れたら制御全部乗せ(s_fast_all)の走りで、選んだものだけを使う(2026-11-21。ユーザーの依頼)。
+    // FAST_ALL(FastAll_Run)から来たときは全部入れてあるので選ばない
+    if (!s_fast_all) {
+        static const float kTwo[] = { 1.0f, 2.0f };
+        Sound_Ready();
+        Sound_Wait();
+        s_search_corr = 0u;
+        if (ModeUI_SelectValue("WALL(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_WALL;
+        if (ModeUI_SelectValue("EDGE(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_EDGE;
+        if (ModeUI_SelectValue("SLALOM FRONT(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_SFRONT;
+        if (ModeUI_SelectValue("TURN BACK ALIGN(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_FALIGN;
+        if (ModeUI_SelectValue("LAT FB(1 ON 2 OFF)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_LAT_OFF;
+        s_fast_all = (s_search_corr & CORR_ALL) != 0u;
+    }
+    printf("FAST RUN: v=%.0f mm/s accel=%.0f decel=%.0f, small turn %.0f mm/s, large90 %.0f, large180 %.0f mm/s\r\n",
+           s_fast_v, s_fast_accel, FastDecel(), s_fast_small_v, s_fast_large90_v, s_fast_large180_v);
+    printf("FAST RUN: corr wall %s edge %s slalom-front %s turn-back-align %s, lateral FB %s\r\n",
+           (s_search_corr & CORR_WALL) ? "ON" : "OFF", (s_search_corr & CORR_EDGE) ? "ON" : "OFF",
+           (s_search_corr & CORR_SFRONT) ? "ON" : "OFF", (s_search_corr & CORR_FALIGN) ? "ON" : "OFF",
+           (s_search_corr & CORR_LAT_OFF) ? "OFF" : "ON");
     PrintSettings(goals, goal_count);
 
     if (FailSafe_IsTripped()) FailSafe_Halt(); // 起動時の低電圧など
@@ -1442,6 +1502,7 @@ void FastRun_Run(void) {
         LogMap(); // 走った地図(flash から読んだもの)
         EndRunLog();
         printf("fast run (%s) %s\r\n", kTypes[type], done ? "finished" : "stopped");
+        if (done && !s_log_failed) Sound_Finish(); // ログを残せなかったときは EndRunLog の失敗の音のまま
     }
 }
 
@@ -1542,7 +1603,7 @@ static bool FastRunAndReturn(uint8_t type, const MazePos *goals, uint8_t goal_co
 
 // ---- 長い走行(ログを取るための試験のモード)----
 // 探索を、直進の速さ × スラロームの速さの組み合わせ(LONG_LOG_SEARCH_V_MM_S × SPEED_SELECT_SEARCH_TURN_V_MM_S)で
-// LONG_LOG_REPEAT 回ずつ走り、次に最短走行を、小回り(SMALL)を小回りの速さ(SPEED_SELECT_FAST_SMALL_V_MM_S)ごとに、
+// LONG_LOG_REPEAT 回ずつ走り、次に最短走行を、小回り(SMALL)を小回りの速さ(LONG_LOG_FAST_SMALL_V_MM_S)ごとに、
 // 大回り(LARGE)を1通り、LONG_LOG_REPEAT 回ずつ走る(直進は FAST_V_MM_S)。最短走行の後はゴールからスタートへ自分で戻る。
 // 置き直さずに続ける(探索はスタートに戻って北を向いて終わる)。1回ごとに別のログになる(search / fast / back)。
 // 走る順は「段」と「その中の番号」で数える(電池を替えた後に続きから始めるため。選ぶ画面の LED は 15 個まで):
@@ -1563,9 +1624,9 @@ typedef struct {
 #define COUNT_OF(a) ((uint8_t)(sizeof(a) / sizeof((a)[0])))
 #define LONG_PART_COUNT (COUNT_OF(kLongSearchSpeeds) + 2u)
 #define LONG_RUN_MAX (COUNT_OF(kLongSearchSpeeds) * COUNT_OF(kSearchTurnSpeeds) * LONG_LOG_REPEAT + \
-                      COUNT_OF(kFastSmallSpeeds) * LONG_LOG_REPEAT + LONG_LOG_REPEAT)
+                      COUNT_OF(kLongFastSmallSpeeds) * LONG_LOG_REPEAT + LONG_LOG_REPEAT)
 _Static_assert(COUNT_OF(kSearchTurnSpeeds) * LONG_LOG_REPEAT <= 15u, "too many steps in a part for the LED display");
-_Static_assert(COUNT_OF(kFastSmallSpeeds) * LONG_LOG_REPEAT <= 15u, "too many steps in a part for the LED display");
+_Static_assert(COUNT_OF(kLongFastSmallSpeeds) * LONG_LOG_REPEAT <= 15u, "too many steps in a part for the LED display");
 
 static LongRun s_long_runs[LONG_RUN_MAX];
 
@@ -1581,9 +1642,9 @@ static uint16_t BuildLongRuns(void) {
     }
     uint8_t part = (uint8_t)(COUNT_OF(kLongSearchSpeeds) + 1u);
     uint8_t step = 1;
-    for (uint8_t j = 0; j < COUNT_OF(kFastSmallSpeeds); j++) {
+    for (uint8_t j = 0; j < COUNT_OF(kLongFastSmallSpeeds); j++) {
         for (uint8_t k = 0; k < LONG_LOG_REPEAT; k++) {
-            s_long_runs[n++] = (LongRun){ LONG_FAST_SMALL, FAST_V_MM_S, kFastSmallSpeeds[j], part, step++ };
+            s_long_runs[n++] = (LongRun){ LONG_FAST_SMALL, FAST_V_MM_S, kLongFastSmallSpeeds[j], part, step++ };
         }
     }
     part++;
