@@ -679,7 +679,7 @@ static void StartRunBegin(DrivePos *dp) {
     LogBootInfo();
     if (s_run_kind == 1.0f) {
         Ev(LOG_EV_FAST_PARAMS, s_fast_v, s_fast_accel, s_fast_small_v, s_run_type, FastDecel());
-        Ev(LOG_EV_FAST_LARGE, s_fast_large90_v, s_fast_large180_v, 0.0f, 0.0f, 0.0f);
+        Ev(LOG_EV_FAST_LARGE, s_fast_large90_v, s_fast_large180_v, (float)s_search_corr, 0.0f, 0.0f);
     } else {
         Ev(LOG_EV_SEARCH_PARAMS, s_search_v, s_search_turn_v, s_search_accel, s_search_slalom ? 1.0f : 0.0f,
            (float)s_search_corr);
@@ -1059,14 +1059,9 @@ void SearchMenu_Run(void) {
                                          (uint8_t)(sizeof(kSearchTurnSpeeds) / sizeof(kSearchTurnSpeeds[0])),
                                          SLALOM_V_MM_S);
     s_search_slalom = (ModeUI_SelectValue("TURN(1 SLALOM 2 PIVOT)", "", kTwo, 2u, 1.0f) == 1.0f);
-    // 壁の補正を1つずつ選ぶ(どれも回さずに決めると OFF)。補正の影響を比べるため(2026-11-05)
-    s_search_corr = 0u;
-    if (ModeUI_SelectValue("WALL(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_WALL;
-    if (ModeUI_SelectValue("EDGE(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_EDGE;
-    if (ModeUI_SelectValue("SLALOM FRONT(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_SFRONT;
-    if (ModeUI_SelectValue("TURN BACK ALIGN(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_FALIGN;
-    // エンコーダとジャイロで見た横のずれの FB(回さずに決めると今までどおり ON)。横壁追従だけで走るときは OFF にする
-    if (ModeUI_SelectValue("LAT FB(1 ON 2 OFF)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_LAT_OFF;
+    // 壁の補正は全部入れる(横のずれの FB も入れたまま)。2026-11-21 にユーザーの依頼で選ぶのをやめた
+    // (前は 2026-11-05 から1つずつ選んでいた。補正を選ぶのは最短走行の FastRun_Run に移した)
+    s_search_corr = CORR_ALL;
 
     static const char *const kMapNames[] = { "", "NEW", "CONTINUE" };
     static const char *const kScopeNames[] = { "", "ROUND", "ONE-WAY", "FULL" };
@@ -1447,8 +1442,27 @@ void FastRun_Run(void) {
                                                (uint8_t)(sizeof(kFastLarge180Speeds) / sizeof(kFastLarge180Speeds[0])),
                                                FAST_LARGE180_V_MM_S);
     }
+    // 速さを選び終えたらピピピと鳴らし、続けて壁の補正を1つずつ選ぶ(回さずに決めると補正なし、横のずれの FB は ON)。
+    // どれかを入れたら制御全部乗せ(s_fast_all)の走りで、選んだものだけを使う(2026-11-21。ユーザーの依頼)。
+    // FAST_ALL(FastAll_Run)から来たときは全部入れてあるので選ばない
+    if (!s_fast_all) {
+        static const float kTwo[] = { 1.0f, 2.0f };
+        Sound_Ready();
+        Sound_Wait();
+        s_search_corr = 0u;
+        if (ModeUI_SelectValue("WALL(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_WALL;
+        if (ModeUI_SelectValue("EDGE(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_EDGE;
+        if (ModeUI_SelectValue("SLALOM FRONT(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_SFRONT;
+        if (ModeUI_SelectValue("TURN BACK ALIGN(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_FALIGN;
+        if (ModeUI_SelectValue("LAT FB(1 ON 2 OFF)", "", kTwo, 2u, 1.0f) == 2.0f) s_search_corr |= CORR_LAT_OFF;
+        s_fast_all = (s_search_corr & CORR_ALL) != 0u;
+    }
     printf("FAST RUN: v=%.0f mm/s accel=%.0f decel=%.0f, small turn %.0f mm/s, large90 %.0f, large180 %.0f mm/s\r\n",
            s_fast_v, s_fast_accel, FastDecel(), s_fast_small_v, s_fast_large90_v, s_fast_large180_v);
+    printf("FAST RUN: corr wall %s edge %s slalom-front %s turn-back-align %s, lateral FB %s\r\n",
+           (s_search_corr & CORR_WALL) ? "ON" : "OFF", (s_search_corr & CORR_EDGE) ? "ON" : "OFF",
+           (s_search_corr & CORR_SFRONT) ? "ON" : "OFF", (s_search_corr & CORR_FALIGN) ? "ON" : "OFF",
+           (s_search_corr & CORR_LAT_OFF) ? "OFF" : "ON");
     PrintSettings(goals, goal_count);
 
     if (FailSafe_IsTripped()) FailSafe_Halt(); // 起動時の低電圧など

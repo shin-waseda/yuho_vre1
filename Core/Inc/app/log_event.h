@@ -74,8 +74,9 @@ typedef enum {
     LOG_EV_FAST_CHECK2 = 61,  // a:dist b:stop c:sum_std d:vbat e:no
     // ---- SLIP の STAIR(小回りの曲がり始めの直前に前壁を読む)----
     LOG_EV_SLIP_TURN = 62,    // a:index b:sum c:diff d:before e:adj
-    LOG_EV_FAST_LARGE = 64,   // a:large90_v b:large180_v(最短走行の大回りの速さ。LOG_EV_FAST_PARAMS の続き。
-                              // 63 は feature/diagonal-run の DIAG_TEST と重なったので 64 にした。fast_0067・0068 は 63 で残っている)
+    LOG_EV_FAST_LARGE = 64,   // a:large90_v b:large180_v c:corr
+                              // (最短走行の大回りの速さと選んだ壁の補正(探索の corr と同じビット)。LOG_EV_FAST_PARAMS の続き。
+                              // c は 2026-11-21 に足した(前は 0)。63 は feature/diagonal-run の DIAG_TEST と重なったので 64 にした。fast_0067・0068 は 63 で残っている)
     // ---- 横の物差しの試験(RUN の TEST の LAT_RULER。北を向いて止まって読んだ 1 点)----
     LOG_EV_LAT_RULER = 65,    // a:index b:offset c:l d:r e:facing
     LOG_EV_LAT_RULER2 = 66,   // a:index b:front_fl c:front_fr d:angle_err e:vbat

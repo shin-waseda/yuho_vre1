@@ -183,6 +183,18 @@ void Sound_BattLow(void) {
     Sound_Play(kBattLow);
 }
 
+// 選ぶ所の区切り: ラ(A7)でピピピ(電池の警告の E8 より低くして聞き分ける)
+static const SoundNote kReady[] = {
+    { NOTE_A7, 70u }, { NOTE_REST, 60u },
+    { NOTE_A7, 70u }, { NOTE_REST, 60u },
+    { NOTE_A7, 70u },
+    { 0u, 0u },
+};
+
+void Sound_Ready(void) {
+    Sound_Play(kReady);
+}
+
 // ---- ログ ----
 
 static const SoundNote kLogStart[] = {

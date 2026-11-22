@@ -50,6 +50,7 @@ void Sound_Mode(uint8_t index);                         // モード・値の選
 void Sound_Startup(float vbat_v, uint32_t reset_flags); // 起動音: 電池電圧の 2 音 + リセットの原因の 2 音(FAULT_RESET_*)
 void Sound_Finish(void);   // ゴール、走りの終わり
 void Sound_BattLow(void);  // 電池電圧の低下(高い警告音)
+void Sound_Ready(void);    // 選ぶ所の区切り(最短走行で速さを選び終えた): ラでピピピ(短く 3 回)
 void Sound_LogStart(void); // 記録を始めた: ソ・ソ(短く 2 回)
 void Sound_LogSaved(void); // SD に保存し終えた: ド・ソ・上のド(上がる)
 void Sound_LogSent(void);  // PC に送り終えた: 上のド・ミ・ソ(高く上がる)
