@@ -4666,7 +4666,10 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
   SD の番号が振り直されていて，同じ名前で中身の違う bin が 88 あった(どれも yuho/logs に _dupN などの別名で入っていた)．
 - ワークツリー yuho-award(`feature/mathworks-award`)を外した: WSL で作ったので `.git` のパスが /mnt/m/... で Windows の git から読めず，
   `git worktree repair` で直してから見た．コミットしていない MathWorks 賞の原稿(docs/mathworks_award．main.tex・fig・最終版の PDF．
-  LaTeX の build/ は除く)と同定の当てはめの MATLAB(tools/matlab/sysid_fit．11-13)がそこにしかなかったので，写してコミットした(d967376)．
+  LaTeX の build/ は除く)と同定の当てはめの MATLAB(tools/matlab/sysid_fit．11-13)がそこにしかなかったので，写してコミットした(f574052)．
+  - 後で: 原稿は公開しないことにした(ユーザーが GitHub で消した)．docs/mathworks_award を .gitignore に足して手元だけに置き，
+    今日のコミット(9c3961b より後の 7 つ)を filter-branch で書き直して歴史からも外し，master を強制でプッシュした．タグは前のコミットを指すので変わらない．
+    書き直す前の master は backup/before-award-rewrite(ローカルだけ)．GitHub に古いコミットがしばらく残りうるが，サポートへの依頼まではしない．
 - ワークツリー yuho-sysid(`feature/system-identification`)を記録として残して外した: 同定用にファームを削った版(迷路・壁制御を消して
   logic/sysid の試験 E0〜E1W．master との差は +3931・−8406 行)なので master にはマージせず，タグ `archive/system-identification`
   (1085b51)を付けてプッシュした．ブランチで書き足した日記(812 行．終わりに足しただけ)は docs/sysid/development_log_sysid.md に，
