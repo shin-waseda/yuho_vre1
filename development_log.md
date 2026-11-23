@@ -4655,3 +4655,7 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
 - 同じ日: ワークツリー yuho-stair と yuho-award を外した(ユーザーの依頼)．yuho-stair の logs は中身のハッシュで比べ，yuho/logs にない 522 ファイルを
   logs/archive/yuho-stair へ写した．yuho-award にだけあった MathWorks 賞の原稿(docs/mathworks_award．LaTeX の build/ は除く)と
   同定の当てはめの MATLAB(tools/matlab/sysid_fit．11-13)を写してコミットした．マージ済みのブランチ(ローカル 47，GitHub 17)を消した．
+- 同じ日: ワークツリー yuho-sysid(feature/system-identification．同定用にファームを削った版)を記録として残して外した(ユーザーの依頼)．
+  master にはマージせず，タグ `archive/system-identification`(1085b51)を付けてプッシュした．ブランチで書き足した日記(812 行)は
+  docs/sysid/development_log_sysid.md に，ログ(1217 本，505MB．どれも yuho/logs になかった)は logs/archive/yuho-sysid に写した．
+  下書きの PDF「マイクロマウスでシステム同定をやってみた」は docs/ に写した(コミットはしていない)．ブランチはローカルと GitHub から消した．
