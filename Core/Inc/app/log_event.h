@@ -74,6 +74,8 @@ typedef enum {
     LOG_EV_FAST_CHECK2 = 61,  // a:dist b:stop c:sum_std d:vbat e:no
     // ---- SLIP の STAIR(小回りの曲がり始めの直前に前壁を読む)----
     LOG_EV_SLIP_TURN = 62,    // a:index b:sum c:diff d:before e:adj
+    // ---- 斜めの旋回の試験(RUN の TEST の DIAG。2026-11-07)----
+    LOG_EV_DIAG_TEST = 63,    // a:pattern b:right
     LOG_EV_FAST_LARGE = 64,   // a:large90_v b:large180_v c:corr
                               // (最短走行の大回りの速さと選んだ壁の補正(探索の corr と同じビット)。LOG_EV_FAST_PARAMS の続き。
                               // c は 2026-11-21 に足した(前は 0)。63 は feature/diagonal-run の DIAG_TEST と重なったので 64 にした。fast_0067・0068 は 63 で残っている)
@@ -91,7 +93,9 @@ typedef enum {
 //   32bit の値は上位(_hi)と下位(_lo)の 16bit に分けて入れる(CSV は有効数字6桁なので)。値 = hi × 65536 + lo。
 // LOG_EV_STEP の walls: bit0 前, bit1 右, bit2 左。action: ActionType(command.h)。
 // LOG_EV_RUN_CMD の run_type: RunType(run_path.h)。LOG_EV_ROUTE_CMD(最短走行の PIVOT)の action: ActionType。
-// LOG_EV_TURN_KIND の kind: 0 小回り90°(s90), 1 大回り90°(l90), 2 大回り180°(l180), 3 超信地旋回。
+// LOG_EV_TURN_KIND の kind: 0 小回り90°(s90), 1 大回り90°(l90), 2 大回り180°(l180), 3 超信地旋回,
+//   4 斜めの 45° 入り, 5 45° 出, 6 135° 入り, 7 135° 出, 8 V90, 9 柱を回る V90(2026-11-07)。
+// LOG_EV_DIAG_TEST: 斜めの旋回の試験の形(1 45, 2 135, 3 V90, 4 V90P)と、右回り(1)か左回り(0)か。走り始めに入れる。
 // LOG_EV_MAP_CELLS: 機体の壁の地図(WallMap の cell、1区画1バイト)。index は最初の区画の番号(y × MAZE_SIZE + x)、
 //   w0〜w3 は続く区画を2つずつ(下位8bit が先、上位8bit が次)入れた値。1つで8区画、全部で MAZE_SIZE² / 8 個。
 //   (CSV は有効数字6桁なので、1つの値は 16bit まで)
@@ -108,6 +112,8 @@ typedef enum {
 //   12 = NG、13 = ST(2025 学生クラシック迷路の階段)、14〜18 = RE1〜RE5・19〜21 = RN1〜RN3(階段の比べ相手)、
 //   22 = L90L・23 = L90LR・24 = L90R・25 = L90RR(4×4 の大回り 90°。L90 の pre / post は大回りのオフセット)、
 //   26 = L180R・27 = L180RR・28 = L180L・29 = L180LR(4×4 の大回り 180°)。
+//   30 = D45R・31 = D45L・32 = D135R・33 = D135L・34 = DV90R・35 = DV90L・36 = DV90PR・37 = DV90PL(CAMERA の DIAG。4×5 の斜めの旋回を
+//   スリップのモデルなしで)、40〜47 は同じ形をモデルありで(2026-11-22)。DIAG の pre / post は初めの旋回のオフセット。
 // LOG_EV_SLIP_TURN: STAIR の小回りごとに、曲がり始めの SLIP_TURN_READ_MM 手前から曲がり始めまでの前壁の平均(sum = FL + FR、
 //   diff = FL − FR)。index は 0 から(S からの全部の小回りを数える)、before は読んだ所が曲がり始めより平均で何 mm 手前か(目標の距離)、
 //   adj は小回りの手で足す調整を入れたか(1/0)。
@@ -125,7 +131,7 @@ typedef enum {
 //   この後に MOTION_DONE が入る。
 // LOG_EV_PIVOT_SETTLE: 超信地旋回の台形が終わった後の合わせ込みの結果。ok は 1 合った / 0 打ち切った、
 //   err_deg は終わった時の角度の差(目標 − ジャイロ)、ms は台形が終わってからの時間。この後に MOTION_DONE が入る。
-// LOG_EV_RUN_TYPE の kind: 0 探索の曲がり方(0 PIVOT, 1 SMALL), 1 最短走行(0 PIVOT, 1 SMALL, 2 LARGE)。
+// LOG_EV_RUN_TYPE の kind: 0 探索の曲がり方(0 PIVOT, 1 SMALL), 1 最短走行(0 PIVOT, 1 SMALL, 2 LARGE, 3 DIAG, 4 斜めの旋回の試験)。
 //   2 最短走行の後の帰り道(長い走行のモード。type は 1)。
 // LOG_EV_LONG_RUN: 長い走行のモードで、何番目(1〜)・段・段の中の番号・速さ(探索: 直進とスラローム、最短走行: 直進と小回り)。
 // LOG_EV_FAST_PARAMS: 最短走行で選んだ直進の速さ・加速度・小回りの速さ・走り方(RUN_TYPE と同じ)・直進の減速度

@@ -3,9 +3,30 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 #include "logic/control/slalom.h"
 
 #define RUN_PI 3.14159265f
+#define RUN_SQRT2 1.41421356f
+#define DIAG_MM (SECTION_MM / RUN_SQRT2) // 斜めの1区間(斜めの点から次の斜めの点まで)
+
+// 斜めの旋回の理想的な形: 角までの折れ線の短い方に収まる一番大きな円弧の長さを返し、長い方の残りを
+// 前か後ろのオフセットにする(斜めの旋回でなければ全部0)
+static float DiagIdealArc(RunType type, float *pre, float *post) {
+    float a, b;
+    *pre = *post = 0.0f;
+    if (!RunType_DiagLegs(type, &a, &b)) return 0.0f;
+    float th = fabsf(RunType_TurnDeg(type)) * RUN_PI / 180.0f;
+    float tangent = (a < b) ? a : b; // 角から円弧の端まで
+    float r = tangent / tanf(0.5f * th);
+    if (type == RUN_DV90P_R || type == RUN_DV90P_L) { // 柱を回る V90 は、柱に近づかないよう半区画の半径に抑える
+        r = SECTION_MM * 0.5f;
+        tangent = r * tanf(0.5f * th);
+    }
+    *pre = a - tangent;
+    *post = b - tangent;
+    return r * th;
+}
 
 RunProfile RunProfile_Default(void) {
     RunProfile p = { 0 };
@@ -18,10 +39,15 @@ RunProfile RunProfile_Default(void) {
     p.v_turn[RUN_LARGE90_L]  = RUN_V_LARGE90_MM_S;
     p.v_turn[RUN_LARGE180_R] = RUN_V_LARGE180_MM_S;
     p.v_turn[RUN_LARGE180_L] = RUN_V_LARGE180_MM_S;
+    p.v_turn[RUN_D45IN_R]   = p.v_turn[RUN_D45IN_L]   = RUN_V_D45_MM_S;
+    p.v_turn[RUN_D45OUT_R]  = p.v_turn[RUN_D45OUT_L]  = RUN_V_D45_MM_S;
+    p.v_turn[RUN_D135IN_R]  = p.v_turn[RUN_D135IN_L]  = RUN_V_D135_MM_S;
+    p.v_turn[RUN_D135OUT_R] = p.v_turn[RUN_D135OUT_L] = RUN_V_D135_MM_S;
+    p.v_turn[RUN_DV90_R]    = p.v_turn[RUN_DV90_L]    = RUN_V_DV90_MM_S;
+    p.v_turn[RUN_DV90P_R]   = p.v_turn[RUN_DV90P_L]   = RUN_V_DV90P_MM_S;
     for (int t = RUN_SMALL90_R; t < RUN_TYPE_COUNT; t++) {
-        p.turn_len[t]  = RunType_TurnLength((RunType)t);
-        p.turn_pre[t]  = 0.0f;
-        p.turn_post[t] = 0.0f;
+        p.turn_len[t] = RunType_TurnLength((RunType)t);
+        DiagIdealArc((RunType)t, &p.turn_pre[t], &p.turn_post[t]); // 斜めでなければ0
     }
     return p;
 }
@@ -31,6 +57,42 @@ static void SetTurn(RunTurnSpec turns[RUN_TYPE_COUNT], RunType r, RunType l, con
     RunTurnSpec t = { p->v_mm_s, p->omega_dps, p->alpha_dps2, p->angle_deg, pre, post };
     turns[r] = t;
     turns[l] = t;
+}
+
+bool RunType_DiagTurnSpec(RunType type, float v_mm_s, RunTurnSpec *out) {
+    SlalomParams p;
+    switch (type) {
+        case RUN_D45IN_R:
+        case RUN_D45IN_L:
+        case RUN_D45OUT_R:
+        case RUN_D45OUT_L:
+            p = (SlalomParams){ FAST_D45_V_MM_S, FAST_D45_OMEGA_DPS, FAST_D45_ALPHA_DPS2, 45.0f };
+            break;
+        case RUN_D135IN_R:
+        case RUN_D135IN_L:
+        case RUN_D135OUT_R:
+        case RUN_D135OUT_L:
+            p = (SlalomParams){ FAST_D135_V_MM_S, FAST_D135_OMEGA_DPS, FAST_D135_ALPHA_DPS2, 135.0f };
+            break;
+        case RUN_DV90_R:
+        case RUN_DV90_L:
+            p = (SlalomParams){ FAST_DV90_V_MM_S, FAST_DV90_OMEGA_DPS, FAST_DV90_ALPHA_DPS2, 90.0f };
+            break;
+        case RUN_DV90P_R:
+        case RUN_DV90P_L:
+            p = (SlalomParams){ FAST_DV90P_V_MM_S, FAST_DV90P_OMEGA_DPS, FAST_DV90P_ALPHA_DPS2, 90.0f };
+            break;
+        default:
+            return false;
+    }
+    if (v_mm_s > 0.0f) Slalom_ScaleToSpeed(&p, v_mm_s);
+    // 角までの折れ線に合わせた前後のオフセット
+    float a = 0.0f, b = 0.0f, pre, post;
+    RunType_DiagLegs(type, &a, &b);
+    SlalomShape sh = Slalom_ComputeShape(&p);
+    Slalom_TurnOffsets(&sh, p.angle_deg, a, b, &pre, &post);
+    *out = (RunTurnSpec){ p.v_mm_s, p.omega_dps, p.alpha_dps2, p.angle_deg, pre, post };
+    return true;
 }
 
 RunProfile RunProfile_ForSpeeds(float vmax, float accel, float small_v, RunTurnSpec turns[RUN_TYPE_COUNT]) {
@@ -65,11 +127,17 @@ RunProfile RunProfile_ForSpeedsLarge(float vmax, float accel, float small_v, flo
     SlalomOffsets o180 = Slalom_Large180Offsets(&l180);
     SetTurn(turns, RUN_LARGE180_R, RUN_LARGE180_L, &l180, o180.pre_mm, o180.post_mm);
 
+    // 斜め: 入りと出は同じ形で、折れ線の前後が入れ替わる
+    for (int t = RUN_D45IN_R; t < RUN_TYPE_COUNT; t++) {
+        RunType_DiagTurnSpec((RunType)t, 0.0f, &turns[t]); // 斜めの旋回でなければ書かない
+    }
+
     RunProfile prof = RunProfile_Default();
     prof.accel = accel;
     prof.decel = (accel < FAST_DECEL_MAX_MM_S2) ? accel : FAST_DECEL_MAX_MM_S2; // 減速は滑りやすいので上限まで
     prof.vmax = vmax;
-    for (int t = RUN_SMALL90_R; t <= RUN_LARGE180_L; t++) {
+    for (int t = RUN_SMALL90_R; t < RUN_TYPE_COUNT; t++) {
+        if (!RunType_IsTurn((RunType)t) || RunType_IsPivot((RunType)t)) continue; // 超信地旋回は既定(速さ0)のまま
         prof.v_turn[t] = turns[t].v_mm_s;
         prof.turn_pre[t] = turns[t].pre_mm;
         prof.turn_post[t] = turns[t].post_mm;
@@ -83,7 +151,7 @@ RunProfile RunProfile_ForSpeedsLarge(float vmax, float accel, float small_v, flo
 }
 
 float RunProfile_CurveTime(const RunProfile *prof, RunType type) {
-    if (!RunType_IsTurn(type)) return 0.0f;
+    if (!RunType_IsTurn(type) || prof->v_turn[type] <= 0.0f) return 0.0f;
     return (prof->turn_len[type] - prof->turn_pre[type] - prof->turn_post[type]) / prof->v_turn[type];
 }
 
@@ -92,7 +160,60 @@ bool RunType_IsLarge(RunType type) {
 }
 
 bool RunType_IsTurn(RunType type) {
-    return (type >= RUN_SMALL90_R) && (type < RUN_TYPE_COUNT);
+    return ((type >= RUN_SMALL90_R) && (type <= RUN_LARGE180_L)) ||
+           ((type >= RUN_D45IN_R) && (type < RUN_TYPE_COUNT));
+}
+
+bool RunType_IsPivot(RunType type) {
+    return (type == RUN_PIVOT90_R) || (type == RUN_PIVOT90_L);
+}
+
+bool RunType_StartsDiag(RunType type) {
+    switch (type) {
+        case RUN_DIAG:
+        case RUN_D45OUT_R:
+        case RUN_D45OUT_L:
+        case RUN_D135OUT_R:
+        case RUN_D135OUT_L:
+        case RUN_DV90_R:
+        case RUN_DV90_L:
+        case RUN_DV90P_R:
+        case RUN_DV90P_L: return true;
+        default:          return false;
+    }
+}
+
+bool RunType_EndsDiag(RunType type) {
+    switch (type) {
+        case RUN_DIAG:
+        case RUN_D45IN_R:
+        case RUN_D45IN_L:
+        case RUN_D135IN_R:
+        case RUN_D135IN_L:
+        case RUN_DV90_R:
+        case RUN_DV90_L:
+        case RUN_DV90P_R:
+        case RUN_DV90P_L: return true;
+        default:          return false;
+    }
+}
+
+bool RunType_DiagLegs(RunType type, float *leg_in_mm, float *leg_out_mm) {
+    switch (type) {
+        case RUN_D45IN_R:
+        case RUN_D45IN_L:   *leg_in_mm = SECTION_MM;     *leg_out_mm = DIAG_MM;        return true;
+        case RUN_D45OUT_R:
+        case RUN_D45OUT_L:  *leg_in_mm = DIAG_MM;        *leg_out_mm = SECTION_MM;     return true;
+        case RUN_D135IN_R:
+        case RUN_D135IN_L:  *leg_in_mm = SECTION_MM;     *leg_out_mm = 2.0f * DIAG_MM; return true;
+        case RUN_D135OUT_R:
+        case RUN_D135OUT_L: *leg_in_mm = 2.0f * DIAG_MM; *leg_out_mm = SECTION_MM;     return true;
+        case RUN_DV90_R:
+        case RUN_DV90_L:
+        case RUN_DV90P_R:
+        case RUN_DV90P_L:   *leg_in_mm = DIAG_MM;        *leg_out_mm = DIAG_MM;        return true;
+        default:            return false;
+    }
 }
 
 float RunType_TurnLength(RunType type) {
@@ -104,24 +225,71 @@ float RunType_TurnLength(RunType type) {
         case RUN_LARGE90_L:  return RUN_PI * 0.5f * SECTION_MM;            // 半径1区画の90°
         case RUN_LARGE180_R:
         case RUN_LARGE180_L: return SECTION_MM + RUN_PI * half;             // 半区画 + 柱を回る半円 + 半区画
-        default:             return 0.0f;
+        default: {
+            float pre, post;
+            float arc = DiagIdealArc(type, &pre, &post); // 斜めの旋回(そうでなければ0)
+            return pre + arc + post;
+        }
     }
 }
 
 int RunType_QuarterTurns(RunType type) {
     switch (type) {
         case RUN_SMALL90_R:
-        case RUN_LARGE90_R:  return 1;
+        case RUN_LARGE90_R:
+        case RUN_PIVOT90_R:  return 1;
         case RUN_SMALL90_L:
-        case RUN_LARGE90_L:  return -1;
+        case RUN_LARGE90_L:
+        case RUN_PIVOT90_L:  return -1;
         case RUN_LARGE180_R: return 2;
         case RUN_LARGE180_L: return -2;
         default:             return 0;
     }
 }
 
+// 右に曲がる旋回なら +1、左なら −1(旋回でなければ0)
+static int TurnSign(RunType type) {
+    if (!RunType_IsTurn(type)) return 0;
+    if (type >= RUN_D45IN_R && type <= RUN_DV90_L) return (((int)type - (int)RUN_D45IN_R) % 2 == 0) ? 1 : -1;
+    if (type == RUN_DV90P_R) return 1;
+    if (type == RUN_DV90P_L) return -1;
+    return (RunType_QuarterTurns(type) > 0) ? 1 : -1;
+}
+
+float RunType_TurnDeg(RunType type) {
+    switch (type) {
+        case RUN_D45IN_R:
+        case RUN_D45IN_L:
+        case RUN_D45OUT_R:
+        case RUN_D45OUT_L:  return 45.0f * (float)TurnSign(type);
+        case RUN_D135IN_R:
+        case RUN_D135IN_L:
+        case RUN_D135OUT_R:
+        case RUN_D135OUT_L: return 135.0f * (float)TurnSign(type);
+        case RUN_DV90_R:
+        case RUN_DV90_L:
+        case RUN_DV90P_R:
+        case RUN_DV90P_L:   return 90.0f * (float)TurnSign(type);
+        default:            return 90.0f * (float)RunType_QuarterTurns(type);
+    }
+}
+
+int RunType_DiagNextTurn(RunType type) {
+    switch (type) {
+        case RUN_D45IN_R:
+        case RUN_D45IN_L:
+        case RUN_D135IN_R:
+        case RUN_D135IN_L: return -TurnSign(type); // 入りと逆の向きから、ジグザグが始まる
+        case RUN_DV90_R:
+        case RUN_DV90_L:   return TurnSign(type);  // V90 と同じ向きから
+        case RUN_DV90P_R:
+        case RUN_DV90P_L:  return -TurnSign(type); // 柱を回る V90 は、逆の向きから
+        default:           return 0;
+    }
+}
+
 uint8_t RunType_TurnMoves(RunType type, Direction d_in, Direction *moves) {
-    int q = RunType_QuarterTurns(type) > 0 ? 1 : -1;
+    int q = TurnSign(type);
     Direction d1 = Dir_Turn(d_in, q);
     switch (type) {
         case RUN_SMALL90_R:
@@ -141,6 +309,35 @@ uint8_t RunType_TurnMoves(RunType type, Direction d_in, Direction *moves) {
             moves[2] = Dir_Opposite(d_in);
             moves[3] = Dir_Opposite(d_in);
             return 4;
+        case RUN_D45IN_R:
+        case RUN_D45IN_L: // A をまっすぐ抜け、B を横へ抜ける境目(斜めの点)で終わる
+            moves[0] = d_in;
+            moves[1] = d1;
+            return 2;
+        case RUN_D135IN_R:
+        case RUN_D135IN_L: // A を横へ抜け、B を後ろへ抜ける境目(斜めの点)で終わる
+            moves[0] = d1;
+            moves[1] = Dir_Opposite(d_in);
+            return 2;
+        case RUN_D45OUT_R:
+        case RUN_D45OUT_L: // 斜めの点で入った区画を横へ抜け、次の区画をまっすぐ抜ける
+            moves[0] = d1;
+            moves[1] = d1;
+            return 2;
+        case RUN_D135OUT_R:
+        case RUN_D135OUT_L: // 斜めの点で入った区画を横へ抜け、次の区画もさらに同じ向きへ曲がって抜ける
+            moves[0] = d1;
+            moves[1] = Dir_Turn(d1, q);
+            return 2;
+        case RUN_DV90_R:
+        case RUN_DV90_L: // 斜めの点で入った区画を、入った向きのまま抜ける(角はその区画の、出ない側の境目)
+            moves[0] = d_in;
+            return 1;
+        case RUN_DV90P_R:
+        case RUN_DV90P_L: // 斜めの点で入った区画を横へ抜け、次の区画もさらに同じ向きへ曲がって抜ける(間の境目が角)
+            moves[0] = d1;
+            moves[1] = Dir_Turn(d1, q);
+            return 2;
         default:
             return 0;
     }
@@ -156,6 +353,21 @@ const char *RunType_Name(RunType type) {
         case RUN_LARGE90_L:  return "LARGE90_L";
         case RUN_LARGE180_R: return "LARGE180_R";
         case RUN_LARGE180_L: return "LARGE180_L";
+        case RUN_DIAG:       return "DIAG";
+        case RUN_D45IN_R:    return "D45IN_R";
+        case RUN_D45IN_L:    return "D45IN_L";
+        case RUN_D45OUT_R:   return "D45OUT_R";
+        case RUN_D45OUT_L:   return "D45OUT_L";
+        case RUN_D135IN_R:   return "D135IN_R";
+        case RUN_D135IN_L:   return "D135IN_L";
+        case RUN_D135OUT_R:  return "D135OUT_R";
+        case RUN_D135OUT_L:  return "D135OUT_L";
+        case RUN_DV90_R:     return "DV90_R";
+        case RUN_DV90_L:     return "DV90_L";
+        case RUN_PIVOT90_R:  return "PIVOT90_R";
+        case RUN_PIVOT90_L:  return "PIVOT90_L";
+        case RUN_DV90P_R:    return "DV90P_R";
+        case RUN_DV90P_L:    return "DV90P_L";
         default:             return "?";
     }
 }
@@ -165,9 +377,9 @@ void RunList_Clear(RunList *list) {
 }
 
 bool RunList_Push(RunList *list, RunCommand cmd) {
-    if (cmd.type == RUN_STRAIGHT && list->count > 0) {
+    if ((cmd.type == RUN_STRAIGHT || cmd.type == RUN_DIAG) && list->count > 0) {
         RunCommand *last = &list->items[list->count - 1];
-        if (last->type == RUN_STRAIGHT && (uint16_t)last->halves + cmd.halves <= 0xFFu) {
+        if (last->type == cmd.type && (uint16_t)last->halves + cmd.halves <= 0xFFu) {
             last->halves = (uint8_t)(last->halves + cmd.halves);
             return true;
         }
@@ -265,8 +477,9 @@ bool RunList_EstimateTimeEnds(const RunList *list, const RunProfile *prof, float
         RunType t = (RunType)c->type;
         float dt = 0.0f;
 
-        if (t == RUN_STRAIGHT) {
-            float dist  = (float)c->halves * SECTION_MM * 0.5f;
+        if (t == RUN_STRAIGHT || t == RUN_DIAG) {
+            // 斜めの直進は1区間が 1区画/√2(最高速度・加速度は直進と同じ)
+            float dist = (t == RUN_DIAG) ? (float)c->halves * DIAG_MM : (float)c->halves * SECTION_MM * 0.5f;
             // 列の端(先頭の前・STOP か終わり)は、v_start / v_end
             bool last = (i + 1u >= list->count) || (list->items[i + 1u].type == RUN_STOP);
             float v_in  = (i == 0) ? v_start : BoundarySpeed(list, prof, (int)i - 1);
@@ -306,10 +519,94 @@ bool RunList_EstimateTimeEnds(const RunList *list, const RunProfile *prof, float
 // 大回りを使ってよい範囲(区画ごと)。加速度が足りないときに1段ずつ下げる。
 enum { LARGE_ALL = 0, LARGE_NO180, LARGE_NONE };
 
-// 作業領域(約1.3KB)。Dijkstraの作業領域と同じく、同時に呼んではいけない。
+// 作業領域(約1.8KB)。Dijkstraの作業領域と同じく、同時に呼んではいけない。
 static int8_t   s_turn[RUN_LIST_MAX];     // 区画kでの曲がり方(0、右+1、左-1)。kは経路の何区画目か
 static uint8_t  s_limit[RUN_LIST_MAX];    // 区画kから始まる大回りの制限(LARGE_*)
-static uint16_t s_item_cell[RUN_LIST_MAX]; // 指令の番号 → その旋回が始まる区画(大回りでなければ0)
+static uint16_t s_item_cell[RUN_LIST_MAX]; // 指令の番号 → その旋回が始まる区画(大回りでなければ0。斜めの区間の指令は入りの区画)
+static bool     s_diag_off[RUN_LIST_MAX]; // 区画kから斜めに入らない(加速度が足りなかった)
+// 区画kに斜めの点から入ったとき、斜めのまま進んで出で境目に戻れるか。ジグザグの続きの向き z ごとに
+// bit0 が z = +1(右)、bit1 が z = −1(左)。DiagContinuable が後ろから埋める
+static uint8_t  s_dcont[RUN_LIST_MAX + 1];
+
+static uint8_t DiagBit(int z) {
+    return (z > 0) ? 1u : 2u;
+}
+
+// 区画 k の曲がり方(区画 1〜last の外は、どの向きとも合わない値)
+static int TurnAt(uint16_t k, uint16_t last) {
+    return (k >= 1u && k <= last) ? (int)s_turn[k] : 100;
+}
+
+// s_dcont を区画 last から前へ埋める。区画 k に斜めの点から入り、ジグザグの続きが z のとき:
+//   出: 区画 k を z へ抜け、次の区画をまっすぐ(D45OUT)か z へ(D135OUT)抜けて境目に戻る(ゴールの区画には入らない)
+//   ジグザグの続き: 区画 k を z へ抜け、次の区画に斜めの点から入る(続きは −z)
+//   V90: 区画 k をまっすぐ抜け(V90 は −z)、次の区画は −z へ曲がるジグザグの続き(V90 の連続で直線の通路を斜めに進むことはしない)
+//   柱を回る V90: 区画 k と次の区画を z へ抜け(V90 は z)、その次の区画に斜めの点から入る(続きは −z)
+static void DiagContinuable(uint16_t last) {
+    s_dcont[last + 1u] = 0;
+    for (uint16_t k = last; k >= 1u; k--) {
+        uint8_t m = 0;
+        for (int z = 1; z >= -1; z -= 2) {
+            int a = TurnAt(k, last);
+            int b = TurnAt((uint16_t)(k + 1u), last);
+            bool next = (s_dcont[k + 1u] & DiagBit(-z)) != 0u;
+            bool next2 = (k + 2u <= last + 1u) && (s_dcont[k + 2u] & DiagBit(-z)) != 0u;
+            bool ok = (a == z && (b == 0 || b == z)) ||  // 出
+                      (a == z && next) ||                // ジグザグの続き
+                      (a == 0 && b == -z && next) ||     // V90
+                      (a == z && b == z && next2);       // 柱を回る V90
+            if (ok) m |= DiagBit(z);
+        }
+        s_dcont[k] = m;
+    }
+}
+
+// 区画 k の境目から斜めに入れるなら、入りの指令と、入りの後の区画・ジグザグの続きを返す(入れなければ RUN_STOP)
+static RunType DiagEntry(uint16_t k, uint16_t last, uint16_t *k_next, int *z_next) {
+    int a = TurnAt(k, last);
+    int b = TurnAt((uint16_t)(k + 1u), last);
+    if (b != 1 && b != -1) return RUN_STOP; // b が ±1 なら区画 k + 1 は last 以下なので、k + 2 は s_dcont の中
+    if ((s_dcont[k + 2u] & DiagBit(-b)) == 0u) return RUN_STOP;
+    *k_next = (uint16_t)(k + 2u);
+    *z_next = -b;
+    if (a == 0) return (b > 0) ? RUN_D45IN_R : RUN_D45IN_L;   // 0 R
+    if (a == b) return (b > 0) ? RUN_D135IN_R : RUN_D135IN_L; // R R
+    return RUN_STOP;
+}
+
+static bool PushCmd(RunList *out, RunType type, uint8_t halves, uint16_t large_cell);
+
+// 区画 k に斜めの点から入った所(ジグザグの続きは z。s_dcont で続けられると分かっていること)から、
+// 出で境目に戻るまでを指令にする。戻った境目の区画を *k_end に書く。
+// cell は斜めの区間の入りの区画(加速度が足りないときに、そこからの斜めをやめる)
+static bool BuildDiag(uint16_t k, int z, uint16_t last, uint16_t cell, RunList *out, uint16_t *k_end) {
+    while (k <= last) {
+        int a = TurnAt(k, last);
+        int b = TurnAt((uint16_t)(k + 1u), last);
+        bool next = (s_dcont[k + 1u] & DiagBit(-z)) != 0u;
+        if (a == z && next) { // ジグザグの続き(その先が V90 の場合も)。斜めのまま進める限り進む
+            if (!PushCmd(out, RUN_DIAG, 1, cell)) return false;
+        } else if (a == 0 && b == -z && next) { // V90(ジグザグの続きと逆の向きへ)
+            if (!PushCmd(out, (z > 0) ? RUN_DV90_L : RUN_DV90_R, 0, cell)) return false;
+        } else if (a == z && b == z && (s_dcont[k + 2u] & DiagBit(-z)) != 0u) { // 柱を回る V90(ジグザグの続きの向きへ)
+            if (!PushCmd(out, (z > 0) ? RUN_DV90P_R : RUN_DV90P_L, 0, cell)) return false;
+            k = (uint16_t)(k + 2u);
+            z = -z;
+            continue;
+        } else if (a == z && (b == 0 || b == z)) { // 出
+            RunType t = (b == 0) ? ((z > 0) ? RUN_D45OUT_R : RUN_D45OUT_L)
+                                 : ((z > 0) ? RUN_D135OUT_R : RUN_D135OUT_L);
+            if (!PushCmd(out, t, 0, cell)) return false;
+            *k_end = (uint16_t)(k + 2u);
+            return true;
+        } else {
+            return false; // s_dcont と合わない(起きないはず)
+        }
+        k++;
+        z = -z; // ジグザグの1区間の後も、V90 の後も、続きの向きは入れ替わる
+    }
+    return false;
+}
 
 // 区画k, k+1, ... の曲がり方が pattern(sは右+1か左-1)と同じならtrue
 static bool MatchTurns(uint16_t k, uint16_t last, const int8_t *pattern, uint16_t len, int8_t s) {
@@ -327,8 +624,8 @@ static bool PushCmd(RunList *out, RunType type, uint8_t halves, uint16_t large_c
     return true;
 }
 
-// 区画1〜last(lastの次がゴールの区画)を、s_limitに従って指令にする
-static bool BuildRun(uint16_t last, bool use_large, RunList *out) {
+// 区画1〜last(lastの次がゴールの区画)を、s_limit・s_diag_off に従って指令にする
+static bool BuildRun(uint16_t last, bool use_large, bool use_diag, RunList *out) {
     static const int8_t kPat180[4] = { 0, 1, 1, 0 };
     static const int8_t kPat90[3]  = { 0, 1, 0 };
 
@@ -341,6 +638,17 @@ static bool BuildRun(uint16_t last, bool use_large, RunList *out) {
     uint16_t k = 1;
     while (k <= last) {
         bool done = false;
+        // 斜め: 境目にいて、入り(0 R・R R)の後を斜めのまま最後までたどれるとき
+        if (use_diag && !at_center && !s_diag_off[k]) {
+            uint16_t k_diag;
+            int z;
+            RunType entry = DiagEntry(k, last, &k_diag, &z);
+            if (entry != RUN_STOP) {
+                if (!PushCmd(out, entry, 0, k)) return false;
+                if (!BuildDiag(k_diag, z, last, k, out, &k)) return false;
+                continue; // 出の後は区画 k の境目にいる
+            }
+        }
         if (use_large && k + 1 <= last) {
             int8_t s = s_turn[k + 1]; // 大回りなら2区画目で曲がる
             if (s != 0) {
@@ -387,11 +695,15 @@ static bool BuildRun(uint16_t last, bool use_large, RunList *out) {
     return PushCmd(out, RUN_STOP, 0, 0);
 }
 
-// 指令iが大回りなら、始まる区画の制限を1段下げる。下げたらtrue。
+// 指令iが大回りなら、始まる区画の制限を1段下げる。斜めの区間の指令なら、その入りの区画から斜めに入らない。下げたらtrue。
 static bool Demote(const RunList *list, int i) {
     if (i < 0 || i >= (int)list->count) return false;
     RunType t = (RunType)list->items[i].type;
     uint16_t cell = s_item_cell[i];
+    if (RunType_StartsDiag(t) || RunType_EndsDiag(t)) {
+        s_diag_off[cell] = true;
+        return true;
+    }
     if (t == RUN_LARGE180_R || t == RUN_LARGE180_L) {
         s_limit[cell] = LARGE_NO180;
         return true;
@@ -403,8 +715,32 @@ static bool Demote(const RunList *list, int i) {
     return false;
 }
 
+// s_limit・s_diag_off に従って指令の列を作り、加速度が足りない直進があれば、隣の大回り・斜めを下げて作り直す
+// (1回で1つの区画の制限が1段下がるので、3 × 区画数 回で必ず終わる)。小回りでも足りなければ、そのまま返す。
+// 見積もりの時間を *total に、加速度が足りたかを *feasible に書く。作れなければ false
+static bool BuildFeasible(uint16_t last, bool use_large, bool use_diag, const RunProfile *prof, RunList *out,
+                          float *total, bool *feasible) {
+    for (uint32_t guard = 0; guard <= 3u * ((uint32_t)last + 1u); guard++) {
+        if (!BuildRun(last, use_large, use_diag, out)) return false;
+        uint16_t bad;
+        *feasible = RunList_EstimateTime(out, prof, total, NULL, &bad);
+        if (*feasible) return true;
+        // 直進なら前後の旋回、旋回(速度の違う旋回が直接つながる)ならその旋回と1つ前
+        bool demoted = Demote(out, (int)bad - 1);
+        if (out->items[bad].type == RUN_STRAIGHT) demoted = Demote(out, (int)bad + 1) || demoted;
+        else                                      demoted = Demote(out, (int)bad) || demoted;
+        if (!demoted) return true;
+    }
+    return true;
+}
+
 bool RunPath_FromRoute(const CommandList *route, const RunProfile *prof, bool use_large,
                        RunList *out) {
+    return RunPath_FromRouteEx(route, prof, use_large, false, out);
+}
+
+bool RunPath_FromRouteEx(const CommandList *route, const RunProfile *prof, bool use_large, bool use_diag,
+                         RunList *out) {
     // 1区画ずつの曲がり方に展開する。moves[0]はスタートから出るときの向き変え。
     uint16_t moves = 0;
     for (uint16_t i = 0; i < route->count; i++) {
@@ -428,27 +764,82 @@ bool RunPath_FromRoute(const CommandList *route, const RunProfile *prof, bool us
 
     // s_turn[k] (k = 1 .. moves-1) が区画kでの曲がり方。区画movesがゴール。
     uint16_t last = (uint16_t)(moves - 1);
-    for (uint16_t k = 0; k <= moves; k++) s_limit[k] = LARGE_ALL;
+    for (uint16_t k = 0; k <= moves; k++) {
+        s_limit[k] = LARGE_ALL;
+        s_diag_off[k] = false;
+    }
+    if (use_diag) DiagContinuable(last);
 
-    // 加速度が足りない直進があれば、隣の大回りを下げて作り直す
-    // (1回で1つの区画の制限が1段下がるので、2 × 区画数 回で必ず終わる)
-    for (uint16_t guard = 0; guard <= 2u * moves; guard++) {
-        if (!BuildRun(last, use_large, out)) return false;
-        float total;
-        uint16_t bad;
-        if (RunList_EstimateTime(out, prof, &total, NULL, &bad)) return true;
-        // 直進なら前後の旋回、旋回(速度の違う旋回が直接つながる)ならその旋回と1つ前
-        bool demoted = Demote(out, (int)bad - 1);
-        if (out->items[bad].type == RUN_STRAIGHT) demoted = Demote(out, (int)bad + 1) || demoted;
-        else                                      demoted = Demote(out, (int)bad) || demoted;
-        if (!demoted) return true; // 小回りでも足りない。そのまま返す
+    float total;
+    bool feasible;
+    if (!BuildFeasible(last, use_large, use_diag, prof, out, &total, &feasible)) return false;
+    if (!use_diag) return true;
+
+    // 斜めの区間ごとに、やめた(その入りの区画から斜めに入らない)方が速ければやめる。
+    // やめると前後の形が変わって別の所から斜めが始まることもあるので、変わらなくなるまでくり返す
+    // (やめる区画は増えるだけなので、区画の数の回数で終わる)
+    static RunList trial;
+    static uint8_t save_limit[RUN_LIST_MAX];
+    static bool save_off[RUN_LIST_MAX];
+    static uint16_t save_cell[RUN_LIST_MAX];
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (uint16_t i = 0; i < out->count; i++) {
+            RunType t = (RunType)out->items[i].type;
+            if (t != RUN_D45IN_R && t != RUN_D45IN_L && t != RUN_D135IN_R && t != RUN_D135IN_L) continue;
+            uint16_t cell = s_item_cell[i];
+            memcpy(save_limit, s_limit, sizeof(save_limit));
+            memcpy(save_off, s_diag_off, sizeof(save_off));
+            memcpy(save_cell, s_item_cell, sizeof(save_cell));
+            s_diag_off[cell] = true;
+            float t_trial;
+            bool f_trial;
+            if (!BuildFeasible(last, use_large, use_diag, prof, &trial, &t_trial, &f_trial)) return false;
+            // 加速度が足りるようになるか、同じなら時間が短くなればやめる(同じ時間なら斜めのまま)
+            if ((f_trial && !feasible) || (f_trial == feasible && t_trial < total - 1e-6f)) {
+                *out = trial;
+                total = t_trial;
+                feasible = f_trial;
+                changed = true;
+                break; // 指令の列が変わったので、初めから見直す
+            }
+            memcpy(s_limit, save_limit, sizeof(save_limit));
+            memcpy(s_diag_off, save_off, sizeof(save_off));
+            memcpy(s_item_cell, save_cell, sizeof(save_cell));
+        }
     }
     return true;
+}
+
+bool RunPath_FromRoutePivot(const CommandList *route, RunList *out) {
+    RunList_Clear(out);
+    for (uint16_t i = 0; i < route->count; i++) {
+        const Action *a = &route->items[i];
+        if (a->type == ACTION_STOP) break;
+        int q = Action_QuarterTurns((ActionType)a->type);
+        if (q == 2) return false; // 180°の向き変えは最短走行では扱わない
+        if (q != 0) {
+            if (out->count == 0) return false; // スタートの中心では曲がらない(RunPath_FromRoute と同じ)
+            RunCommand turn = { (uint8_t)((q > 0) ? RUN_PIVOT90_R : RUN_PIVOT90_L), 0 };
+            if (!RunList_Push(out, turn)) return false;
+        }
+        uint16_t n = (a->type == ACTION_FORWARD) ? a->cells : 1;
+        for (uint16_t j = 0; j < n; j++) {
+            RunCommand straight = { RUN_STRAIGHT, 2 }; // 中心から次の区画の中心まで
+            if (!RunList_Push(out, straight)) return false;
+        }
+    }
+    RunCommand stop = { RUN_STOP, 0 };
+    return RunList_Push(out, stop);
 }
 
 bool RunList_ToRoute(const RunList *list, CommandList *out) {
     CommandList_Clear(out);
     bool at_center = true; // スタートの中心から
+    bool diag = false;     // 斜めの点にいる(heading はその点で入る区画の向き、z はジグザグの続きの向き)
+    int z = 0;
+    int pivot_q = 0; // 超信地旋回で変えた向き(次に中心から出るときの指令に入れる)
     Direction heading = DIR_NORTH; // 相対の向きしか使わないので、どの向きから始めてもよい
 
     for (uint16_t i = 0; i < list->count; i++) {
@@ -457,15 +848,38 @@ bool RunList_ToRoute(const RunList *list, CommandList *out) {
         if (t == RUN_STOP) break;
 
         if (t == RUN_STRAIGHT) {
+            if (diag) return false;
             // 中心 → 境目 の半区画で、次の区画へ1つ移る
             for (uint8_t h = 0; h < c->halves; h++) {
-                if (at_center && !CommandList_Push(out, Action_Move(0), true)) return false;
+                if (at_center && !CommandList_Push(out, Action_Move(pivot_q), true)) return false;
+                if (at_center) pivot_q = 0;
                 at_center = !at_center;
             }
+        } else if (RunType_IsPivot(t)) {
+            // 区画の中心で回る(区画は移らない)
+            if (diag || !at_center) return false;
+            pivot_q += RunType_QuarterTurns(t);
+            heading = Dir_Turn(heading, RunType_QuarterTurns(t));
+        } else if (t == RUN_DIAG) {
+            if (!diag) return false;
+            // 1区間ごとに、入った区画を z へ曲がって抜ける(続きの向きは入れ替わる)
+            for (uint8_t h = 0; h < c->halves; h++) {
+                if (!CommandList_Push(out, Action_Move(z), true)) return false;
+                heading = Dir_Turn(heading, z);
+                z = -z;
+            }
         } else if (RunType_IsTurn(t)) {
-            // 小回りは境目から境目、大回りは中心から中心
+            // 小回り・斜めの入りは境目から、大回りは中心から、斜めの出・V90 は斜めの点から
             bool large = RunType_IsLarge(t);
-            if (at_center != large) return false;
+            if (RunType_StartsDiag(t) != diag) return false;
+            if (diag) {
+                // 出は続きの向きへ、V90 は続きと逆の向きへ曲がる
+                int s = (RunType_TurnDeg(t) > 0.0f) ? 1 : -1;
+                // (柱を回る V90 は続きの向きへ)
+                if ((t == RUN_DV90_R || t == RUN_DV90_L) ? (s != -z) : (s != z)) return false;
+            } else if (at_center != large) {
+                return false;
+            }
             Direction moves[RUN_TURN_MOVES_MAX];
             uint8_t n = RunType_TurnMoves(t, heading, moves);
             if (large) n--; // 最後の区画の中心で終わる(その先の境目へは次の直進で移る)
@@ -473,9 +887,12 @@ bool RunList_ToRoute(const RunList *list, CommandList *out) {
                 if (!CommandList_Push(out, Action_Move((int)moves[k] - (int)heading), true)) return false;
                 heading = moves[k];
             }
+            diag = RunType_EndsDiag(t);
+            if (diag) z = RunType_DiagNextTurn(t);
+            at_center = large;
         }
     }
-    if (!at_center) return false; // 区画の中心で止まっていない
+    if (diag || !at_center) return false; // 区画の中心で止まっていない
 
     Action stop = { ACTION_STOP, 0 };
     return CommandList_Push(out, stop, false);
@@ -487,6 +904,8 @@ void RunList_Print(const RunList *list) {
         if (c->type == RUN_STRAIGHT) {
             printf("%3u: %s x%u/2\r\n", (unsigned)i, RunType_Name((RunType)c->type),
                    (unsigned)c->halves);
+        } else if (c->type == RUN_DIAG) {
+            printf("%3u: %s x%u\r\n", (unsigned)i, RunType_Name((RunType)c->type), (unsigned)c->halves);
         } else {
             printf("%3u: %s\r\n", (unsigned)i, RunType_Name((RunType)c->type));
         }

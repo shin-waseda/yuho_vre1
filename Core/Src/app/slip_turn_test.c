@@ -11,6 +11,7 @@
 #include "interface/button.h"
 #include "interface/sound.h"
 #include "logic/control/slalom.h"
+#include "logic/maze/run_path.h"
 
 // ---- 位置 ----
 // 距離は「置いた所(S の後ろの壁に付けた所)からの目標の距離」で数える(探索・FW と同じ約束)。
@@ -77,7 +78,22 @@ enum {
     SLIP_L180RR = 27, // (1,3) で南向き(北の外周に付ける)→ まっすぐ L180R と同じ止まる所
     SLIP_L180L = 28,  // (3,0) で北向き(南の外周に付ける)→ (3,2) の真ん中から大回り左 180° → (2,2) の真ん中 → 南へ → (2,1) の南の端
     SLIP_L180LR = 29, // (2,3) で南向き(北の外周に付ける)→ まっすぐ L180L と同じ止まる所
+    // ---- 4×5 の斜めの旋回(CAMERA の DIAG。2026-11-22)----
+    // 迷路は横 4 × 縦 5 の外周だけ(中の壁は全部外して柱だけ)。R は S((0,0) 北向き)から東へ、L は (3,0) に北向きに置いて西へ
+    // (R の鏡写し。下の区画は R のもの)。1 本の中は同じ速さ v で走る(旋回は FAST_D* の形を、曲がる軌跡を変えずに v にしたもの。
+    // RunType_DiagTurnSpec)。形は 11-07 の DIAG の試験(search_run の DiagTest)を 4×5 に詰めたもの(kDiagShapes)
+    SLIP_D45R = 30,   // S1 D45IN_R D1 D45OUT_R S1: (0,0)〜(0,2) (1,2) (1,3) (2,3) (3,3) の真ん中で東向きに止まる
+    SLIP_D45L = 31,
+    SLIP_D135R = 32,  // S3 D135IN_R D2 D135OUT_L S3: (0,0)〜(0,2) (1,2) (1,1) (2,1) (2,0) (3,0) (3,1) (3,2) の真ん中で北向き
+    SLIP_D135L = 33,
+    SLIP_DV90R = 34,  // S1 D45IN_R D2 DV90_R D45OUT_R S1: (0,0)〜(0,2) (1,2) (1,3) (2,3) (3,3) (3,2) (3,1) の真ん中で南向き
+    SLIP_DV90L = 35,
+    SLIP_DV90PR = 36, // S3 D45IN_R D1 DV90P_R D1 D45OUT_R S3: (0,0)〜(0,3) (1,3) (1,4) (2,4) (2,3) (3,3) (3,2) (3,1) (3,0) の真ん中で南向き
+    SLIP_DV90PL = 37,
+    // 同じ形を、スリップのモデルを入れて走る(番号は上の + SLIP_DIAG_MODEL_ON。40〜47)。モデルなし(30〜37)で K を確かめ、
+    // モデルありで補正のかけ方(推定と FF)を確かめる
 };
+#define SLIP_DIAG_MODEL_ON 10
 static const float kPivotSpeeds[] = { 300.0f, 500.0f }; // 超信地旋回の走り(T1・P1・T2・P2)の直進・小回りの速さ
 #define SLIP_ST_V        500.0f // 階段の速さ(探索の小回りと同じ。走りながら前壁を読む片寄りがほぼ 0 の速さ: FW2 の B 500)
 #define SLIP_ST_TURNS    11     // 階段の小回りの数(右から始めて交互)
@@ -121,6 +137,29 @@ static const float kCamTurnSpeeds[] = { 300.0f, 350.0f, 400.0f, 450.0f, 500.0f, 
 static const float kCamLarge90Speeds[] = { 500.0f, 550.0f, 600.0f, 650.0f, 700.0f, 750.0f, 800.0f, 850.0f, 900.0f, 950.0f,
                                            1000.0f, 1050.0f, 1100.0f, 1150.0f, 1200.0f };
 static const float kCamLarge180Speeds[] = { 500.0f, 550.0f, 600.0f, 650.0f, 700.0f, 750.0f, 800.0f, 850.0f, 900.0f };
+// CAMERA の DIAG の速さ(2026-11-22。同じく 50 刻みで、1 本の中の一番きつい旋回の横加速度 v × ω が 1G 未満まで)。
+// 1G になる速さ: 45° 約 1185、135° 約 749、V90 約 968、柱を回る V90 約 876(FAST_D* の v × ω から)。
+// 横加速度: 45 の 1150 で 0.94G、135 の 700 で 0.87G、V90 の 950 で 0.96G、V90P の 850 で 0.94G
+static const float kCamD45Speeds[] = { 300.0f, 350.0f, 400.0f, 450.0f, 500.0f, 550.0f, 600.0f, 650.0f, 700.0f,
+                                       750.0f, 800.0f, 850.0f, 900.0f, 950.0f, 1000.0f, 1050.0f, 1100.0f, 1150.0f };
+static const float kCamD135Speeds[] = { 300.0f, 350.0f, 400.0f, 450.0f, 500.0f, 550.0f, 600.0f, 650.0f, 700.0f };
+static const float kCamDV90Speeds[] = { 300.0f, 350.0f, 400.0f, 450.0f, 500.0f, 550.0f, 600.0f, 650.0f, 700.0f,
+                                        750.0f, 800.0f, 850.0f, 900.0f, 950.0f };
+static const float kCamDV90PSpeeds[] = { 300.0f, 350.0f, 400.0f, 450.0f, 500.0f, 550.0f, 600.0f, 650.0f, 700.0f,
+                                         750.0f, 800.0f, 850.0f };
+
+// CAMERA の DIAG の形(右回り。左回りは旋回を左右入れ替える)。置いた区画の真ん中から始まる(RunList_Drive と同じ数え方)。
+// 2026-11-22 に maze_sim と同じ logic(RunList_ToRoute)で区画の経路に戻せること、通る区画、止まる所を確かめた。
+// 機体の四角(角を落とさない)と柱・外周の一番近い所: 45 19.8mm、135 19.9、V90 10.1、V90P 14.1(5×7 の元の V90 も 10.1)
+static const RunCommand kDiagD45[] = { { RUN_STRAIGHT, 1 }, { RUN_D45IN_R, 0 }, { RUN_DIAG, 1 }, { RUN_D45OUT_R, 0 },
+                                       { RUN_STRAIGHT, 1 }, { RUN_STOP, 0 } };
+static const RunCommand kDiagD135[] = { { RUN_STRAIGHT, 3 }, { RUN_D135IN_R, 0 }, { RUN_DIAG, 2 }, { RUN_D135OUT_L, 0 },
+                                        { RUN_STRAIGHT, 3 }, { RUN_STOP, 0 } };
+static const RunCommand kDiagDV90[] = { { RUN_STRAIGHT, 1 }, { RUN_D45IN_R, 0 }, { RUN_DIAG, 2 }, { RUN_DV90_R, 0 },
+                                        { RUN_D45OUT_R, 0 }, { RUN_STRAIGHT, 1 }, { RUN_STOP, 0 } };
+static const RunCommand kDiagDV90P[] = { { RUN_STRAIGHT, 3 }, { RUN_D45IN_R, 0 }, { RUN_DIAG, 1 }, { RUN_DV90P_R, 0 },
+                                         { RUN_DIAG, 1 }, { RUN_D45OUT_R, 0 }, { RUN_STRAIGHT, 3 }, { RUN_STOP, 0 } };
+static const RunCommand *const kDiagShapes[] = { kDiagD45, kDiagD135, kDiagDV90, kDiagDV90P };
 
 // 探索と同じ形の小回りを、速さ v に合わせて作る(前後のオフセットも探索と同じ計算)
 static TurnShape ShapeFor(float v) {
@@ -175,6 +214,26 @@ static bool IsLarge90Turn(int kind) { return kind == SLIP_L90L || kind == SLIP_L
 static bool IsLarge90(int kind) { return kind >= SLIP_L90L && kind <= SLIP_L90RR; }
 static bool IsLarge180Turn(int kind) { return kind == SLIP_L180R || kind == SLIP_L180L; }
 static bool IsLarge180(int kind) { return kind >= SLIP_L180R && kind <= SLIP_L180LR; }
+// CAMERA の DIAG: モデルあり(+ SLIP_DIAG_MODEL_ON)を外した番号。DIAG でなければ 0
+static int DiagBase(int kind) {
+    int k = (kind >= SLIP_D45R + SLIP_DIAG_MODEL_ON) ? kind - SLIP_DIAG_MODEL_ON : kind;
+    return (k >= SLIP_D45R && k <= SLIP_DV90PL) ? k : 0;
+}
+static bool IsDiag(int kind) { return DiagBase(kind) != 0; }
+static bool DiagIsLeft(int kind) { return ((DiagBase(kind) - SLIP_D45R) % 2) != 0; }
+
+// 左右を入れ替えた旋回(run_path の表は右が先で、左はその次の番号)
+static RunType MirrorTurn(RunType t) {
+    if (!RunType_IsTurn(t)) return t;
+    return (RunType_TurnDeg(t) > 0.0f) ? (RunType)((int)t + 1) : (RunType)((int)t - 1);
+}
+
+// DIAG の形の i 番目の指令(左回りなら左右を入れ替える)
+static RunType DiagCommand(int kind, int i, uint8_t *halves) {
+    const RunCommand *c = &kDiagShapes[(DiagBase(kind) - SLIP_D45R) / 2][i];
+    *halves = c->halves;
+    return DiagIsLeft(kind) ? MirrorTurn((RunType)c->type) : (RunType)c->type;
+}
 
 // フェイルセーフが働いていたら、記録を SD に保存してから FailSafe_Halt() へ入る(戻らない)
 static void CheckFailSafe(void) {
@@ -271,6 +330,51 @@ static bool LargeTurn(float *center_mm, bool right, float angle_deg, float v, co
     return true;
 }
 
+// CAMERA の DIAG: 置いた区画の真ん中から kDiagShapes の形を速さ v のまま走り、最後の直進の終わり(止まる所)を *end_mm に入れる。
+// 旋回は前のオフセット → 曲がる → 後ろのオフセット(search_run の RunList_Drive と同じ数え方)。止まるのは呼び出し側
+static bool DiagRun(int kind, float v, float *end_mm) {
+    float ref = SEARCH_START_FRONT_MM; // 置いた区画の真ん中
+    for (int i = 0;; i++) {
+        uint8_t halves;
+        RunType t = DiagCommand(kind, i, &halves);
+        if (t == RUN_STOP) break;
+        if (t == RUN_STRAIGHT) {
+            ref += 0.5f * SECTION_MM * (float)halves;
+            continue;
+        }
+        if (t == RUN_DIAG) {
+            ref += SECTION_MM / 1.41421356f * (float)halves; // 斜めの1区間
+            continue;
+        }
+        RunTurnSpec sp;
+        if (!RunType_DiagTurnSpec(t, v, &sp)) return false;
+        float start = ref + sp.pre_mm;
+        StraightTo(start, v, v);
+        if (!WaitTargetDistance(start)) return false;
+        App_StartSlalom(-RunType_TurnDeg(t), sp.omega_dps, sp.alpha_dps2); // TurnDeg は時計回りが正
+        if (!WaitMotionDone()) return false;
+        ref = App_GetTargetDistance() + sp.post_mm;
+    }
+    *end_mm = ref;
+    return true;
+}
+
+// CAMERA の DIAG の初めの旋回の形(LOG_EV_SLIP_RUN の pre / post と、走る前の表示に使う)
+static TurnShape DiagFirstShape(int kind, float v) {
+    TurnShape s = { 0.0f, 0.0f, 0.0f, 0.0f };
+    for (int i = 0;; i++) {
+        uint8_t halves;
+        RunType t = DiagCommand(kind, i, &halves);
+        if (t == RUN_STOP) break;
+        RunTurnSpec sp;
+        if (RunType_DiagTurnSpec(t, v, &sp)) {
+            s = (TurnShape){ sp.omega_dps, sp.alpha_dps2, sp.pre_mm, sp.post_mm };
+            break;
+        }
+    }
+    return s;
+}
+
 // 止まったまま、目標の位置に対する2次元の前後のずれが小さくなるのを待つ(探索の AlongSync と同じ。壁は使わない)
 static void AlongSync(void) {
     DelayWatching(SEARCH_TURN_WAIT_MS);
@@ -345,7 +449,8 @@ static void SetupLogger(int kind, float v) {
                   : (kind == SLIP_E || kind == SLIP_EW) ? 300.0f : (kind == SLIP_N || kind == SLIP_NG) ? 480.0f
                   : (kind == SLIP_ST) ? 5000.0f : (kind >= SLIP_RE1 && kind <= SLIP_RN3) ? 200.0f
                   : IsLarge90Turn(kind) ? 900.0f : IsLarge90(kind) ? 550.0f
-                  : IsLarge180Turn(kind) ? 1100.0f : IsLarge180(kind) ? 550.0f : 450.0f;
+                  : IsLarge180Turn(kind) ? 1100.0f : IsLarge180(kind) ? 550.0f
+                  : IsDiag(kind) ? 1300.0f : 450.0f; // DIAG は一番長い V90P・135 で約 1.2m
     uint32_t pivot_ms = (kind == SLIP_P1 || kind == SLIP_P2 || kind == SLIP_P1L || kind == SLIP_P2L) ? 2000u : 0u;
     Logger_SetDuration((uint32_t)(path_mm / v * 1000.0f) + pivot_ms + SLIP_SETTLE_MS + SLIP_RECORD_MS + 700u);
 }
@@ -353,7 +458,8 @@ static void SetupLogger(int kind, float v) {
 // 置いた所で制御が有効になっている状態から 1 本走り、止まって前壁を読む(制御は有効のまま)
 static bool RunOnce(int kind, float v, StopMeasure *m) {
     const ControlDebug *d = App_GetControlDebug();
-    TurnShape s = IsLarge90(kind) ? LargeShapeFor(v) : IsLarge180(kind) ? Large180ShapeFor(v) : ShapeFor(v);
+    TurnShape s = IsLarge90(kind) ? LargeShapeFor(v) : IsLarge180(kind) ? Large180ShapeFor(v)
+                : IsDiag(kind) ? DiagFirstShape(kind, v) : ShapeFor(v);
     Logger_Event(LOG_EV_SLIP_RUN, (float)kind, v, s.pre_mm, s.post_mm, s_stop_extra_mm);
 
     // 右の組(T1・T2・P1・P2)は S から (0,1) で右、左の組(T1L・T2L・P1L・P2L)は (2,0) から (2,1) で左に曲がる。
@@ -362,7 +468,11 @@ static bool RunOnce(int kind, float v, StopMeasure *m) {
     bool second = (kind == SLIP_T2 || kind == SLIP_P2 || kind == SLIP_T2L || kind == SLIP_P2L);
     float ref = SLIP_B0_MM; // 置いた区画と次の区画の境界
     float stop_after = SLIP_STOP_MM; // 最後の境界から止まる所まで(ふつうは次の境界の 12mm 手前)
-    if (IsLarge90(kind)) {
+    if (IsDiag(kind)) {
+        // 斜めの旋回(CAMERA の DIAG): 形の最後の直進の終わり(区画の真ん中)で止まる
+        if (!DiagRun(kind, v, &ref)) return false;
+        stop_after = 0.0f;
+    } else if (IsLarge90(kind)) {
         // 大回り 90°: 置いた区画の真ん中は SEARCH_START_FRONT_MM 先。曲がる走りはその次の区画の真ん中から曲がり、斜め隣の区画の
         // 真ん中へ出る。比べ相手は置いた区画の次の区画の真ん中を通る。そこから半区画先の境界の SLIP_STOP_MM 先で止まる(前壁の 186mm 手前)
         float center = SEARCH_START_FRONT_MM + SECTION_MM; // (0,1)・(3,1)、比べ相手は (1,2)・(2,2) の真ん中
@@ -474,6 +584,22 @@ static const char *KindName(int kind) {
         case SLIP_L180RR: return "L180RR";
         case SLIP_L180L: return "L180L";
         case SLIP_L180LR: return "L180LR";
+        case SLIP_D45R: return "D45R";
+        case SLIP_D45L: return "D45L";
+        case SLIP_D135R: return "D135R";
+        case SLIP_D135L: return "D135L";
+        case SLIP_DV90R: return "DV90R";
+        case SLIP_DV90L: return "DV90L";
+        case SLIP_DV90PR: return "DV90PR";
+        case SLIP_DV90PL: return "DV90PL";
+        case SLIP_D45R + SLIP_DIAG_MODEL_ON: return "D45R+M";
+        case SLIP_D45L + SLIP_DIAG_MODEL_ON: return "D45L+M";
+        case SLIP_D135R + SLIP_DIAG_MODEL_ON: return "D135R+M";
+        case SLIP_D135L + SLIP_DIAG_MODEL_ON: return "D135L+M";
+        case SLIP_DV90R + SLIP_DIAG_MODEL_ON: return "DV90R+M";
+        case SLIP_DV90L + SLIP_DIAG_MODEL_ON: return "DV90L+M";
+        case SLIP_DV90PR + SLIP_DIAG_MODEL_ON: return "DV90PR+M";
+        case SLIP_DV90PL + SLIP_DIAG_MODEL_ON: return "DV90PL+M";
         default: return "?";
     }
 }
@@ -499,6 +625,7 @@ static int KindPlaceNo(int kind) {
         case SLIP_L180RR: return 3;  // (1,3) 南向き
         case SLIP_L180LR: return 4;  // (2,3) 南向き
         default:
+            if (IsDiag(kind)) return DiagIsLeft(kind) ? 2 : 1; // R は S、L は (3,0) 北向き
             // 階段の比べ相手は 8 か所あるので、LED の番号は 2〜5 を順に使う(置く所が変わったかは置く所の文字で見る)
             if (kind >= SLIP_RE1 && kind <= SLIP_RN3) return 2 + (kind - SLIP_RE1) % 4;
             return 1;
@@ -558,7 +685,10 @@ static const char *KindPlace(int kind) {
         case SLIP_L180RR: return "(1,3) facing south, tail on the north wall";
         case SLIP_L180L: return "(3,0) facing north, tail on the south wall";
         case SLIP_L180LR: return "(2,3) facing south, tail on the north wall";
-        default: return "S (0,0) facing north, tail on the south wall";
+        default:
+            if (IsDiag(kind) && DiagIsLeft(kind)) return "(3,0) facing north, tail on the south wall (4x5)";
+            if (IsDiag(kind)) return "S (0,0) facing north, tail on the south wall (4x5)";
+            return "S (0,0) facing north, tail on the south wall";
     }
 }
 
@@ -738,8 +868,49 @@ void SlipTurnTest_Run(void) {
         // 止まった所を真上から撮って K を出す。機体は滑りを知らずに走るので、止まった所のずれがそのまま滑りの分になる。
         // 1 TURN(小回り 90°: T1・T1L を 300〜750)/ 2 LARGE90(L90R・L90L を 500〜1200)/ 3 LARGE180(L180R・L180L を 500〜900)。
         // 50 刻みの速さを 1 本ずつ。置く所ごとにまとめ、右を遅い順に全部 → 左を遅い順に全部(2026-11-20 に、速さごとに 3 本から変えた)
-        static const float kTypes[] = { 1.0f, 2.0f, 3.0f };
-        int type = (int)ModeUI_SelectValue("CAMERA(1 TURN 2 LARGE90 3 LARGE180)", "", kTypes, 3u, 1.0f);
+        // 4 DIAG(2026-11-22): 4×5 の斜めの旋回(45・135・V90・V90P から 1 つ)。モデルなし(K の確かめ)かモデルあり
+        // (補正のかけ方の確かめ。50 刻みの 1 つおき = 100 刻み)を選ぶ。R を遅い順に全部 → L を遅い順に全部
+        static const float kTypes[] = { 1.0f, 2.0f, 3.0f, 4.0f };
+        int type = (int)ModeUI_SelectValue("CAMERA(1 TURN 2 LARGE90 3 LARGE180 4 DIAG)", "", kTypes, 4u, 1.0f);
+        if (type == 4) {
+            static const float kShapes[] = { 1.0f, 2.0f, 3.0f, 4.0f };
+            static const float kTwo[] = { 1.0f, 2.0f };
+            int shape = (int)ModeUI_SelectValue("DIAG(1 45 2 135 3 V90 4 V90P)", "", kShapes, 4u, 1.0f);
+            bool model_on = ModeUI_SelectValue("MODEL(1 OFF 2 ON)", "", kTwo, 2u, 1.0f) == 2.0f;
+            static const char *const kShapeNames[] = { "45", "135", "V90", "V90P" };
+            const float *dspeeds = (shape == 2) ? kCamD135Speeds : (shape == 3) ? kCamDV90Speeds
+                                 : (shape == 4) ? kCamDV90PSpeeds : kCamD45Speeds;
+            uint32_t n_d = (shape == 2) ? (uint32_t)(sizeof(kCamD135Speeds) / sizeof(kCamD135Speeds[0]))
+                         : (shape == 3) ? (uint32_t)(sizeof(kCamDV90Speeds) / sizeof(kCamDV90Speeds[0]))
+                         : (shape == 4) ? (uint32_t)(sizeof(kCamDV90PSpeeds) / sizeof(kCamDV90PSpeeds[0]))
+                         : (uint32_t)(sizeof(kCamD45Speeds) / sizeof(kCamD45Speeds[0]));
+            uint32_t step = model_on ? 2u : 1u;
+            int kind_r = SLIP_D45R + 2 * (shape - 1) + (model_on ? SLIP_DIAG_MODEL_ON : 0);
+            printf("SLIP CAMERA DIAG %s: slip model %s, R from S then L from (3,0), %.0f-%.0f step %.0f, "
+                   "photos at start and stop\r\n", kShapeNames[shape - 1], model_on ? "ON" : "OFF", dspeeds[0],
+                   dspeeds[n_d - 1u], 50.0f * (float)step);
+            printf("walls: 4x5 (x 0..3, y 0..4), outer walls only (remove all inner walls, keep the pillars)\r\n");
+            for (uint32_t i = 0; i < n_d; i += step) {
+                TurnShape s = DiagFirstShape(kind_r, dspeeds[i]);
+                printf("v %.0f: first turn omega %.0f alpha %.0f pre %.1f post %.1f\r\n", dspeeds[i], s.omega_dps,
+                       s.alpha_dps2, s.pre_mm, s.post_mm);
+            }
+            App_SetSlipModel(model_on);
+            s_camera = true;
+            s_accel = SLIP_CAMERA_ACCEL;
+            bool ok = true;
+            for (uint32_t j = 0; ok && j < 2u; j++) {
+                for (uint32_t i = 0; ok && i < n_d; i += step) {
+                    ok = RunOneByHand(++run, kind_r + (int)j, dspeeds[i]);
+                }
+            }
+            s_camera = false;
+            s_accel = SLIP_ACCEL;
+            App_SetSlipModel(true);
+            if (!ok) return;
+            printf("SLIP done (%lu runs)\r\n", (unsigned long)run);
+            return;
+        }
         const float *speeds = (type == 2) ? kCamLarge90Speeds : (type == 3) ? kCamLarge180Speeds : kCamTurnSpeeds;
         uint32_t n_speeds = (type == 2) ? (uint32_t)(sizeof(kCamLarge90Speeds) / sizeof(kCamLarge90Speeds[0]))
                           : (type == 3) ? (uint32_t)(sizeof(kCamLarge180Speeds) / sizeof(kCamLarge180Speeds[0]))

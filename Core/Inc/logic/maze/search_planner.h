@@ -8,6 +8,7 @@
 #include "logic/maze/wall_map.h"
 #include "logic/maze/dijkstra.h"
 #include "logic/maze/step_map.h"
+#include "logic/maze/diag_route.h"
 #include "logic/command.h"
 
 // 探索の判断(ハードウェアに依存しない部分)。
@@ -29,6 +30,7 @@
 // ゴールの区画に入った所から、最短経路になりうる区画だけを回り(FULL)、最短経路が決まったらスタートへ戻る。
 // (2026-11-07 にゴールへ先に行くようにした。そうしないと、大会の迷路の4割ほどでゴールに一度も入らずに終わっていた)
 //   1. 未知の壁は「ない」とみなした地図で、スタートからゴールまでの最短経路(最短走行と同じ Dijkstra の既定のコスト)を求める。
+//      full_diag があれば、斜めのコストの経路(logic/maze/diag_route。最短走行で斜めを使うときと同じ)にする(2026-11-07)。
 //      未知の壁を「ない」とみなしているので、このコストは本当の最短のコストより大きくならない(下限)。
 //   2. その経路が横切る壁のうち、まだ分かっていない壁の両側の区画(見ていない区画)を行き先にして、一番近いものへ向かう。
 //   3. 経路が横切る壁が全部分かったら、その経路は実際に通れて、コストは下限と同じなので、本当の最短経路。
@@ -77,6 +79,10 @@ typedef struct {
     bool full_pending;                   // 全面探索で、まだゴールへ向かっている(ゴールに入ったら FULL にする)
     MazePos full_targets[SEARCH_FULL_TARGET_MAX]; // 見に行く区画
     uint8_t full_target_count;
+    // 全面探索の最短経路の候補を斜めのコストで選ぶときの作業領域(約 22KB。呼ぶ側が持つ)と、斜めの1区画のコスト
+    // (直進の1区画を 10 とした値)。Init で NULL・MAZE_COST_DIAG_CELL_X10(NULL なら今までどおり。今は maze_sim だけが入れる)
+    DiagRouteSolver *full_diag;
+    uint16_t full_diag_cell_x10;
 
     // ゴールを回る(goal_tour): ゴールの区画が2つ以上あるとき、最初のゴールの区画に入っても止まらず、
     // まだ入っていないゴールの区画を順に回ってから、止まらずにスタートへ戻る(ゴールで止まって 180° 回らない)。

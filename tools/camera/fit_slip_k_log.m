@@ -30,6 +30,14 @@ function R = fit_slip_k_log(csv_paths, varargin)
 %     MaxDthDeg  写真とジャイロの向きの変わり方の差の上限[deg](既定 2)
 %     MinLeds    当てはめた LED の数の下限(置いた所・止まった所とも。既定 3)
 %     Plot       図を出す(既定 true)。PlotFile を渡すとその PNG に書く
+%     KCheck     確かめる K(既定 [])。渡すと、その K での残り RMS と、当てはめの幅に入るかを出す
+%                (例: 大回り 90° で出した 0.0092 が、斜めの旋回でも合うか)
+%     KModel     モデルありの走り(DIAG の kind 40〜47)で機体が使った K(既定 0.009 = SLALOM_SLIP_K)
+%
+%   斜めの旋回(DIAG。2026-11-22): 曲がり方が 1 回でないので、前後・横は最後の向きで分ける(135 は最後の向きが置いた向きと
+%   同じなので、横は左 +)。モデルあり(kind 40〜47)の走りでは、ログの est_x・est_y に機体の見込んだ β が入っているので、
+%   当てはめの K は「機体の K に足りない分」(0 なら補正が合っている)になる。K は負まで探し、KModel を足した値も出す。
+%   モデルあり・なしは混ぜずに別々に当てはめる。
 %
 %   R: 1 本 1 行の table(使わなかった本は used = false と理由)。R.Properties.UserData に K, C, 幅, 定数。
 p = inputParser;
@@ -41,6 +49,8 @@ p.addParameter('MaxDthDeg', 2);
 p.addParameter('MinLeds', 3);
 p.addParameter('Plot', true);
 p.addParameter('PlotFile', '');
+p.addParameter('KCheck', []);
+p.addParameter('KModel', 0.009);
 p.parse(varargin{:});
 o = p.Results;
 if isempty(o.LogDir)
@@ -58,6 +68,11 @@ for i = 1:numel(csv_paths)
                   'x0_mm', 'y0_mm', 'th0_deg', 'n0_leds_used', 'src', 'log'})]; %#ok<AGROW>
 end
 n = height(T);
+model_on = T.kind >= 40 & T.kind <= 47; % DIAG のモデルあり
+if any(model_on) && ~all(model_on)
+    error('fit_slip_k_log:mixed', 'モデルあり(kind 40〜47)となしの走りが混ざっている。別々に当てはめる');
+end
+model_on = all(model_on);
 
 % ---- ログを割り当てる ----
 [g, gk, gv] = findgroups(T.kind, T.v);
@@ -125,6 +140,8 @@ fprintf('%d 本を使う(%s)\n', numel(iu), strjoin(compose("%s %d", unique(R.na
 
 % ---- 当てはめ ----
 Ks = 0:0.0002:0.03;
+if model_on, Ks = -0.015:0.0002:0.015; end % 機体の K に足りない分(負なら機体の K が大きすぎる)
+ik0 = find(abs(Ks) < 1e-9, 1); % K = 0
 if o.FitC, Cs = [0 0.005 0.01 0.02 0.03 0.05 0.08 0.12 0.2]; else, Cs = o.C; end
 P = cell(numel(Cs), 1);   % P{ic}: 本 × K × [along lat] の見込み
 for ic = 1:numel(Cs)
@@ -168,7 +185,16 @@ kw = sum(R.k_run(iu) .* R.w(iu)) / sum(R.w(iu));
 
 fprintf('\nK = %.4f(幅 %.4f〜%.4f)  C = %.3f s%s  使ったずれ %s  残り RMS %.2f mm\n', K, min(kr), max(kr), C, ...
     ternary(o.FitC, '', '(固定)'), o.Use, sqrt(s2));
-fprintf('K = 0(滑りなし)の残りの二乗和 %.1f → %.1f\n', sse(icb, 1), smin);
+fprintf('K = 0(滑りなし)の残りの二乗和 %.1f → %.1f\n', sse(icb, ik0), smin);
+if model_on
+    fprintf('モデルありの走り: 上の K は機体の K(%.4f)に足りない分。足すと %.4f(幅 %.4f〜%.4f)。K = 0 が幅に入れば補正は合っている\n', ...
+        o.KModel, o.KModel + K, o.KModel + min(kr), o.KModel + max(kr));
+end
+if ~isempty(o.KCheck)
+    [~, ikc] = min(abs(Ks - o.KCheck));
+    fprintf('K = %.4f の確かめ: 残り RMS %.2f mm(一番よい K で %.2f)、当てはめの幅に%s\n', Ks(ikc), ...
+        sqrt(sse(icb, ikc) / max(1, nobs - npar)), sqrt(s2), ternary(sse(icb, ikc) <= smin + s2, '入る', '入らない'));
+end
 fprintf('1 本ごとの K: 重み付き平均 %.4f、中央値 %.4f、ただの平均 %.4f(遅い走りで振れる)\n', kw, ...
     median(R.k_run(iu)), mean(R.k_run(iu)));
 if o.FitC
@@ -271,10 +297,13 @@ end
 end
 
 function [u, nv] = exit_frame(th_end_deg)
-% 出る向き u と外 nv(置いた所の座標: 前 +x、左 +y)。右に曲がった(向きが減った)なら外は出る向きの左、左なら右
+% 出る向き u と外 nv(置いた所の座標: 前 +x、左 +y)。右に曲がった(向きが減った)なら外は出る向きの左、左なら右。
+% 向きがほとんど変わらない走り(DIAG の 135。右 135° → 左 135°)は、ジャイロのずれで符号が変わらないよう左を + にする
 a = deg2rad(th_end_deg);
 u = [cos(a) sin(a)];
-nv = -sign(th_end_deg) * [-sin(a) cos(a)];
+s = -sign(th_end_deg);
+if abs(th_end_deg) < 22.5, s = 1; end
+nv = s * [-sin(a) cos(a)];
 end
 
 function a = wrap180(a)

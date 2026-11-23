@@ -122,7 +122,7 @@ static const float kLongSearchSpeeds[] = LONG_LOG_SEARCH_V_MM_S; // 長い走行
 static float s_route_cost = 0.0f;
 static float s_route_est = 0.0f;
 static uint16_t s_route_count = 0;
-static float s_route_est_by_type[3] = { 0.0f, 0.0f, 0.0f };
+static float s_route_est_by_type[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
 static const char *DirName(Direction d) {
     switch (d) {
@@ -727,6 +727,19 @@ static void SaveMapAtGoal(void) {
     LED_SetDirectPattern(LedIdlePattern());
 }
 
+// 斜めのコストの経路の作業領域(約 22KB)。全面探索の最短経路の候補(SEARCH_FULL_DIAG)と、最短走行の DIAG の経路で使う
+// (同時には使わない)
+static DiagRouteSolver s_diag_solver;
+
+// 全面探索にする(SearchPlanner_StartFull)。SEARCH_FULL_DIAG なら、確かめる最短経路の候補を斜めのコストで選ぶ
+static void StartFullSearch(void) {
+    SearchPlanner_StartFull(&s_planner);
+    if (SEARCH_FULL_DIAG) {
+        s_planner.full_diag = &s_diag_solver;
+        s_planner.full_diag_cell_x10 = MAZE_COST_DIAG_CELL_X10;
+    }
+}
+
 static bool SearchLoop(const DrivePos *dp_start, WallObservation obs, WallSensorValues sv);
 static bool TryKnownRun(DrivePos *dp, MazePos c0, Direction h0, WallObservation *obs, WallSensorValues *sv,
                         bool *used);
@@ -754,7 +767,7 @@ static bool RunSearch(SearchAlgo algo, const MazePos *goals, uint8_t goal_count)
     if (s_search_scope == SEARCH_SCOPE_FULL) {
         // 全面探索: 先にゴールへ向かい、ゴールの真ん中で止まって地図を残してから(180° は回らない)、
         // 最短経路が決まったらスタートへ戻る(段階 TO_GOAL → FULL → TO_START → DONE)
-        SearchPlanner_StartFull(&s_planner);
+        StartFullSearch();
     }
 
     DrivePos dp;
@@ -1098,6 +1111,7 @@ void SearchMenu_Run(void) {
 //   PIVOT: 続く直進を1つにまとめて FAST_V で走り、曲がるときは真ん中で止まって超信地旋回
 //   SMALL: 小回り 90° のスラロームだけ(RunPath_FromRoute の use_large = false)
 //   LARGE: 大回り 90°・180° に置き換えられる所は置き換える(use_large = true)
+//   DIAG : 斜めのコストの経路(logic/maze/diag_route)を、大回りと斜めに置き換える(RunPath_FromRouteEx。2026-11-07)
 // スラロームの指令の列では、直進は FAST_V まで加速し、次の旋回の速さまで減速して旋回に入る。
 
 static CommandList s_route;
@@ -1105,6 +1119,10 @@ static RunList s_run_small;
 static RunList s_run_large;
 static bool s_run_small_ok = false;
 static bool s_run_large_ok = false;
+static CommandList s_diag_route; // 斜めのコストの区画の経路
+static RunList s_run_diag;
+static bool s_run_diag_ok = false;
+#define DIAG_STEP_MM (SECTION_MM / 1.41421356f) // 斜めの1区間
 
 // 旋回の種類ごとの動き(速さ・角速度・角加速度・角度・前後のオフセット。logic/maze/run_path の RunTurnSpec)
 typedef RunTurnSpec FastTurn;
@@ -1117,9 +1135,11 @@ static RunProfile ComputeFastTurns(void) {
                                                 s_fast_large180_v, s_fast_turn);
     prof.decel = FastDecel(); // 速度帯で減速度を決めたとき(FAST_BANDS)も、経路の時間の計算を走りに合わせる
 
-    static const RunType kTurns[] = { RUN_SMALL90_R, RUN_LARGE90_R, RUN_LARGE180_R };
-    static const char *const kNames[] = { "small90", "large90", "large180" };
-    for (int i = 0; i < 3; i++) {
+    static const RunType kTurns[] = { RUN_SMALL90_R, RUN_LARGE90_R, RUN_LARGE180_R, RUN_D45IN_R, RUN_D45OUT_R,
+                                      RUN_D135IN_R, RUN_D135OUT_R, RUN_DV90_R, RUN_DV90P_R };
+    static const char *const kNames[] = { "small90", "large90", "large180", "d45in", "d45out",
+                                          "d135in", "d135out", "dv90", "dv90p" };
+    for (int i = 0; i < (int)(sizeof(kTurns) / sizeof(kTurns[0])); i++) {
         const FastTurn *t = &s_fast_turn[kTurns[i]];
         printf("%-8s: v=%.0f omega=%.0f alpha=%.0f -> pre %.1f post %.1f mm%s\r\n",
                kNames[i], t->v_mm_s, t->omega_dps, t->alpha_dps2, t->pre_mm, t->post_mm,
@@ -1198,9 +1218,32 @@ static bool FastStraightAll(float from, bool from_center, float *end, bool end_c
 static float FrontWindowBefore(const RunList *list, uint16_t i) {
     if (!s_fast_all || !(s_search_corr & CORR_SFRONT) || i + 1u >= list->count) return 0.0f;
     RunType next = (RunType)list->items[i + 1u].type;
-    if (!RunType_IsTurn(next) || RunType_IsLarge(next)) return 0.0f;
+    if (next != RUN_SMALL90_R && next != RUN_SMALL90_L) return 0.0f; // 小回りだけ(大回り・斜めは前壁補正を使わない)
     float b = SLALOM_FRONT_WINDOW_MM - s_fast_turn[next].pre_mm;
     return (b > 0.0f) ? b : 0.0f;
+}
+
+// LOG_EV_TURN_KIND の kind(log_event.h)
+static float TurnKindCode(RunType type) {
+    switch (type) {
+        case RUN_LARGE90_R:
+        case RUN_LARGE90_L:  return 1.0f;
+        case RUN_LARGE180_R:
+        case RUN_LARGE180_L: return 2.0f;
+        case RUN_D45IN_R:
+        case RUN_D45IN_L:    return 4.0f;
+        case RUN_D45OUT_R:
+        case RUN_D45OUT_L:   return 5.0f;
+        case RUN_D135IN_R:
+        case RUN_D135IN_L:   return 6.0f;
+        case RUN_D135OUT_R:
+        case RUN_D135OUT_L:  return 7.0f;
+        case RUN_DV90_R:
+        case RUN_DV90_L:     return 8.0f;
+        case RUN_DV90P_R:
+        case RUN_DV90P_L:    return 9.0f;
+        default:             return 0.0f; // 小回り
+    }
 }
 
 // v_final: 最後の直進(次が STOP)の終わりの速さ。0 なら止まる(最短走行)。探索の既知の区間では、スラロームの速さで
@@ -1215,14 +1258,16 @@ static bool RunList_Drive(const RunList *list, float *ref_mm, float v_final, flo
         Ev(LOG_EV_RUN_CMD, (float)i, (float)type, (float)list->items[i].halves, 0.0f, 0.0f);
         if (type == RUN_STOP) break;
 
-        if (type == RUN_STRAIGHT) {
+        if (type == RUN_STRAIGHT || type == RUN_DIAG) {
+            // 斜めの直進(DIAG)は斜めの1区間(1区画/√2)ごと。斜めでは壁の補正を使わない(制御全部乗せでも)
+            bool diag = (type == RUN_DIAG);
             uint8_t halves = list->items[i].halves;
-            float end = *ref_mm + HALF_SECTION_MM * (float)halves;
-            bool end_center = at_center != ((halves & 1u) != 0u);
+            float end = *ref_mm + (diag ? DIAG_STEP_MM : HALF_SECTION_MM) * (float)halves;
+            bool end_center = !diag && (at_center != ((halves & 1u) != 0u));
             bool last = (i + 1u >= list->count) || (list->items[i + 1u].type == RUN_STOP);
             if (last && v_final > 0.0f) {
                 if (!FastStraightTo(end - end_before, v_final)) return false;
-            } else if (s_fast_all) {
+            } else if (s_fast_all && !diag) {
                 if (!FastStraightAll(*ref_mm, at_center, &end, end_center, FrontWindowBefore(list, i),
                                      NextTurnSpeed(list, i))) return false;
             } else {
@@ -1235,14 +1280,13 @@ static bool RunList_Drive(const RunList *list, float *ref_mm, float v_final, flo
 
         // 旋回: 前のオフセット → 曲がる → 後ろのオフセット(どれも旋回の速さで)
         const FastTurn *t = &s_fast_turn[type];
-        int q = RunType_QuarterTurns(type); // 時計回りが正
-        float kind = RunType_IsLarge(type) ? ((t->angle_deg > 90.0f) ? 2.0f : 1.0f) : 0.0f;
-        Ev(LOG_EV_TURN_KIND, kind, (q > 0) ? 1.0f : 0.0f, t->pre_mm, t->post_mm, 0.0f);
+        float deg = RunType_TurnDeg(type); // 時計回りが正(斜めは 45・135 も)
+        Ev(LOG_EV_TURN_KIND, TurnKindCode(type), (deg > 0.0f) ? 1.0f : 0.0f, t->pre_mm, t->post_mm, 0.0f);
         float start = *ref_mm + t->pre_mm;
         // 小回りの前壁補正(制御全部乗せのとき): 前の指令を前壁補正の範囲の始まり(FrontWindowBefore)で終えているので、
         // ここで前の壁を見る(探索で壁を読むのと同じしきい値)。大回りは前壁補正の基準がないので使わない
         bool front = false;
-        if (s_fast_all && (s_search_corr & CORR_SFRONT) && !RunType_IsLarge(type)) {
+        if (s_fast_all && (s_search_corr & CORR_SFRONT) && (type == RUN_SMALL90_R || type == RUN_SMALL90_L)) {
             WallSensorValues sv = { .l = ad_l, .fl = ad_fl, .fr = ad_fr, .r = ad_r };
             front = WallSense_Judge(sv).front;
         }
@@ -1251,7 +1295,7 @@ static bool RunList_Drive(const RunList *list, float *ref_mm, float v_final, flo
         } else {
             if (!WaitSlalomStartV(start, t->v_mm_s, s_fast_accel)) return false;
         }
-        App_StartSlalom(-90.0f * (float)q, t->omega_dps, t->alpha_dps2);
+        App_StartSlalom(-deg, t->omega_dps, t->alpha_dps2);
         if (!WaitMotionDone()) return false;
         *ref_mm = App_GetTargetDistance() + t->post_mm;
         StartStraightToV(*ref_mm, t->v_mm_s, t->v_mm_s, s_fast_accel);
@@ -1405,6 +1449,16 @@ static bool PrepareFastRoute(const MazePos *goals, uint8_t goal_count) {
     s_run_large_ok = RunPath_FromRoute(&s_route, &prof, true, &s_run_large);
     s_route_est_by_type[1] = PrintRunList("small", &s_run_small, s_run_small_ok, &prof);
     s_route_est_by_type[2] = PrintRunList("large", &s_run_large, s_run_large_ok, &prof);
+
+    // 斜め: 斜めのコストの区画の経路を選び直し、大回りと斜めに置き換える(maze_sim の turn = diag と同じ)
+    DiagRoute_Compute(&s_diag_solver, &s_map, WALL_VIEW_KNOWN, NULL, MAZE_COST_DIAG_CELL_X10, goals, goal_count);
+    s_run_diag_ok = DiagRoute_BuildRoute(&s_diag_solver, start, DIR_NORTH, &s_diag_route) &&
+                    RunPath_FromRouteEx(&s_diag_route, &prof, true, true, &s_run_diag);
+    if (s_run_diag_ok) {
+        printf("diag route (cost x10 %u):\r\n", (unsigned)DiagRoute_Cost(&s_diag_solver, start, DIR_NORTH));
+        CommandList_Print(&s_diag_route);
+    }
+    s_route_est_by_type[3] = PrintRunList("diag", &s_run_diag, s_run_diag_ok, &prof);
     return true;
 }
 
@@ -1412,7 +1466,7 @@ void FastRun_Run(void) {
     const MazePos *goals;
     uint8_t goal_count = GetGoals(&goals);
 
-    // 直進の最高速度・加速度・小回り(スラローム)の速さ・走り方を選ぶ。走り方が LARGE なら大回り 90°・180° の速さも選ぶ
+    // 直進の最高速度・加速度・小回り(スラローム)の速さ・走り方を選ぶ。走り方が LARGE か DIAG なら大回り 90°・180° の速さも選ぶ
     // (選ばなければ FAST_LARGE* の速さ。電源を切るまでそのまま)。
     // 加速度は、最高速度に合う値(FAST_ACCEL_FOR_SPEED_MM_S2)から始める(回さずに決めればその値)。
     // 減速度は加速度から決める(FAST_DECEL_MAX_MM_S2 まで)
@@ -1429,12 +1483,12 @@ void FastRun_Run(void) {
     s_fast_small_v = ModeUI_SelectValue("SMALL TURN", "mm/s", kFastSmallSpeeds,
                                         (uint8_t)(sizeof(kFastSmallSpeeds) / sizeof(kFastSmallSpeeds[0])),
                                         FAST_SMALL_V_MM_S);
-    // 走り方: 1 SMALL、2 LARGE、3 PIVOT(下の type は 0 PIVOT、1 SMALL、2 LARGE)
-    static const float kTurnValues[] = { 1.0f, 2.0f, 3.0f };
-    float turn = ModeUI_SelectValue("TURN(1 SMALL 2 LARGE 3 PIVOT)", "", kTurnValues, 3u, 1.0f);
-    uint8_t type = (turn == 3.0f) ? 0u : (turn == 2.0f) ? 2u : 1u;
-    if (type == 2u) {
-        // 大回りの速さ(2026-11-08)。回さずに決めれば FAST_LARGE* の速さ
+    // 走り方: 1 SMALL、2 LARGE、3 PIVOT、4 DIAG(下の type は 0 PIVOT、1 SMALL、2 LARGE、3 DIAG)
+    static const float kTurnValues[] = { 1.0f, 2.0f, 3.0f, 4.0f };
+    float turn = ModeUI_SelectValue("TURN(1 SMALL 2 LARGE 3 PIVOT 4 DIAG)", "", kTurnValues, 4u, 1.0f);
+    uint8_t type = (turn == 4.0f) ? 3u : (turn == 3.0f) ? 0u : (turn == 2.0f) ? 2u : 1u;
+    if (type == 2u || type == 3u) {
+        // 大回りの速さ(2026-11-08)。回さずに決めれば FAST_LARGE* の速さ。DIAG も大回りを使うので選ぶ
         s_fast_large90_v = ModeUI_SelectValue("LARGE90", "mm/s", kFastLarge90Speeds,
                                               (uint8_t)(sizeof(kFastLarge90Speeds) / sizeof(kFastLarge90Speeds[0])),
                                               FAST_LARGE90_V_MM_S);
@@ -1475,8 +1529,8 @@ void FastRun_Run(void) {
         }
     }
 
-    static const char *const kTypes[] = { "PIVOT", "SMALL", "LARGE" };
-    if ((type == 1 && !s_run_small_ok) || (type == 2 && !s_run_large_ok)) {
+    static const char *const kTypes[] = { "PIVOT", "SMALL", "LARGE", "DIAG" };
+    if ((type == 1 && !s_run_small_ok) || (type == 2 && !s_run_large_ok) || (type == 3 && !s_run_diag_ok)) {
         printf("%s: no run list. reset and choose another type\r\n", kTypes[type]);
         ModeUI_WaitClickBlinking(LED_DIRECT_ALL);
         while (1) {
@@ -1493,16 +1547,160 @@ void FastRun_Run(void) {
 
         s_run_kind = 1.0f; // 最短走行の走り方
         s_run_type = (float)type;
-        s_route_count = (type == 0) ? s_route.count : (type == 1) ? s_run_small.count : s_run_large.count;
+        s_route_count = (type == 0) ? s_route.count : (type == 1) ? s_run_small.count
+                      : (type == 2) ? s_run_large.count : s_run_diag.count;
         s_route_est = s_route_est_by_type[type];
         PrepareStart("fast");
         bool done = (type == 0) ? RunFast()
                   : (type == 1) ? RunFastSlalom(&s_run_small)
-                                : RunFastSlalom(&s_run_large);
+                  : (type == 2) ? RunFastSlalom(&s_run_large)
+                                : RunFastSlalom(&s_run_diag);
         LogMap(); // 走った地図(flash から読んだもの)
         EndRunLog();
         printf("fast run (%s) %s\r\n", kTypes[type], done ? "finished" : "stopped");
         if (done && !s_log_failed) Sound_Finish(); // ログを残せなかったときは EndRunLog の失敗の音のまま
+    }
+}
+
+// ---- 斜めの旋回の試験(RUN の TEST の DIAG)----
+// 指令の列は区画の経路からの置き換えではなく、決まった形を直接組む(置き換えだと、速い方の小回りに戻されることがある)。
+// 形(右回り。x が東、y が北で、置いた区画が (0, 0)。左回りは x が西へ。5×7 の試しの迷路に収まる。2026-11-07 に作り直した):
+//   1 45  : S3 D45IN_R D2 D45OUT_L S1               (0,0)〜(0,3) (1,3) (1,4) (2,4) (2,5) (2,6) で北向きに止まる
+//   2 135 : S3 D135IN_R D2 D135OUT_L S3             (0,0)〜(0,2) (1,2) (1,1) (2,1) (2,0) (3,0) (3,1) (3,2) で北向き
+//   3 V90 : S3 D45IN_R D2 DV90_R D2 D45OUT_R S1     (0,0)〜(0,3) (1,3) (1,4) (2,4) (3,4) (3,3) (4,3) (4,2) (4,1) で南向き
+//   4 V90P: S3 D45IN_R D1 DV90P_R D1 D45OUT_R S3    (0,0)〜(0,3) (1,3) (1,4) (2,4) (2,3) (3,3) (3,2) (3,1) (3,0) で南向き
+// (maze_sim の logic で、区画の経路に戻せること・通る区画を確かめた。通る区画の間の壁は外しておく)
+
+// 左右を入れ替えた旋回
+static RunType MirrorTurn(RunType t) {
+    if (!RunType_IsTurn(t)) return t;
+    float deg = RunType_TurnDeg(t);
+    // 右と左は隣どうしの番号(右が先)
+    return (deg > 0.0f) ? (RunType)((int)t + 1) : (RunType)((int)t - 1);
+}
+
+static bool BuildDiagTest(int pattern, bool right, RunList *out) {
+    static const RunCommand k45[] = { { RUN_STRAIGHT, 3 }, { RUN_D45IN_R, 0 }, { RUN_DIAG, 2 }, { RUN_D45OUT_L, 0 },
+                                      { RUN_STRAIGHT, 1 }, { RUN_STOP, 0 } };
+    static const RunCommand k135[] = { { RUN_STRAIGHT, 3 }, { RUN_D135IN_R, 0 }, { RUN_DIAG, 2 }, { RUN_D135OUT_L, 0 },
+                                       { RUN_STRAIGHT, 3 }, { RUN_STOP, 0 } };
+    static const RunCommand kV90[] = { { RUN_STRAIGHT, 3 }, { RUN_D45IN_R, 0 }, { RUN_DIAG, 2 }, { RUN_DV90_R, 0 },
+                                       { RUN_DIAG, 2 }, { RUN_D45OUT_R, 0 }, { RUN_STRAIGHT, 1 }, { RUN_STOP, 0 } };
+    static const RunCommand kV90P[] = { { RUN_STRAIGHT, 3 }, { RUN_D45IN_R, 0 }, { RUN_DIAG, 1 }, { RUN_DV90P_R, 0 },
+                                        { RUN_DIAG, 1 }, { RUN_D45OUT_R, 0 }, { RUN_STRAIGHT, 3 }, { RUN_STOP, 0 } };
+    const RunCommand *src = (pattern == 2) ? k135 : (pattern == 3) ? kV90 : (pattern == 4) ? kV90P : k45;
+    RunList_Clear(out);
+    for (int i = 0;; i++) {
+        RunCommand c = src[i];
+        if (!right) c.type = (uint8_t)MirrorTurn((RunType)c.type);
+        if (!RunList_Push(out, c)) return false;
+        if (c.type == RUN_STOP) break;
+    }
+    CommandList check;
+    return RunList_ToRoute(out, &check); // 形が正しいか(区画の経路に戻せるか)
+}
+
+void DiagTest_Run(void) {
+    static const float kPatterns[] = { 1.0f, 2.0f, 3.0f, 4.0f };
+    static const float kSides[] = { 1.0f, 2.0f };
+    static const char *const kNames[] = { "", "45", "135", "V90", "V90P" };
+    static const char *const kAreas[] = { "", "x 0..2, y 0..6, stop at (2,6) facing N", "x 0..3, y 0..2, stop at (3,2) facing N",
+                                          "x 0..4, y 0..4, stop at (4,1) facing S", "x 0..3, y 0..4, stop at (3,0) facing S" };
+    int pattern = (int)ModeUI_SelectValue("DIAG(1 45 2 135 3 V90 4 V90P)", "", kPatterns, 4u, 1.0f);
+    bool right = ModeUI_SelectValue("SIDE(1 RIGHT 2 LEFT)", "", kSides, 2u, 1.0f) == 1.0f;
+    s_fast_v = ModeUI_SelectValue("SPEED", "mm/s", kFastSpeeds, (uint8_t)(sizeof(kFastSpeeds) / sizeof(kFastSpeeds[0])),
+                                  FAST_V_MM_S);
+    SetFastAccelForSpeed();
+    s_fast_decel = 0.0f;
+    RunProfile prof = ComputeFastTurns();
+    if (FailSafe_IsTripped()) FailSafe_Halt();
+    if (!BuildDiagTest(pattern, right, &s_run_diag)) {
+        printf("DIAG TEST: could not build the run list\r\n");
+        ModeUI_WaitClickBlinking(LED_DIRECT_ALL);
+        while (1) {
+            if (FailSafe_IsTripped()) FailSafe_Halt();
+            HAL_Delay(10);
+        }
+    }
+    printf("DIAG TEST %s %s: v=%.0f accel=%.0f. area (cells, %s): %s\r\n", kNames[pattern], right ? "RIGHT" : "LEFT",
+           s_fast_v, s_fast_accel, right ? "x to the east" : "x to the west", kAreas[pattern]);
+    float est = PrintRunList("diag test", &s_run_diag, true, &prof);
+    while (1) {
+        printf("put in the cell (0,0) facing north (hand: START)\r\n");
+        LED_SetShiftPattern(0x0000u);
+        while (ModeUI_WaitHandStartOrClick()) {
+        }
+        s_run_kind = 1.0f; // 最短走行の走り方(4 = 斜めの旋回の試験)
+        s_run_type = 4.0f;
+        s_route_count = s_run_diag.count;
+        s_route_est = est;
+        PrepareStart("diag");
+        DrivePos dp;
+        bool done = StartRun(&dp);
+        if (done) {
+            Ev(LOG_EV_DIAG_TEST, (float)pattern, right ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+            float ref = dp.ref_mm;
+            done = RunList_Drive(&s_run_diag, &ref, 0.0f, 0.0f);
+        }
+        if (!done) {
+            Ev(LOG_EV_TIMEOUT, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+            App_SetTargetVelocity(0.0f);
+        }
+        DelayWatching(300);
+        App_ControlLoop_SetEnabled(false);
+        EndRunLog();
+        printf("diag test %s\r\n", done ? "finished" : "stopped");
+    }
+}
+
+// ---- 経路の計算時間の試験(RUN の TEST の PLAN)----
+static void PlanBenchOne(const char *name, const WallMap *map, const MazePos *goals, uint8_t goal_count) {
+    const MazePos start = { MAZE_START_X, MAZE_START_Y };
+    const uint32_t n = PLAN_BENCH_REPEAT;
+    MazeSolver *ms = &s_planner.work.solver; // 探索はしないので、プランナーの作業領域を借りる
+    uint32_t t0 = HAL_GetTick();
+    for (uint32_t i = 0; i < n; i++) Dijkstra_ComputeFrom(ms, map, WALL_VIEW_SEARCH, NULL, goals, goal_count, start, DIR_NORTH);
+    uint32_t t1 = HAL_GetTick();
+    s_diag_solver.heap_only = true;
+    for (uint32_t i = 0; i < n; i++) {
+        DiagRoute_ComputeFrom(&s_diag_solver, map, WALL_VIEW_SEARCH, NULL, MAZE_COST_DIAG_CELL_X10, goals, goal_count,
+                              start, DIR_NORTH);
+    }
+    uint32_t t2 = HAL_GetTick();
+    s_diag_solver.heap_only = false;
+    for (uint32_t i = 0; i < n; i++) {
+        DiagRoute_ComputeFrom(&s_diag_solver, map, WALL_VIEW_SEARCH, NULL, MAZE_COST_DIAG_CELL_X10, goals, goal_count,
+                              start, DIR_NORTH);
+    }
+    uint32_t t3 = HAL_GetTick();
+    bool bucket = s_diag_solver.use_bucket;
+    for (uint32_t i = 0; i < n; i++) {
+        DiagRoute_Compute(&s_diag_solver, map, WALL_VIEW_KNOWN, NULL, MAZE_COST_DIAG_CELL_X10, goals, goal_count);
+    }
+    uint32_t t4 = HAL_GetTick();
+    float k = 1000.0f / (float)n; // [ms] → 1回あたり [µs]
+    printf("%s: dijkstra %.0f us, diag (heap) %.0f us, diag (bucket%s) %.0f us, diag all nodes (fast run) %.0f us\r\n",
+           name, (float)(t1 - t0) * k, (float)(t2 - t1) * k, bucket ? "" : " NOT USED", (float)(t3 - t2) * k,
+           (float)(t4 - t3) * k);
+}
+
+void PlanBench_Run(void) {
+    const MazePos *goals;
+    uint8_t goal_count = GetGoals(&goals);
+    static const MazePos kCenter[MAZE_GOAL_COUNT] = MAZE_GOALS;
+    printf("PLAN BENCH: %u times each (motors are not used)\r\n", (unsigned)PLAN_BENCH_REPEAT);
+    WallMap_Init(&s_map); // 何も分かっていない地図
+    PlanBenchOne("empty map -> center", &s_map, kCenter, MAZE_GOAL_COUNT);
+    if (Flash_ReadUserData(&s_map, sizeof(s_map))) {
+        PlanBenchOne("flash map -> goals", &s_map, goals, goal_count);
+    } else {
+        printf("no map in flash\r\n");
+    }
+    printf("PLAN BENCH: done\r\n");
+    LED_SetDirectPattern(LED_DIRECT_ALL);
+    while (1) {
+        if (FailSafe_IsTripped()) FailSafe_Halt();
+        HAL_Delay(10);
     }
 }
 
@@ -1531,7 +1729,7 @@ static bool ReturnToStart(MazePos pos, Direction heading, const MazePos *goals, 
     s_planner.pos = pos;
     s_planner.heading = heading;
     s_planner.phase = SEARCH_PHASE_TO_START;
-    if (full) SearchPlanner_StartFull(&s_planner);
+    if (full) StartFullSearch();
     s_event_count = 0;
     s_search_slalom = true;
 
