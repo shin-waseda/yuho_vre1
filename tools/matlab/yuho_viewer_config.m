@@ -96,7 +96,10 @@ for k = 1:numel(sidx)
     if ~all(isfield(v, {'x', 'y', 'heading'})), continue; end
     h = round(v.heading);
     cx = (v.x + 0.5) * S; cy = (v.y + 0.5) * S;
-    if isfield(L, 'target') && abs(L.target(i)) > 10.0
+    % イベントは1行に1つなので、STEP の行は読んだ時より遅れることがある(走り始めは MOTION_DONE の次の行で、
+    % 次の直進の加速が始まっていて target 12)。前の数行も見て、一度でも止まっていれば真ん中とする
+    w = max(1, i - 10):i;
+    if isfield(L, 'target') && min(abs(L.target(w))) > 10.0
         % 境界で壁を読んだ: 区画の真ん中から、来た向きへ半区画戻った所
         hd = mlv.heading_deg(h);
         cx = cx - round(cosd(hd)) * 0.5 * S;
