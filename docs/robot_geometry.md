@@ -92,5 +92,5 @@ plant_sim(ぶつかるシミュレーション)を作るときにユーザーか
   - 735〜736 行: ぶつかりの実装．
   - 838 行，849 行: 回る中心が原点と違うかもしれない，という残りの課題．
 - `M:\User\Desktop\school\club\sim\tools\plant_sim\world.c`: 外形の多角形(`BuildOutline`)とぶつかりの処理．
-- `M:\User\STM32CubeIDE\workspace_1.19.0\yuho\base_plate.DXF`: 元の図面．
+- `M:\User\Desktop\school\club\classic_1\firmware\base_plate.DXF`: 元の図面．
 - `Core/Inc/params.h`: ファームのタイヤの直径とトレッド．

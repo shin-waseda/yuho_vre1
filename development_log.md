@@ -4679,3 +4679,15 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
 - 終わりの状態: ワークツリーは yuho(master)だけ．ローカルのブランチは master と，マージしていない残すもの 5 つ(`feature/plant-model-fit`，
   `feature/plant-sim`，`feature/software-articles`，`feature/mode-tree-doc`，`timer_changed`)．GitHub は master・`feature/mode-tree-doc`・
   `feature/software-articles`．タグは `2026-tohoku`・`2026-student`・`archive/system-identification`．master はプッシュ済み．
+
+### 2026-11-23 作業場所を `M:/User/Desktop/school/club/classic_1/firmware` へ移す準備をした(`master` のまま)
+
+- ユーザーの依頼「STM32CubeIDE の workspace から club の classic(機体 yuho のフォルダ classic_1)に作業場所を完全に移したい」．
+- 前に `classic_1/firmware` にあった古い clone(同じ GitHub．11-07 の feature/diagonal-run と書きかけ)を調べた: コミットしていないコード 16 ファイルは
+  746d452 に，送っていないコミット 9 つは yuho の歴史に，logs 2054 ファイル(2.4GB)はすべて yuho/logs にあった(中身のハッシュで比べた)．
+  そこにしかない .vscode/launch.json だけを yuho へ写し，古い clone は消した(ユーザーの判断「意味もなくコピーしたもの」)．
+- パスを新しい場所に直した: tools/matlab/README.md，tools/matlab/sysid_fit/README.md，docs/robot_geometry.md，docs/system_identification_study.md，
+  `yuho Debug.launch`(ST-Link のログ)．plant-sim・mouse-sim の fw_root.local(git の外)も直した(mouse-sim は外した yuho-stair を指していた)．
+  開発日記と docs/sysid の日記の中の古いパスは記録なのでそのまま．plant-sim・mouse-sim の build.sh と README の例のパスは別リポジトリなので直していない．
+- CMake のキャッシュ(build/．古いパスが入っている)を消した．Claude Code の記憶は新しい場所用のフォルダへ写した．
+- フォルダそのものを移すのは，CubeIDE・VS Code・MATLAB・Claude Code を閉じてからユーザーが行う．

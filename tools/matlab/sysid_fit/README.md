@@ -14,7 +14,7 @@ fit_rotation('const')      % 旋回: 電圧の差のステップ(E1T3，E1T 0.3m
 fit_rotation('run')        %   D を本ごとの V_d0 にした場合(比べるため)
 validate_turns('const')    % 当てはめに使っていない FF だけのターン(E1C)で確かめる
 sigma_check                % σ だけ変えたときの誤差(σ が決まるか)
-shot_viewer('M:/User/STM32CubeIDE/workspace_1.19.0/yuho/logs/search/search_0098.bin', 'viewer_search.png')
+shot_viewer('M:/User/Desktop/school/club/classic_1/firmware/logs/search/search_0098.bin', 'viewer_search.png')
 ```
 
 ## やり方(出力誤差法)

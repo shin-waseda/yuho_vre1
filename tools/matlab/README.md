@@ -14,7 +14,7 @@ MATLAB でこのフォルダをパスに入れます(`cd` してもよい)．
 (`release/` の `.mltbx` をダブルクリックするか，その `toolbox` を addpath する)．
 
 ```matlab
-addpath('M:/User/STM32CubeIDE/workspace_1.19.0/yuho/tools/matlab')
+addpath('M:/User/Desktop/school/club/classic_1/firmware/tools/matlab')
 addpath('M:/User/Desktop/school/club/log-viewer/toolbox')   % .mltbx を入れたなら要らない
 
 turn_sim                                             % スラロームのシミュレータ(係数合わせ)

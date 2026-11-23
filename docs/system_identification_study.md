@@ -271,7 +271,7 @@ yuho の FF の決め方は，同定の教科書の言葉で言うと次のよ�
 MATLAB でこのフォルダもパスに入れます．
 
 ```matlab
-cd M:/User/STM32CubeIDE/workspace_1.19.0/yuho
+cd M:/User/Desktop/school/club/classic_1/firmware
 addpath tools/matlab tools/matlab/study
 ```
 
