@@ -4652,3 +4652,6 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
   - 「STEP で合わせ直す」の不具合を直した: 最初の STEP(dist 43.0，区画の真ん中)の行は次の直進の加速が始まっていて target 12 なので，
     境界で読んだとみなして y 0 へ引っぱっていた．STEP の行と前の 10 行の target の最小で決めるようにした．
     search_0108〜0110 で真ん中とするのは最初の STEP だけ(ほかは 600mm/s で境界)，東北の search は前と同じ 2 つ(最初とゴール)．checkcode の警告なし．
+- 同じ日: ワークツリー yuho-stair と yuho-award を外した(ユーザーの依頼)．yuho-stair の logs は中身のハッシュで比べ，yuho/logs にない 522 ファイルを
+  logs/archive/yuho-stair へ写した．yuho-award にだけあった MathWorks 賞の原稿(docs/mathworks_award．LaTeX の build/ は除く)と
+  同定の当てはめの MATLAB(tools/matlab/sysid_fit．11-13)を写してコミットした．マージ済みのブランチ(ローカル 47，GitHub 17)を消した．
