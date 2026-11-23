@@ -183,6 +183,12 @@ float RunType_TurnDeg(RunType type);
 // 斜めの旋回でなければ false。
 bool RunType_DiagLegs(RunType type, float *leg_in_mm, float *leg_out_mm);
 
+// 斜めの旋回 type(右・左どちらでも)の動きを、FAST_D45*・FAST_D135*・FAST_DV90*・FAST_DV90P* の形を曲がる軌跡を変えずに
+// 速さ v_mm_s にして *out に書く(角速度は速さに比例、角加速度は2乗に比例。v_mm_s が 0 以下なら FAST_D* の速さのまま)。
+// 前後のオフセットは角までの折れ線から(RunProfile_ForSpeeds と同じ。軌跡が変わらないので速さによらない)。
+// 斜めの旋回でなければ false。SLIP の CAMERA の DIAG(2026-11-22)で、旋回の速さを変えて走るのに使う
+bool RunType_DiagTurnSpec(RunType type, float v_mm_s, RunTurnSpec *out);
+
 // 旋回が通る区画の移り方(経路の計算用)。境目から向きd_inで区画Aに入ったところから、
 // 旋回が使う区画を抜けて次の境目に着くまでに区画を移る向き(絶対方位)を順にmovesへ書き、
 // その数を返す(最大5。旋回でなければ0)。最後の向きが旋回の後の向き。

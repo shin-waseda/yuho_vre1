@@ -668,7 +668,8 @@
 // 2026-11-06: 小回りの調整(SLALOM_PRE/POST_ADJ_MM)を探索で確かめるため，1 にして SEARCH_TEST_GOALS を使う
 // 2026-11-07: ユーザーの依頼で 0 に戻して MAZE_GOALS((7,7)〜(8,8))を使う
 // 2026-11-07: 試しの迷路のゴールが (1,0) なので(ユーザー談)，1 にして SEARCH_TEST_GOALS を使う(feature/diagonal-run)
-#define SEARCH_USE_TEST_GOAL    1
+// 2026-11-22: ユーザーの依頼で 0 に戻して MAZE_GOALS((7,7)〜(8,8))を使う(yuho-stair と同じ)
+#define SEARCH_USE_TEST_GOAL    0
 #define SEARCH_TEST_GOAL_COUNT  1
 #define SEARCH_TEST_GOALS       { { 1, 0 } }
 

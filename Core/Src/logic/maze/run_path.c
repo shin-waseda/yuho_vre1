@@ -59,13 +59,40 @@ static void SetTurn(RunTurnSpec turns[RUN_TYPE_COUNT], RunType r, RunType l, con
     turns[l] = t;
 }
 
-// 斜めの旋回(r・l)を形 p で、角までの折れ線に合わせた前後のオフセットで入れる
-static void SetDiagTurn(RunTurnSpec turns[RUN_TYPE_COUNT], RunType r, RunType l, const SlalomParams *p) {
+bool RunType_DiagTurnSpec(RunType type, float v_mm_s, RunTurnSpec *out) {
+    SlalomParams p;
+    switch (type) {
+        case RUN_D45IN_R:
+        case RUN_D45IN_L:
+        case RUN_D45OUT_R:
+        case RUN_D45OUT_L:
+            p = (SlalomParams){ FAST_D45_V_MM_S, FAST_D45_OMEGA_DPS, FAST_D45_ALPHA_DPS2, 45.0f };
+            break;
+        case RUN_D135IN_R:
+        case RUN_D135IN_L:
+        case RUN_D135OUT_R:
+        case RUN_D135OUT_L:
+            p = (SlalomParams){ FAST_D135_V_MM_S, FAST_D135_OMEGA_DPS, FAST_D135_ALPHA_DPS2, 135.0f };
+            break;
+        case RUN_DV90_R:
+        case RUN_DV90_L:
+            p = (SlalomParams){ FAST_DV90_V_MM_S, FAST_DV90_OMEGA_DPS, FAST_DV90_ALPHA_DPS2, 90.0f };
+            break;
+        case RUN_DV90P_R:
+        case RUN_DV90P_L:
+            p = (SlalomParams){ FAST_DV90P_V_MM_S, FAST_DV90P_OMEGA_DPS, FAST_DV90P_ALPHA_DPS2, 90.0f };
+            break;
+        default:
+            return false;
+    }
+    if (v_mm_s > 0.0f) Slalom_ScaleToSpeed(&p, v_mm_s);
+    // 角までの折れ線に合わせた前後のオフセット
     float a = 0.0f, b = 0.0f, pre, post;
-    RunType_DiagLegs(r, &a, &b);
-    SlalomShape sh = Slalom_ComputeShape(p);
-    Slalom_TurnOffsets(&sh, p->angle_deg, a, b, &pre, &post);
-    SetTurn(turns, r, l, p, pre, post);
+    RunType_DiagLegs(type, &a, &b);
+    SlalomShape sh = Slalom_ComputeShape(&p);
+    Slalom_TurnOffsets(&sh, p.angle_deg, a, b, &pre, &post);
+    *out = (RunTurnSpec){ p.v_mm_s, p.omega_dps, p.alpha_dps2, p.angle_deg, pre, post };
+    return true;
 }
 
 RunProfile RunProfile_ForSpeeds(float vmax, float accel, float small_v, RunTurnSpec turns[RUN_TYPE_COUNT]) {
@@ -101,16 +128,9 @@ RunProfile RunProfile_ForSpeedsLarge(float vmax, float accel, float small_v, flo
     SetTurn(turns, RUN_LARGE180_R, RUN_LARGE180_L, &l180, o180.pre_mm, o180.post_mm);
 
     // 斜め: 入りと出は同じ形で、折れ線の前後が入れ替わる
-    SlalomParams d45 = { FAST_D45_V_MM_S, FAST_D45_OMEGA_DPS, FAST_D45_ALPHA_DPS2, 45.0f };
-    SetDiagTurn(turns, RUN_D45IN_R, RUN_D45IN_L, &d45);
-    SetDiagTurn(turns, RUN_D45OUT_R, RUN_D45OUT_L, &d45);
-    SlalomParams d135 = { FAST_D135_V_MM_S, FAST_D135_OMEGA_DPS, FAST_D135_ALPHA_DPS2, 135.0f };
-    SetDiagTurn(turns, RUN_D135IN_R, RUN_D135IN_L, &d135);
-    SetDiagTurn(turns, RUN_D135OUT_R, RUN_D135OUT_L, &d135);
-    SlalomParams dv90 = { FAST_DV90_V_MM_S, FAST_DV90_OMEGA_DPS, FAST_DV90_ALPHA_DPS2, 90.0f };
-    SetDiagTurn(turns, RUN_DV90_R, RUN_DV90_L, &dv90);
-    SlalomParams dv90p = { FAST_DV90P_V_MM_S, FAST_DV90P_OMEGA_DPS, FAST_DV90P_ALPHA_DPS2, 90.0f };
-    SetDiagTurn(turns, RUN_DV90P_R, RUN_DV90P_L, &dv90p);
+    for (int t = RUN_D45IN_R; t < RUN_TYPE_COUNT; t++) {
+        RunType_DiagTurnSpec((RunType)t, 0.0f, &turns[t]); // 斜めの旋回でなければ書かない
+    }
 
     RunProfile prof = RunProfile_Default();
     prof.accel = accel;
