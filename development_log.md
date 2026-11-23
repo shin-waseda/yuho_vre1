@@ -4652,10 +4652,27 @@ maze_sim(CLI・GUI)にはまだ全面探索を選ぶ所がない．
   - 「STEP で合わせ直す」の不具合を直した: 最初の STEP(dist 43.0，区画の真ん中)の行は次の直進の加速が始まっていて target 12 なので，
     境界で読んだとみなして y 0 へ引っぱっていた．STEP の行と前の 10 行の target の最小で決めるようにした．
     search_0108〜0110 で真ん中とするのは最初の STEP だけ(ほかは 600mm/s で境界)，東北の search は前と同じ 2 つ(最初とゴール)．checkcode の警告なし．
-- 同じ日: ワークツリー yuho-stair と yuho-award を外した(ユーザーの依頼)．yuho-stair の logs は中身のハッシュで比べ，yuho/logs にない 522 ファイルを
-  logs/archive/yuho-stair へ写した．yuho-award にだけあった MathWorks 賞の原稿(docs/mathworks_award．LaTeX の build/ は除く)と
-  同定の当てはめの MATLAB(tools/matlab/sysid_fit．11-13)を写してコミットした．マージ済みのブランチ(ローカル 47，GitHub 17)を消した．
-- 同じ日: ワークツリー yuho-sysid(feature/system-identification．同定用にファームを削った版)を記録として残して外した(ユーザーの依頼)．
-  master にはマージせず，タグ `archive/system-identification`(1085b51)を付けてプッシュした．ブランチで書き足した日記(812 行)は
-  docs/sysid/development_log_sysid.md に，ログ(1217 本，505MB．どれも yuho/logs になかった)は logs/archive/yuho-sysid に写した．
-  下書きの PDF「マイクロマウスでシステム同定をやってみた」は docs/ に写した(コミットはしていない)．ブランチはローカルと GitHub から消した．
+
+### 2026-11-23 git の整理(ブランチ・ワークツリー・タグ．`master` のまま)
+
+- ユーザーの依頼「git の整理をするよ」．消すものは一覧を見せてから消した．コードは変えていない．
+- 大会のブランチ: `feature/diag-slip-camera`(`feature/diagonal-run` を含む)を master に `--no-ff` でマージしてプッシュした(9c3961b)．
+  開発日記がぶつかったので，両方の分を日付の順に並べた．
+- マージ済みのブランチを消した: ローカル 47(11 月の feature/* 19，10 月 19，9 月より前の日本語名・`main` など 7，ワークツリーを外した後の
+  `feature/slip-camera-k`・`feature/mathworks-award`)，GitHub 17．すべて `-d`(マージ済みの確かめつき)．`feature/diagonal-run` と
+  `feature/velocity-pid` は GitHub のブランチより先にあったので `-d` が断り，GitHub の方を先に消してから消せた．
+- ワークツリー yuho-stair(`feature/slip-camera-k`)を外した: logs(1825 ファイル，1.6GB)を中身のハッシュで比べ，yuho/logs にない
+  522 ファイル(65MB．bin は search/fast_0022_dup1 だけで，残りは 11-17 に直した新しい版の csv)を logs/archive/yuho-stair へ写した．
+  SD の番号が振り直されていて，同じ名前で中身の違う bin が 88 あった(どれも yuho/logs に _dupN などの別名で入っていた)．
+- ワークツリー yuho-award(`feature/mathworks-award`)を外した: WSL で作ったので `.git` のパスが /mnt/m/... で Windows の git から読めず，
+  `git worktree repair` で直してから見た．コミットしていない MathWorks 賞の原稿(docs/mathworks_award．main.tex・fig・最終版の PDF．
+  LaTeX の build/ は除く)と同定の当てはめの MATLAB(tools/matlab/sysid_fit．11-13)がそこにしかなかったので，写してコミットした(d967376)．
+- ワークツリー yuho-sysid(`feature/system-identification`)を記録として残して外した: 同定用にファームを削った版(迷路・壁制御を消して
+  logic/sysid の試験 E0〜E1W．master との差は +3931・−8406 行)なので master にはマージせず，タグ `archive/system-identification`
+  (1085b51)を付けてプッシュした．ブランチで書き足した日記(812 行．終わりに足しただけ)は docs/sysid/development_log_sysid.md に，
+  ログ(1217 本，505MB．どれも yuho/logs になかった)は logs/archive/yuho-sysid に写した．同定の記事の下書きの PDF(はてなブログの
+  下書きのプレビューを印刷したもの．11-04．26 ページ)も docs/sysid に置いてコミットした．賞の PDF(5 ページ)とは別の文書．
+  ブランチはローカル(`-D`．タグが同じコミットを指す)と GitHub から消した．
+- 終わりの状態: ワークツリーは yuho(master)だけ．ローカルのブランチは master と，マージしていない残すもの 5 つ(`feature/plant-model-fit`，
+  `feature/plant-sim`，`feature/software-articles`，`feature/mode-tree-doc`，`timer_changed`)．GitHub は master・`feature/mode-tree-doc`・
+  `feature/software-articles`．タグは `2026-tohoku`・`2026-student`・`archive/system-identification`．master はプッシュ済み．
