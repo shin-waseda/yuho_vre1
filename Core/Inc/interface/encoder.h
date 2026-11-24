@@ -17,5 +17,6 @@ void Encoder_SyncDelta(void);
 // 制御の割り込みが GetDeltaR を使っている間に、メインで右タイヤの回転を読むとき(モードの UI の値選び)に使う。
 // 差は呼び出し側で (int16_t)(now - last) として取る。
 uint16_t Encoder_GetCountR(void);
+uint16_t Encoder_GetCountL(void); // 左のカウンタの今の値(GetCountR と同じ)
 
 #endif

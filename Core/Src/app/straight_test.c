@@ -1,6 +1,7 @@
 #include "app/straight_test.h"
 
-#include "main.h"
+#include <stdio.h>
+#include "interface/timer.h"
 #include "app/mode_ui.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
@@ -95,14 +96,14 @@ static void SetupLogger(void) {
 
 // FailSafe発動時はFailSafe_Halt()へ入る(戻らない)。
 static void DelayWatching(uint32_t ms) {
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GetTick() - t0 < ms) {
+    uint32_t t0 = Timer_GetMs();
+    while (Timer_GetMs() - t0 < ms) {
         if (FailSafe_IsTripped()) {
             Logger_Stop();
             ModeUI_SaveLogToSD(); // 止まったときの様子も残す(限界を後で見るため)
             FailSafe_Halt();
         }
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
 }
 
@@ -115,18 +116,18 @@ static void RunOnce(void) {
 
     App_StartStraight(STRAIGHT_TEST_DISTANCE_MM, s_v_max, 0.0f, s_accel);
 
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (!App_IsMotionDone()) {
         if (FailSafe_IsTripped()) {
             Logger_Stop();
             ModeUI_SaveLogToSD(); // 止まったときの様子も残す(限界を後で見るため)
             FailSafe_Halt();
         }
-        if (HAL_GetTick() - t0 > TimeoutMs()) {
+        if (Timer_GetMs() - t0 > TimeoutMs()) {
             printf("timeout\r\n");
             break;
         }
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
 
     App_SetTargetVelocity(0.0f); // タイムアウト時もここで止める
@@ -164,7 +165,7 @@ void StraightTest_Run(void) {
     while (1) {
         printf("hold hand over front-left sensor to RUN\r\n");
         ModeUI_WaitHandStart();
-        HAL_Delay(STRAIGHT_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+        Timer_DelayMs(STRAIGHT_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
         // 機体が止まっている間に、ジャイロのゼロ点を測り直す(起動時の補正からずれていることがある)
         printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
         App_ResetGyroAngle(); // 置いた向きを 0° にする(向きの基準を決めるのは走りの始めだけ)
@@ -231,10 +232,10 @@ static bool TurnAround(void) {
     App_ControlLoop_SetEnabled(true);
     DelayWatching(100);
     App_StartPivot(180.0f, SEARCH_TURN_OMEGA_DPS, SEARCH_TURN_ALPHA_DPS2);
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (!App_IsMotionDone()) {
         DelayWatching(1);
-        if (HAL_GetTick() - t0 > 3000u) return false;
+        if (Timer_GetMs() - t0 > 3000u) return false;
     }
     DelayWatching(100);
     App_ControlLoop_SetEnabled(false);
@@ -279,7 +280,7 @@ void StraightSweep_Run(void) {
 
     LED_SetShiftPattern(0x0000u);
     ModeUI_WaitHandStart();
-    HAL_Delay(STRAIGHT_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+    Timer_DelayMs(STRAIGHT_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
     printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
     App_ResetGyroAngle(); // 置いた向きを 0° にする(往復の途中では決め直さない)
 

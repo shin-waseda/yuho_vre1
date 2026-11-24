@@ -1,6 +1,8 @@
 #include "app/stream_test.h"
 
-#include "main.h"
+#include <stddef.h>
+#include <stdio.h>
+#include "interface/timer.h"
 #include "app/mode_ui.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
@@ -21,7 +23,7 @@ static void SetupLogger(uint32_t decimation) {
 // ボタンが押されたか(チャタリングを除いて)
 static bool Pressed(void) {
     if (!Button_IsPressed()) return false;
-    HAL_Delay(20);
+    Timer_DelayMs(20);
     return Button_IsPressed();
 }
 
@@ -47,16 +49,16 @@ void StreamTest_Run(void) {
 
         SetupLogger(kDecimation[sel]);
         char path[SDCARD_PATH_MAX];
-        uint32_t t_open = HAL_GetTick();
+        uint32_t t_open = Timer_GetMs();
         if (!Logger_StreamBegin(path, sizeof(path))) {
             printf("stream begin failed\r\n");
             continue;
         }
-        printf("log: %s (open + reserve %lu ms)\r\n", path, (unsigned long)(HAL_GetTick() - t_open));
+        printf("log: %s (open + reserve %lu ms)\r\n", path, (unsigned long)(Timer_GetMs() - t_open));
 
         Logger_Start();
         printf("streaming... press button to STOP\r\n");
-        uint32_t t0 = HAL_GetTick();
+        uint32_t t0 = Timer_GetMs();
         uint32_t last_report = t0;
         while (1) {
             if (FailSafe_IsTripped()) {
@@ -64,7 +66,7 @@ void StreamTest_Run(void) {
                 FailSafe_Halt();
             }
             Logger_StreamPoll();
-            uint32_t now = HAL_GetTick();
+            uint32_t now = Timer_GetMs();
             if (now - last_report >= STREAM_TEST_REPORT_MS) {
                 last_report = now;
                 LoggerStreamStats st;
@@ -76,8 +78,8 @@ void StreamTest_Run(void) {
             }
             if (Pressed() || now - t0 >= STREAM_TEST_MAX_MS) break;
         }
-        uint32_t duration = HAL_GetTick() - t0;
-        while (Button_IsPressed()) HAL_Delay(10);
+        uint32_t duration = Timer_GetMs() - t0;
+        while (Button_IsPressed()) Timer_DelayMs(10);
 
         uint32_t dropped = 0;
         bool ok = Logger_StreamEnd(&dropped);
@@ -92,7 +94,7 @@ void StreamTest_Run(void) {
                (unsigned long)st.write_avg_ms, (unsigned long)st.write_max_ms);
         if (ok) {
             LED_SetDirectPattern(LED_DIRECT_ALL);
-            HAL_Delay(STREAM_TEST_SHOW_MS);
+            Timer_DelayMs(STREAM_TEST_SHOW_MS);
             LED_SetDirectPattern(0x00u);
         } else {
             LED_SetDirectPattern(MODE_UI_LED_SD_ERROR);

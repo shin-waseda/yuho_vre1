@@ -1,7 +1,8 @@
 #include "app/lat_ruler_test.h"
 
 #include <math.h>
-#include "main.h"
+#include <stdio.h>
+#include "interface/timer.h"
 #include "app/mode_ui.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
@@ -31,18 +32,18 @@ static void CheckFailSafe(void) {
 }
 
 static void DelayWatching(uint32_t ms) {
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GetTick() - t0 < ms) {
+    uint32_t t0 = Timer_GetMs();
+    while (Timer_GetMs() - t0 < ms) {
         CheckFailSafe();
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
 }
 
 static bool WaitMotionDone(void) {
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (!App_IsMotionDone()) {
         CheckFailSafe();
-        if (HAL_GetTick() - t0 > LAT_RULER_TIMEOUT_MS) {
+        if (Timer_GetMs() - t0 > LAT_RULER_TIMEOUT_MS) {
             printf("timeout\r\n");
             return false;
         }
@@ -69,15 +70,15 @@ static SensorMean Measure(void) {
     DelayWatching(LAT_RULER_SETTLE_MS);
     float s_l = 0, s_r = 0, s_fl = 0, s_fr = 0;
     uint32_t n = 0;
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GetTick() - t0 < LAT_RULER_RECORD_MS) {
+    uint32_t t0 = Timer_GetMs();
+    while (Timer_GetMs() - t0 < LAT_RULER_RECORD_MS) {
         CheckFailSafe();
         s_l += (float)ad_l;
         s_r += (float)ad_r;
         s_fl += (float)ad_fl;
         s_fr += (float)ad_fr;
         n++;
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     SensorMean m = { s_l / (float)n, s_r / (float)n, s_fl / (float)n, s_fr / (float)n };
     return m;
@@ -145,7 +146,7 @@ void LatRulerTest_Run(void) {
     if (FailSafe_IsTripped()) FailSafe_Halt();
     printf("hand over front-left sensor to RUN\r\n");
     ModeUI_WaitHandStart();
-    HAL_Delay(LAT_RULER_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+    Timer_DelayMs(LAT_RULER_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
     printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
     App_ResetGyroAngle(); // 置いた向きを 0° にする
     App_SetTargetVelocity(0.0f);
@@ -171,6 +172,6 @@ void LatRulerTest_Run(void) {
 
     printf("finished. reset to run again\r\n");
     while (1) {
-        HAL_Delay(1000);
+        Timer_DelayMs(1000);
     }
 }

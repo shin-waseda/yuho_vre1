@@ -2,7 +2,7 @@
 
 #include <math.h>
 #include <stdio.h>
-#include "main.h"
+#include "interface/timer.h"
 #include "app/mode_ui.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
@@ -246,18 +246,18 @@ static void CheckFailSafe(void) {
 }
 
 static void DelayWatching(uint32_t ms) {
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GetTick() - t0 < ms) {
+    uint32_t t0 = Timer_GetMs();
+    while (Timer_GetMs() - t0 < ms) {
         CheckFailSafe();
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
 }
 
 static bool WaitMotionDone(void) {
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (!App_IsMotionDone()) {
         CheckFailSafe();
-        if (HAL_GetTick() - t0 > SLIP_TIMEOUT_MS) {
+        if (Timer_GetMs() - t0 > SLIP_TIMEOUT_MS) {
             printf("timeout (motion)\r\n");
             return false;
         }
@@ -265,12 +265,12 @@ static bool WaitMotionDone(void) {
     return true;
 }
 
-// 目標の距離が target_mm に届くまで待つ(曲がり始めが遅れないよう HAL_Delay しない)
+// 目標の距離が target_mm に届くまで待つ(曲がり始めが遅れないよう Timer_DelayMs で待たない)
 static bool WaitTargetDistance(float target_mm) {
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (App_GetTargetDistance() < target_mm) {
         CheckFailSafe();
-        if (HAL_GetTick() - t0 > SLIP_TIMEOUT_MS) {
+        if (Timer_GetMs() - t0 > SLIP_TIMEOUT_MS) {
             printf("timeout (distance)\r\n");
             return false;
         }
@@ -295,15 +295,15 @@ static bool Turn(float *ref_mm, bool right, float v, const TurnShape *s) {
         if (!WaitTargetDistance(start - SLIP_TURN_READ_MM)) return false;
         float s_sum = 0.0f, s_diff = 0.0f, s_before = 0.0f;
         uint32_t n = 0;
-        uint32_t t0 = HAL_GetTick();
+        uint32_t t0 = Timer_GetMs();
         while (App_GetTargetDistance() < start) {
             CheckFailSafe();
             s_sum += (float)ad_fl + (float)ad_fr;
             s_diff += (float)ad_fl - (float)ad_fr;
             s_before += start - App_GetTargetDistance();
             n++;
-            if (HAL_GetTick() - t0 > SLIP_TIMEOUT_MS) return false;
-            HAL_Delay(1); // 1kHz で読む(壁センサーの値は制御の割り込みで 1ms ごとに変わる)
+            if (Timer_GetMs() - t0 > SLIP_TIMEOUT_MS) return false;
+            Timer_DelayMs(1); // 1kHz で読む(壁センサーの値は制御の割り込みで 1ms ごとに変わる)
         }
         if (n == 0u) n = 1u;
         Logger_Event(LOG_EV_SLIP_TURN, (float)s_turn_log_index, s_sum / (float)n, s_diff / (float)n,
@@ -378,11 +378,11 @@ static TurnShape DiagFirstShape(int kind, float v) {
 // 止まったまま、目標の位置に対する2次元の前後のずれが小さくなるのを待つ(探索の AlongSync と同じ。壁は使わない)
 static void AlongSync(void) {
     DelayWatching(SEARCH_TURN_WAIT_MS);
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (fabsf(App_GetPositionError()) > ALONG_SYNC_TOL_MM) {
         CheckFailSafe();
-        if (HAL_GetTick() - t0 > ALONG_SYNC_TIMEOUT_MS) break; // 小さくならなくても次へ進む
-        HAL_Delay(1);
+        if (Timer_GetMs() - t0 > ALONG_SYNC_TIMEOUT_MS) break; // 小さくならなくても次へ進む
+        Timer_DelayMs(1);
     }
 }
 
@@ -526,8 +526,8 @@ static bool RunOnce(int kind, float v, StopMeasure *m) {
     // 1kHz で読んで平均と FL+FR のばらつきを出す(FW1 と同じ)
     float s_fl = 0, s_fr = 0, s_l = 0, s_r = 0, s_sum2 = 0, s_dist = 0;
     uint32_t n = 0;
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GetTick() - t0 < SLIP_RECORD_MS) {
+    uint32_t t0 = Timer_GetMs();
+    while (Timer_GetMs() - t0 < SLIP_RECORD_MS) {
         CheckFailSafe();
         float fl = (float)ad_fl, fr = (float)ad_fr;
         s_fl += fl;
@@ -537,7 +537,7 @@ static bool RunOnce(int kind, float v, StopMeasure *m) {
         s_sum2 += (fl + fr) * (fl + fr);
         s_dist += d->dist_mm;
         n++;
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     m->fl = s_fl / (float)n;
     m->fr = s_fr / (float)n;
@@ -639,18 +639,18 @@ static int KindPlaceNo(int kind) {
 // (置く所が変わったときだけ、初めの 2 秒は点滅させる)。手をかざす前に撮る
 static void WaitHandShowingPlace(int place, bool changed) {
     uint16_t bar = s_camera ? 0u : (uint16_t)((1u << (3u * (uint32_t)place)) - 1u);
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     int shown = -1;
     while (ad_fl <= SENSOR_START_THRESHOLD) {
         if (FailSafe_IsTripped()) FailSafe_Halt();
-        bool blink = changed && (!s_camera || HAL_GetTick() - t0 < 2000u);
-        int on = (!blink || ((HAL_GetTick() - t0) / 150u) % 2u == 0u) ? 1 : 0;
+        bool blink = changed && (!s_camera || Timer_GetMs() - t0 < 2000u);
+        int on = (!blink || ((Timer_GetMs() - t0) / 150u) % 2u == 0u) ? 1 : 0;
         if (on != shown) { // 変わったときだけ書く(シフトレジスタを毎回送らない)
             LED_SetShiftPattern(on ? bar : 0u);
             if (changed || s_camera) LED_SetDirectPattern(on ? LED_DIRECT_ALL : 0u);
             shown = on;
         }
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     LED_SetShiftPattern(0u);
     LED_SetDirectPattern(0u);
@@ -720,20 +720,20 @@ static void WaitClickTellingRun(uint32_t run) {
     seq[2] = (SoundNote){ kScale[n % 10u], 200u };
     seq[3] = (SoundNote){ 0u, 0u };
     printf("next time choose FROM x10 = %lu, FROM x1 = %lu\r\n", (unsigned long)(n / 10u), (unsigned long)(n % 10u));
-    uint32_t t0 = HAL_GetTick(), last_sound = t0 - 3000u;
+    uint32_t t0 = Timer_GetMs(), last_sound = t0 - 3000u;
     while (!Button_IsPressed()) {
         if (FailSafe_IsTripped()) FailSafe_Halt();
-        uint32_t now = HAL_GetTick();
+        uint32_t now = Timer_GetMs();
         if (now - last_sound >= 3000u) {
             Sound_Play(seq);
             last_sound = now;
         }
         LED_SetDirectPattern((((now - t0) / 100u) % 2u == 0u) ? SLIP_LED_STOPPED : 0u);
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     LED_SetDirectPattern(0u);
-    while (Button_IsPressed()) HAL_Delay(10);
-    HAL_Delay(20);
+    while (Button_IsPressed()) Timer_DelayMs(10);
+    Timer_DelayMs(20);
 }
 
 // CAMERA: 止まった機体の直結の LED_1〜6 だけを点け(カメラの校正の CAMERA_LED と同じ)、写真を撮ってボタンが押されるまで待つ
@@ -743,11 +743,11 @@ static void WaitPhoto(uint32_t run) {
     LED_SetDirectPattern(LED_DIRECT_ALL);
     while (!Button_IsPressed()) {
         if (FailSafe_IsTripped()) FailSafe_Halt();
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     LED_SetDirectPattern(0u);
-    while (Button_IsPressed()) HAL_Delay(10);
-    HAL_Delay(20);
+    while (Button_IsPressed()) Timer_DelayMs(10);
+    Timer_DelayMs(20);
 }
 
 // 1 本走る: 手で置いて手をかざすのを待ち、走って止まり、前壁を読んで保存する。続けてよければ true
@@ -773,7 +773,7 @@ static bool RunOneByHand(uint32_t run, int kind, float v) {
            KindName(kind), v, changed ? "NEW PLACE! " : "", KindPlace(kind), place);
     if (s_camera) printf("#%lu: take a photo of the start from above BEFORE the hand\r\n", (unsigned long)run);
     WaitHandShowingPlace(place, changed);
-    HAL_Delay(SLIP_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+    Timer_DelayMs(SLIP_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
     SetupLogger(kind, v);
     BeginAtStart();
     Logger_Start();

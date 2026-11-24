@@ -1,6 +1,7 @@
 #include "app/slalom_test.h"
 
-#include "main.h"
+#include <stdio.h>
+#include "interface/timer.h"
 #include "app/mode_ui.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
@@ -58,28 +59,28 @@ static void CheckFailSafe(void) {
 }
 
 static void DelayWatching(uint32_t ms) {
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GetTick() - t0 < ms) {
+    uint32_t t0 = Timer_GetMs();
+    while (Timer_GetMs() - t0 < ms) {
         CheckFailSafe();
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
 }
 
-// 目標の距離が target_mm に届くまで待つ(曲がり始める位置を遅らせないよう HAL_Delay しない)
+// 目標の距離が target_mm に届くまで待つ(曲がり始める位置を遅らせないよう Timer_DelayMs で待たない)
 static bool WaitTargetDistance(float target_mm) {
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (App_GetTargetDistance() < target_mm) {
         CheckFailSafe();
-        if (HAL_GetTick() - t0 > SLALOM_TEST_TIMEOUT_MS) return false;
+        if (Timer_GetMs() - t0 > SLALOM_TEST_TIMEOUT_MS) return false;
     }
     return true;
 }
 
 static bool WaitMotionDone(void) {
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (!App_IsMotionDone()) {
         CheckFailSafe();
-        if (HAL_GetTick() - t0 > SLALOM_TEST_TIMEOUT_MS) return false;
+        if (Timer_GetMs() - t0 > SLALOM_TEST_TIMEOUT_MS) return false;
     }
     return true;
 }
@@ -208,7 +209,7 @@ void SlalomTest_Run(void) {
         bool right = (sel % 2u) == 0u;
         Logger_SetFileName(kFileNames[sel]);
 
-        HAL_Delay(SLALOM_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+        Timer_DelayMs(SLALOM_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
         printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
         App_ResetGyroAngle(); // 走り出しの向きを 0° にする
 
@@ -265,10 +266,10 @@ static void SweepHalt(const char *why, uint8_t speed_no) {
         LED_SetShiftPattern((uint16_t)((1u << speed_no) - 1u));
         for (int i = 0; i < 50; i++) {
             if (FailSafe_IsTripped()) FailSafe_Halt();
-            HAL_Delay(10);
+            Timer_DelayMs(10);
         }
         LED_SetShiftPattern(0x0000u);
-        HAL_Delay(300);
+        Timer_DelayMs(300);
     }
 }
 
@@ -292,7 +293,7 @@ void SlalomSweep_Run(void) {
     while (ModeUI_WaitHandStartOrClick()) {
         // 最初の1回だけ手かざしで始める(クリックは無視する)
     }
-    HAL_Delay(SLALOM_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+    Timer_DelayMs(SLALOM_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
 
     bool first = true;
     for (uint8_t si = i_from; si <= i_to; si++) {

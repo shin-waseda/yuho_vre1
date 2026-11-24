@@ -1,7 +1,8 @@
 #include "app/failsafe.h"
 
 #include <math.h>
-#include "main.h"
+#include <stdio.h>
+#include "interface/timer.h"
 #include "interface/led.h"
 #include "interface/sound.h"
 
@@ -137,9 +138,9 @@ void FailSafe_Halt(void) {
 
         for (int i = 0; i < 4; i++) {
             LED_SetDirectPattern(pattern);
-            HAL_Delay(FAILSAFE_BLINK_MS);
+            Timer_DelayMs(FAILSAFE_BLINK_MS);
             LED_SetDirectPattern(0x00u);
-            HAL_Delay(FAILSAFE_BLINK_MS);
+            Timer_DelayMs(FAILSAFE_BLINK_MS);
         }
     }
 }

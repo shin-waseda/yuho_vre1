@@ -1,6 +1,7 @@
 #include "app/sensor_log.h"
 
-#include "main.h"
+#include <stdio.h>
+#include "interface/timer.h"
 #include "app/mode_ui.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
@@ -61,8 +62,8 @@ static void RecordOnce(void) {
     uint32_t n = 0;
 
     Logger_Start();
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GetTick() - t0 < SENSOR_LOG_MS) {
+    uint32_t t0 = Timer_GetMs();
+    while (Timer_GetMs() - t0 < SENSOR_LOG_MS) {
         if (FailSafe_IsTripped()) {
             Logger_Stop();
             FailSafe_Halt();
@@ -72,7 +73,7 @@ static void RecordOnce(void) {
         StatAdd(&st_fr, ad_fr);
         StatAdd(&st_r, ad_r);
         n++;
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     Logger_Stop();
 
@@ -106,7 +107,7 @@ void SensorLog_Run(void) {
     while (1) {
         printf("press button to LOG\r\n");
         ModeUI_WaitClick();
-        HAL_Delay(SENSOR_LOG_START_DELAY_MS); // ボタンを押した手を離す時間
+        Timer_DelayMs(SENSOR_LOG_START_DELAY_MS); // ボタンを押した手を離す時間
 
         RecordOnce();
         printf("done: %lu samples x %lu fields\r\n",

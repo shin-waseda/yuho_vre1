@@ -1,7 +1,8 @@
 #include "app/front_wall_test.h"
 
 #include <math.h>
-#include "main.h"
+#include <stdio.h>
+#include "interface/timer.h"
 #include "app/mode_ui.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
@@ -54,18 +55,18 @@ static void CheckFailSafe(void) {
 }
 
 static void DelayWatching(uint32_t ms) {
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GetTick() - t0 < ms) {
+    uint32_t t0 = Timer_GetMs();
+    while (Timer_GetMs() - t0 < ms) {
         CheckFailSafe();
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
 }
 
 static bool WaitMotionDone(void) {
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (!App_IsMotionDone()) {
         CheckFailSafe();
-        if (HAL_GetTick() - t0 > FW_TIMEOUT_MS) {
+        if (Timer_GetMs() - t0 > FW_TIMEOUT_MS) {
             printf("timeout\r\n");
             return false;
         }
@@ -123,7 +124,7 @@ static void Fw1_Run(void) {
     if (FailSafe_IsTripped()) FailSafe_Halt();
     printf("hand over front-left sensor to RUN\r\n");
     ModeUI_WaitHandStart();
-    HAL_Delay(FW_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+    Timer_DelayMs(FW_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
     BeginAtStart();
     Logger_Start();
 
@@ -145,8 +146,8 @@ static void Fw1_Run(void) {
         // 1kHz で読んで平均と FL+FR のばらつきを出す
         float s_fl = 0, s_fr = 0, s_l = 0, s_r = 0, s_sum2 = 0, s_dist = 0;
         uint32_t n = 0;
-        uint32_t t0 = HAL_GetTick();
-        while (HAL_GetTick() - t0 < FW1_RECORD_MS) {
+        uint32_t t0 = Timer_GetMs();
+        while (Timer_GetMs() - t0 < FW1_RECORD_MS) {
             CheckFailSafe();
             float fl = (float)ad_fl, fr = (float)ad_fr;
             s_fl += fl;
@@ -156,7 +157,7 @@ static void Fw1_Run(void) {
             s_sum2 += (fl + fr) * (fl + fr);
             s_dist += d->dist_mm;
             n++;
-            HAL_Delay(1);
+            Timer_DelayMs(1);
         }
         float m_fl = s_fl / (float)n, m_fr = s_fr / (float)n, m_sum = m_fl + m_fr;
         float var = s_sum2 / (float)n - m_sum * m_sum;
@@ -231,7 +232,7 @@ static bool Fw2_RunOnce(const Fw2Kind *k, ReadPoint *rp) {
     // B は通る速さまで上げてそのまま通る(探索で小回りの手前を走るのと同じ形)。A は 600 まで上げて減速する
     float v_max = k->type_b ? k->v_pass : FW2_V_MAX;
     App_StartStraightAD(first_mm, v_max, k->v_pass, FW_ACCEL, FW_ACCEL);
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (1) {
         CheckFailSafe();
         // A は直進の終わりがちょうど壁を読む所で、目標の距離が届くのと終わりの印が同じ tick に立つ。
@@ -248,7 +249,7 @@ static bool Fw2_RunOnce(const Fw2Kind *k, ReadPoint *rp) {
             rp->got = true;
         }
         if (done) break;
-        if (HAL_GetTick() - t0 > FW_TIMEOUT_MS) {
+        if (Timer_GetMs() - t0 > FW_TIMEOUT_MS) {
             printf("timeout\r\n");
             return false;
         }
@@ -286,7 +287,7 @@ static void Fw2_Run(void) {
     if (FailSafe_IsTripped()) FailSafe_Halt();
     printf("hand over front-left sensor to RUN\r\n");
     ModeUI_WaitHandStart();
-    HAL_Delay(FW_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+    Timer_DelayMs(FW_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
 
     uint32_t run = 0;
     for (uint32_t i = 0; i < n_kinds; i++) {
@@ -332,6 +333,6 @@ void FrontWallTest_Run(void) {
     }
     printf("finished. reset to run again\r\n");
     while (1) {
-        HAL_Delay(1000);
+        Timer_DelayMs(1000);
     }
 }

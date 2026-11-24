@@ -1,6 +1,8 @@
 #include "app/sensor_spin.h"
 
-#include "main.h"
+#include <stddef.h>
+#include <stdio.h>
+#include "interface/timer.h"
 #include "app/mode_ui.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
@@ -48,26 +50,26 @@ static void HaltOnFailSafe(void) {
 
 // ms だけ待つ(その間 SD へ流す)。FailSafe なら戻らない
 static void WaitStreaming(uint32_t ms) {
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GetTick() - t0 < ms) {
+    uint32_t t0 = Timer_GetMs();
+    while (Timer_GetMs() - t0 < ms) {
         if (FailSafe_IsTripped()) HaltOnFailSafe();
         Logger_StreamPoll();
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
 }
 
 // 回って、終わるまで待つ(その間 SD へ流す)。打ち切ったら false
 static bool SpinAndWait(float angle_deg) {
     App_StartPivot(angle_deg, SENSOR_SPIN_OMEGA_DPS, SENSOR_SPIN_ALPHA_DPS2);
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (!App_IsMotionDone()) {
         if (FailSafe_IsTripped()) HaltOnFailSafe();
-        if (HAL_GetTick() - t0 > TimeoutMs()) {
+        if (Timer_GetMs() - t0 > TimeoutMs()) {
             printf("timeout\r\n");
             return false;
         }
         Logger_StreamPoll();
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     return true;
 }
@@ -82,7 +84,7 @@ void SensorSpin_Run(void) {
         printf("put at the center of a cell (write down the walls and the heading). hand: START\r\n");
         LED_SetDirectPattern(0x00u);
         ModeUI_WaitHandStart();
-        HAL_Delay(SENSOR_SPIN_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+        Timer_DelayMs(SENSOR_SPIN_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
         printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
         App_ResetGyroAngle(); // スタートの向きを 0° にする
 
@@ -118,7 +120,7 @@ void SensorSpin_Run(void) {
                ok ? "" : ", spin timed out");
         if (saved) {
             LED_SetDirectPattern(LED_DIRECT_ALL); // 保存できた合図(ModeUI_SaveLogToSD と同じ)
-            HAL_Delay(500);
+            Timer_DelayMs(500);
             LED_SetDirectPattern(0x00u);
         } else {
             ModeUI_WaitClickBlinking(MODE_UI_LED_SD_ERROR);

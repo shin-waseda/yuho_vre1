@@ -11,3 +11,21 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
   App_ControlTick();
   Logger_Sample(); // このtickで確定した値を記録する
 }
+
+uint32_t Timer_GetMs(void) {
+  return HAL_GetTick();
+}
+
+void Timer_DelayMs(uint32_t ms) {
+  HAL_Delay(ms);
+}
+
+uint32_t Irq_Save(void) {
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  return primask;
+}
+
+void Irq_Restore(uint32_t saved) {
+  if (!saved) __enable_irq();
+}

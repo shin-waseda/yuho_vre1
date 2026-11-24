@@ -1,6 +1,7 @@
 #include "app/test_mode.h"
 
-#include "main.h"
+#include "interface/timer.h"
+#include "interface/encoder.h"
 #include "tim.h"
 #include "interface/gyro.h"
 #include "app/control_loop.h"
@@ -16,8 +17,8 @@ void TestMode_Run(void) {
         printf("VBAT: %.2f V  FAILSAFE: %s\r\n",
               FailSafe_GetFilteredVoltage(), FailSafe_CauseName(FailSafe_GetCause()));
 
-        uint16_t enc_l = __HAL_TIM_GET_COUNTER(&htim4);
-        uint16_t enc_r = __HAL_TIM_GET_COUNTER(&htim8);
+        uint16_t enc_l = Encoder_GetCountL();
+        uint16_t enc_r = Encoder_GetCountR();
         printf("ENC_L: %5u  ENC_R: %5u\r\n", enc_l, enc_r);
 
         printf("R:%4d FR:%4d FL:%4d L:%4d\r\n",
@@ -28,6 +29,6 @@ void TestMode_Run(void) {
         printf("POSE X:%7.1f Y:%7.1f TH:%6.3f  VL:%6.1f VR:%6.1f\r\n",
               pose.x_mm, pose.y_mm, pose.theta_rad, wv.left_mm_s, wv.right_mm_s);
 
-        HAL_Delay(100);
+        Timer_DelayMs(100);
     }
 }

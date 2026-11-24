@@ -2,7 +2,7 @@
 
 #include <math.h>
 #include <stddef.h>
-#include "main.h" // HAL_GetTick / HAL_Delay(App_RecalibrateGyroZ の待ち)
+#include "interface/timer.h"
 #include "interface/encoder.h"
 #include "interface/motor.h"
 #include "interface/gyro.h"
@@ -298,10 +298,9 @@ void App_SetOutputPaused(bool paused) {
 }
 
 void App_AddAlongCorrection(float mm) {
-    uint32_t primask = __get_PRIMASK(); // ISR も足すので、足す間だけ割り込みを止める
-    __disable_irq();
+    uint32_t irq = Irq_Save(); // ISR も足すので、足す間だけ割り込みを止める
     s_corr_along_mm += mm;
-    if (!primask) __enable_irq();
+    Irq_Restore(irq);
 }
 
 // x を ±limit に収める
@@ -482,9 +481,9 @@ float App_GetGyroAngle_deg(void) {
 
 void App_ResetGyroAngle(void) {
     s_gyro_angle_reset_req = true;
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (s_gyro_angle_reset_req) {
-        if (HAL_GetTick() - t0 > 10u) { // 割り込みが動いていない
+        if (Timer_GetMs() - t0 > 10u) { // 割り込みが動いていない
             s_gyro_angle_reset_req = false;
             break;
         }
@@ -498,13 +497,13 @@ float App_RecalibrateGyroZ(uint32_t ms) {
     s_gyro_cal_count = 0;
     s_gyro_cal_ticks_left = ticks; // 最後に書く(ここからISRが足し込み始める)
 
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (s_gyro_cal_ticks_left > 0) {
-        if (HAL_GetTick() - t0 > ms * 2u + 100u) {
+        if (Timer_GetMs() - t0 > ms * 2u + 100u) {
             s_gyro_cal_ticks_left = 0; // 割り込みが動いていない。元のゼロ点のまま
             break;
         }
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     return s_gyro_offset.z;
 }

@@ -1,6 +1,7 @@
 #include "app/vel_pid_test.h"
 
-#include "main.h"
+#include <stdio.h>
+#include "interface/timer.h"
 #include "app/mode_ui.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
@@ -41,19 +42,19 @@ static void RunOnce(void) {
     App_ControlLoop_SetEnabled(true);
     Logger_Start();
 
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (1) {
         if (FailSafe_IsTripped()) {
             Logger_Stop(); // 発動直前までのログは残す(Haltからは戻らないので送れないが、原因はUARTに出る)
             FailSafe_Halt();
         }
 
-        uint32_t t = HAL_GetTick() - t0;
+        uint32_t t = Timer_GetMs() - t0;
         if (t >= VEL_PID_TEST_TOTAL_MS) break;
 
         bool step = (t >= VEL_PID_TEST_PRE_MS) && (t < VEL_PID_TEST_PRE_MS + VEL_PID_TEST_STEP_MS);
         App_SetTargetVelocity(step ? VEL_PID_TEST_TARGET_HIGH_MM_S : 0.0f);
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
 
     Logger_Stop();
@@ -75,7 +76,7 @@ void VelPIDTest_Run(void) {
     while (1) {
         printf("hold hand over front-left sensor to RUN\r\n");
         ModeUI_WaitHandStart();
-        HAL_Delay(VEL_PID_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+        Timer_DelayMs(VEL_PID_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
         // 機体が止まっている間に、ジャイロのゼロ点を測り直す(起動時の補正からずれていることがある)
         printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
         App_ResetGyroAngle(); // 置いた向きを 0° にする(向きの基準を決めるのは走りの始めだけ)

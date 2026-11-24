@@ -1,7 +1,8 @@
 #include "app/mode_ui.h"
 
 #include <math.h>
-#include "main.h"
+#include <stdio.h>
+#include "interface/timer.h"
 #include "interface/encoder.h"
 #include "interface/button.h"
 #include "app/test_mode.h"
@@ -124,9 +125,9 @@ static uint8_t s_preset_next = 0u;
 
 static void WaitButtonRelease(void) {
     while (Button_IsPressed()) {
-        HAL_Delay(10);
+        Timer_DelayMs(10);
     }
-    HAL_Delay(20); // 離した直後のチャタリングを読まない
+    Timer_DelayMs(20); // 離した直後のチャタリングを読まない
 }
 
 #define SD_SAVE_OK_LIGHT_MS   500 // 保存できたときに全部点灯する時間
@@ -146,7 +147,7 @@ SdSaveResult ModeUI_SaveLogToSD(void) {
     printf("SD: saved %s\r\n", path);
     Sound_LogSaved();
     LED_SetDirectPattern(LED_DIRECT_ALL);
-    HAL_Delay(SD_SAVE_OK_LIGHT_MS);
+    Timer_DelayMs(SD_SAVE_OK_LIGHT_MS);
     LED_SetDirectPattern(0x00u);
     return SD_SAVE_OK;
 }
@@ -154,7 +155,7 @@ SdSaveResult ModeUI_SaveLogToSD(void) {
 // ボタンが押されたら(チャタリングを除いて)true
 static bool ButtonClicked(void) {
     if (!Button_IsPressed()) return false;
-    HAL_Delay(20);
+    Timer_DelayMs(20);
     return Button_IsPressed();
 }
 
@@ -162,30 +163,30 @@ void ModeUI_WaitClick(void) {
     while (1) {
         if (FailSafe_IsTripped()) FailSafe_Halt();
         if (ButtonClicked()) break;
-        HAL_Delay(10);
+        Timer_DelayMs(10);
     }
     WaitButtonRelease();
 }
 
 void ModeUI_WaitClickBlinking(uint8_t leds) {
     bool on = false;
-    uint32_t last_toggle = HAL_GetTick() - ERROR_BLINK_HALF_MS; // すぐ1回目を点ける
+    uint32_t last_toggle = Timer_GetMs() - ERROR_BLINK_HALF_MS; // すぐ1回目を点ける
     while (1) {
         if (FailSafe_IsTripped()) FailSafe_Halt(); // フェイルセーフの表示に切り替わる
         if (ButtonClicked()) break;
-        if (HAL_GetTick() - last_toggle >= ERROR_BLINK_HALF_MS) {
+        if (Timer_GetMs() - last_toggle >= ERROR_BLINK_HALF_MS) {
             last_toggle += ERROR_BLINK_HALF_MS;
             on = !on;
             LED_SetDirectPattern(on ? leds : 0x00u);
         }
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     LED_SetDirectPattern(0x00u);
     WaitButtonRelease();
 }
 
 bool ModeUI_WaitHandStartOrClick(void) {
-    uint32_t above_since = HAL_GetTick();
+    uint32_t above_since = Timer_GetMs();
     while (1) {
         if (FailSafe_IsTripped()) FailSafe_Halt();
         if (ButtonClicked()) {
@@ -193,18 +194,18 @@ bool ModeUI_WaitHandStartOrClick(void) {
             return true;
         }
         if (ad_fl <= SENSOR_START_THRESHOLD) {
-            above_since = HAL_GetTick();
-        } else if (HAL_GetTick() - above_since >= SENSOR_START_HOLD_MS) {
+            above_since = Timer_GetMs();
+        } else if (Timer_GetMs() - above_since >= SENSOR_START_HOLD_MS) {
             break;
         }
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     // 手をかざした: 離すまで待つ(ModeUI_WaitHandStart と同じ)
     printf("hand detected (FL:%u)\r\n", ad_fl);
     LED_SetDirectPattern(LED_FRONT_LEFT);
     while (ad_fl > SENSOR_START_THRESHOLD) {
         if (FailSafe_IsTripped()) FailSafe_Halt();
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     LED_SetDirectPattern(0x00u);
     return false;
@@ -212,15 +213,15 @@ bool ModeUI_WaitHandStartOrClick(void) {
 
 void ModeUI_WaitHandStart(void) {
     // かざす: 左前のセンサーがしきい値を続けて超えるまで待つ
-    uint32_t above_since = HAL_GetTick();
+    uint32_t above_since = Timer_GetMs();
     while (1) {
         if (FailSafe_IsTripped()) FailSafe_Halt();
         if (ad_fl <= SENSOR_START_THRESHOLD) {
-            above_since = HAL_GetTick();
-        } else if (HAL_GetTick() - above_since >= SENSOR_START_HOLD_MS) {
+            above_since = Timer_GetMs();
+        } else if (Timer_GetMs() - above_since >= SENSOR_START_HOLD_MS) {
             break;
         }
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     printf("hand detected (FL:%u)\r\n", ad_fl); // しきい値を見直すときの目安
     LED_SetDirectPattern(LED_FRONT_LEFT);
@@ -228,7 +229,7 @@ void ModeUI_WaitHandStart(void) {
     // 離す: しきい値を下回るまで待つ
     while (ad_fl > SENSOR_START_THRESHOLD) {
         if (FailSafe_IsTripped()) FailSafe_Halt();
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     LED_SetDirectPattern(0x00u);
 }
@@ -269,7 +270,7 @@ void ModeUI_ShowBattery(float vbat, uint32_t hold_ms) {
     }
 
     LED_SetShiftPattern((uint16_t)((1u << n) - 1u));
-    HAL_Delay(hold_ms);
+    Timer_DelayMs(hold_ms);
 }
 
 // 選んでいる項目の表示(UART と LED と音)。番号は1始まりで出す(音は 1 番がド、2 番がレ、…)。
@@ -306,7 +307,7 @@ static uint8_t SelectIndex(uint8_t count, uint8_t start) {
 
     while (1) {
         if (Button_IsPressed()) {
-            HAL_Delay(20);
+            Timer_DelayMs(20);
             if (Button_IsPressed()) {
                 break;
             }
@@ -328,7 +329,7 @@ static uint8_t SelectIndex(uint8_t count, uint8_t start) {
             ShowItem(index);
         }
 
-        HAL_Delay(10);
+        Timer_DelayMs(10);
     }
 
     // 決定のボタンを離すまで待つ。でないと次の階層や各モードの最初のボタン待ちが、

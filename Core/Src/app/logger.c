@@ -2,7 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "main.h" // HAL_GetTick
+#include "interface/timer.h"
 #include "interface/uart.h"
 #include "interface/sdcard.h"
 
@@ -121,8 +121,7 @@ void Logger_AddEventFields(void) {
 void Logger_Event(uint16_t code, float a, float b, float c, float d, float e) {
     if (s_state != LOGGER_RECORDING) return;
     // メインからも ISR からも呼べるよう、入れる間だけ割り込みを止める
-    uint32_t primask = __get_PRIMASK();
-    __disable_irq();
+    uint32_t irq = Irq_Save();
     uint32_t next = (s_ev_head + 1u) % EVENT_FIFO_SIZE;
     if (next == s_ev_tail) {
         s_ev_dropped++;
@@ -136,7 +135,7 @@ void Logger_Event(uint16_t code, float a, float b, float c, float d, float e) {
         ev[5] = e;
         s_ev_head = next;
     }
-    __set_PRIMASK(primask);
+    Irq_Restore(irq);
 }
 
 // ISR: 記録する行に、順番待ちのイベントを1つ入れる(なければ 0)
@@ -361,10 +360,10 @@ bool Logger_StreamBegin(char *path_out, uint32_t path_len) {
     }
     // 先頭を書く(走る前なので、書き終わるまで待つ)
     bool ok = SDCard_StreamWrite(0, s_header_buf, LOG_BIN_HEADER_BYTES);
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     int r = 1;
     while (ok && (r = SDCard_StreamPoll()) == 1) {
-        if (HAL_GetTick() - t0 > 1000u) {
+        if (Timer_GetMs() - t0 > 1000u) {
             ok = false;
             break;
         }
@@ -399,7 +398,7 @@ void Logger_StreamPoll(void) {
 
     // 送っている最中: 終わったかを見る(カードへの問い合わせは 1ms に1回まで)
     if (s_writing >= 0) {
-        uint32_t now = HAL_GetTick();
+        uint32_t now = Timer_GetMs();
         if (now == s_last_poll_ms) return;
         s_last_poll_ms = now;
         int r = SDCard_StreamPoll();
@@ -434,7 +433,7 @@ void Logger_StreamPoll(void) {
     head[3] = s_field_count;
     if (SDCard_StreamWrite(offset, head, STREAM_BLOCK_BYTES)) {
         s_writing = (int8_t)b;
-        s_write_start_ms = HAL_GetTick();
+        s_write_start_ms = Timer_GetMs();
     }
 }
 
@@ -446,10 +445,10 @@ bool Logger_StreamEnd(uint32_t *dropped_rows) {
     uint8_t a = s_blk_active;
     if (!s_blk_full[a] && s_blk_rows[a] > 0) s_blk_full[a] = true;
 
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (!s_stream_failed && (s_writing >= 0 || s_blk_full[0] || s_blk_full[1])) {
         Logger_StreamPoll();
-        if (HAL_GetTick() - t0 > 3000u) {
+        if (Timer_GetMs() - t0 > 3000u) {
             s_stream_failed = true;
             break;
         }

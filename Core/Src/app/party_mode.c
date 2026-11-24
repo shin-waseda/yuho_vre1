@@ -1,6 +1,8 @@
 #include "app/party_mode.h"
 
-#include "main.h"
+#include <stddef.h>
+#include <stdio.h>
+#include "interface/timer.h"
 #include "app/mode_ui.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
@@ -25,7 +27,7 @@ static void SetupLogger(void) {
 
 static bool Pressed(void) {
     if (!Button_IsPressed()) return false;
-    HAL_Delay(20);
+    Timer_DelayMs(20);
     return Button_IsPressed();
 }
 
@@ -51,7 +53,7 @@ void PartyMode_Run(void) {
     while (1) {
         printf("hold hand over front-left sensor to START\r\n");
         ModeUI_WaitHandStart();
-        HAL_Delay(PARTY_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+        Timer_DelayMs(PARTY_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
         // 機体が止まっている間に、ジャイロのゼロ点を測り直す(向きがゆっくり回っていかないように)
         float gyro_offset = App_RecalibrateGyroZ(GYRO_RECAL_MS);
         printf("gyro z offset: %.1f\r\n", gyro_offset);
@@ -71,18 +73,18 @@ void PartyMode_Run(void) {
         App_ControlLoop_SetEnabled(true);
         printf("holding heading. press button to STOP\r\n");
 
-        uint32_t t0 = HAL_GetTick();
+        uint32_t t0 = Timer_GetMs();
         uint32_t last_report = t0;
         while (1) {
             if (FailSafe_IsTripped()) {
                 Logger_Event(LOG_EV_FAILSAFE, (float)FailSafe_GetCause(), FailSafe_GetFilteredVoltage(),
                              0.0f, 0.0f, 0.0f);
-                HAL_Delay(PARTY_LOG_DECIMATION * 2u); // イベントが記録の行に入るのを待つ
+                Timer_DelayMs(PARTY_LOG_DECIMATION * 2u); // イベントが記録の行に入るのを待つ
                 if (logging) Logger_StreamEnd(NULL); // ここまでのログは残す
                 FailSafe_Halt();
             }
             if (logging) Logger_StreamPoll();
-            uint32_t now = HAL_GetTick();
+            uint32_t now = Timer_GetMs();
             if (logging && now - last_report >= PARTY_REPORT_MS) {
                 last_report = now;
                 PrintStats(" ", now - t0);
@@ -91,14 +93,14 @@ void PartyMode_Run(void) {
         }
         Logger_Event(LOG_EV_CLICK, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
         App_ControlLoop_SetEnabled(false);
-        HAL_Delay(PARTY_LOG_DECIMATION * 2u); // イベントが記録の行に入るのを待つ
-        while (Button_IsPressed()) HAL_Delay(10);
+        Timer_DelayMs(PARTY_LOG_DECIMATION * 2u); // イベントが記録の行に入るのを待つ
+        while (Button_IsPressed()) Timer_DelayMs(10);
 
         if (logging) {
             bool ok = Logger_StreamEnd(NULL);
-            PrintStats(ok ? "stopped, log saved:" : "stopped, log save FAILED:", HAL_GetTick() - t0);
+            PrintStats(ok ? "stopped, log saved:" : "stopped, log save FAILED:", Timer_GetMs() - t0);
             LED_SetDirectPattern(ok ? LED_DIRECT_ALL : MODE_UI_LED_SD_ERROR);
-            HAL_Delay(PARTY_SAVED_LIGHT_MS);
+            Timer_DelayMs(PARTY_SAVED_LIGHT_MS);
             LED_SetDirectPattern(ok ? 0x00u : MODE_UI_LED_SD_ERROR);
         } else {
             Logger_Stop();

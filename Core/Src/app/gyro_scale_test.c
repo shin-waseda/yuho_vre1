@@ -1,7 +1,8 @@
 #include "app/gyro_scale_test.h"
 
 #include <math.h>
-#include "main.h"
+#include <stdio.h>
+#include "interface/timer.h"
 #include "app/mode_ui.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
@@ -56,7 +57,7 @@ static void CheckFailSafe(void) {
     if (!FailSafe_IsTripped()) return;
     FailSafeCause cause = FailSafe_GetCause();
     Logger_Event(LOG_EV_FAILSAFE, (float)cause, FailSafe_GetFilteredVoltage(), 0.0f, 0.0f, 0.0f);
-    HAL_Delay(100); // イベントが記録の行に入るのを待つ(約 40ms に1行に間引いて記録しているので)
+    Timer_DelayMs(100); // イベントが記録の行に入るのを待つ(約 40ms に1行に間引いて記録しているので)
     Logger_Stop();
     App_ControlLoop_SetEnabled(false);
     printf("FAILSAFE: %s (vbat=%.2f V) during the test\r\n", FailSafe_CauseName(cause), FailSafe_GetFilteredVoltage());
@@ -65,10 +66,10 @@ static void CheckFailSafe(void) {
 }
 
 static void DelayWatching(uint32_t ms) {
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GetTick() - t0 < ms) {
+    uint32_t t0 = Timer_GetMs();
+    while (Timer_GetMs() - t0 < ms) {
         CheckFailSafe();
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
 }
 
@@ -76,14 +77,14 @@ static void DelayWatching(uint32_t ms) {
 static bool TurnAndWait(float angle_deg) {
     App_StartPivot(angle_deg, GYRO_SCALE_OMEGA_DPS, GYRO_SCALE_ALPHA_DPS2);
     uint32_t limit = TurnTimeoutMs(angle_deg);
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (!App_IsMotionDone()) {
         CheckFailSafe();
-        if (HAL_GetTick() - t0 > limit) {
+        if (Timer_GetMs() - t0 > limit) {
             printf("timeout\r\n");
             return false;
         }
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     return true;
 }
@@ -99,8 +100,8 @@ static Measure MeasureStill(uint8_t phase) {
     DelayWatching(GYRO_SCALE_SETTLE_MS);
     float sd = 0.0f, ss = 0.0f, sa = 0.0f;
     uint32_t n = 0;
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GetTick() - t0 < GYRO_SCALE_AVG_MS) {
+    uint32_t t0 = Timer_GetMs();
+    while (Timer_GetMs() - t0 < GYRO_SCALE_AVG_MS) {
         CheckFailSafe();
         float fl = (float)ad_fl;
         float fr = (float)ad_fr;
@@ -108,7 +109,7 @@ static Measure MeasureStill(uint8_t phase) {
         ss += fl + fr;
         sa += App_GetGyroAngle_deg();
         n++;
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     Measure m = { sd / (float)n, ss / (float)n, sa / (float)n };
     Logger_Event(LOG_EV_GYRO_SCALE, (float)phase, m.diff, m.sum, m.angle, 0.0f);
@@ -176,7 +177,7 @@ static void RunOnce(void) {
     Logger_Start();
 
     Sequence();
-    HAL_Delay(100); // 最後のイベントが記録の行に入るのを待つ(約 40ms に1行に間引いて記録しているので)
+    Timer_DelayMs(100); // 最後のイベントが記録の行に入るのを待つ(約 40ms に1行に間引いて記録しているので)
 
     App_SetTargetVelocity(0.0f); // タイムアウト時もここで止める
     Logger_Stop();
@@ -196,7 +197,7 @@ void GyroScaleTest_Run(void) {
     while (1) {
         printf("hold hand over front-left sensor to RUN\r\n");
         ModeUI_WaitHandStart();
-        HAL_Delay(GYRO_SCALE_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+        Timer_DelayMs(GYRO_SCALE_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
         printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
         App_ResetGyroAngle(); // 置いた向きを 0° にする
 

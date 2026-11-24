@@ -2,7 +2,8 @@
 
 #include <math.h>
 #include <string.h>
-#include "main.h"
+#include <stdio.h>
+#include "interface/timer.h"
 #include "app/mode_ui.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
@@ -192,7 +193,7 @@ static void CheckFailSafe(void) {
         Ev(LOG_EV_FAILSAFE, (float)FailSafe_GetCause(), FailSafe_GetFilteredVoltage(), 0.0f, 0.0f, 0.0f);
         App_ControlLoop_SetEnabled(false);
         if (s_log_file) {
-            HAL_Delay(SEARCH_LOG_DECIMATION * 2u); // イベントが記録の行に入るのを待つ
+            Timer_DelayMs(SEARCH_LOG_DECIMATION * 2u); // イベントが記録の行に入るのを待つ
             Logger_StreamEnd(NULL);
             s_log_file = false;
         }
@@ -200,34 +201,34 @@ static void CheckFailSafe(void) {
     }
 }
 
-// 目標の距離が target_mm に届くまで待つ(区画の境界で壁を読むため、遅れないよう HAL_Delay しない)。
+// 目標の距離が target_mm に届くまで待つ(区画の境界で壁を読むため、遅れないよう Timer_DelayMs で待たない)。
 static bool WaitTargetDistance(float target_mm) {
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (App_GetTargetDistance() < target_mm) {
         CheckFailSafe();
         PollLog();
-        if (HAL_GetTick() - t0 > SEARCH_STEP_TIMEOUT_MS) return false;
+        if (Timer_GetMs() - t0 > SEARCH_STEP_TIMEOUT_MS) return false;
     }
     return true;
 }
 
 static bool WaitMotionDone(void) {
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (!App_IsMotionDone()) {
         CheckFailSafe();
         PollLog();
-        if (HAL_GetTick() - t0 > SEARCH_STEP_TIMEOUT_MS) return false;
-        HAL_Delay(1);
+        if (Timer_GetMs() - t0 > SEARCH_STEP_TIMEOUT_MS) return false;
+        Timer_DelayMs(1);
     }
     return true;
 }
 
 static void DelayWatching(uint32_t ms) {
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GetTick() - t0 < ms) {
+    uint32_t t0 = Timer_GetMs();
+    while (Timer_GetMs() - t0 < ms) {
         CheckFailSafe();
         PollLog();
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
 }
 
@@ -294,12 +295,12 @@ static bool FrontAlign(DrivePos *dp) {
 static bool AlongSync(void) {
     DelayWatching(SEARCH_TURN_WAIT_MS);
     Ev(LOG_EV_ALONG_SYNC, App_GetPositionError(), App_GetLateralError(), 0.0f, 0.0f, 0.0f);
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (fabsf(App_GetPositionError()) > ALONG_SYNC_TOL_MM) {
         CheckFailSafe();
         PollLog();
-        if (HAL_GetTick() - t0 > ALONG_SYNC_TIMEOUT_MS) break; // 小さくならなくても次へ進む
-        HAL_Delay(1);
+        if (Timer_GetMs() - t0 > ALONG_SYNC_TIMEOUT_MS) break; // 小さくならなくても次へ進む
+        Timer_DelayMs(1);
     }
     return true;
 }
@@ -366,12 +367,12 @@ static bool SpinAndWait(float angle_deg) {
     // 打ち切りは見積もり(台形: 角度/ω + ω/α)の2倍
     float t = fabsf(angle_deg) / SENSOR_SPIN_OMEGA_DPS + SENSOR_SPIN_OMEGA_DPS / SENSOR_SPIN_ALPHA_DPS2;
     uint32_t limit_ms = (uint32_t)(t * 2000.0f);
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (!App_IsMotionDone()) {
         CheckFailSafe();
         PollLog();
-        if (HAL_GetTick() - t0 > limit_ms) return false;
-        HAL_Delay(1);
+        if (Timer_GetMs() - t0 > limit_ms) return false;
+        Timer_DelayMs(1);
     }
     return true;
 }
@@ -452,7 +453,7 @@ static bool EdgeCorr_Check(EdgeCorr *ec, float *corr) {
 // 目標の距離が *target − before に届くまで待つ。途中の壁切れで *target を直す(探索の1区画の直進用)。
 // 直したら、*target − before(壁を読む所)で v_end になるようにプロファイルを今の速さから引き直す。
 static bool WaitTargetDistanceEdge(float *target, EdgeCorr *ec, float before, float v_end) {
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (App_GetTargetDistance() < *target - before) {
         CheckFailSafe();
         PollLog();
@@ -461,7 +462,7 @@ static bool WaitTargetDistanceEdge(float *target, EdgeCorr *ec, float before, fl
             *target += c;
             StartStraightTo(*target - before, v_end);
         }
-        if (HAL_GetTick() - t0 > SEARCH_STEP_TIMEOUT_MS) return false;
+        if (Timer_GetMs() - t0 > SEARCH_STEP_TIMEOUT_MS) return false;
     }
     return true;
 }
@@ -550,7 +551,7 @@ static bool WaitSlalomStartFront(float start, float v, float accel) {
     float hi = start + SLALOM_FRONT_WINDOW_MM;
     StartStraightToV(hi, v, v, accel); // 範囲の終わりまで同じ速さで進めておく
     if (!WaitTargetDistance(lo)) return false;
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     bool by_sensor = false;
     uint32_t sum = 0;
     while (App_GetTargetDistance() < hi) {
@@ -561,7 +562,7 @@ static bool WaitSlalomStartFront(float start, float v, float accel) {
             by_sensor = true;
             break;
         }
-        if (HAL_GetTick() - t0 > SEARCH_STEP_TIMEOUT_MS) return false;
+        if (Timer_GetMs() - t0 > SEARCH_STEP_TIMEOUT_MS) return false;
     }
     float diff = App_GetTargetDistance() - start;
     Ev(LOG_EV_FRONT_TRIG, diff, (float)sum, by_sensor ? 1.0f : 0.0f, 0.0f, 0.0f);
@@ -789,10 +790,10 @@ static bool SearchLoop(const DrivePos *dp_start, WallObservation obs, WallSensor
     while (1) {
         MazePos pos = s_planner.pos;
         Direction heading = s_planner.heading;
-        uint32_t t0 = HAL_GetTick();
+        uint32_t t0 = Timer_GetMs();
         SearchPhase phase_before = s_planner.phase;
         Action act = SearchPlanner_Step(&s_planner, obs);
-        Record(pos, heading, obs, sv, act, HAL_GetTick() - t0);
+        Record(pos, heading, obs, sv, act, Timer_GetMs() - t0);
         if (s_planner.phase != phase_before) Ev(LOG_EV_PHASE, (float)s_planner.phase, 0.0f, 0.0f, 0.0f, 0.0f);
 
         // 走ったままゴールに入った(ゴールを回る・全面探索): 最初のゴールの区画の真ん中で止まって地図を残し、
@@ -911,7 +912,7 @@ static uint8_t GetGoals(const MazePos **goals) {
 
 // 手かざしで走り出した後の準備: ジャイロを合わせ、ログのファイルを開く(探索・最短走行で共通)。
 static void PrepareStart(const char *log_name) {
-    HAL_Delay(SEARCH_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+    Timer_DelayMs(SEARCH_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
     s_gyro_offset = App_RecalibrateGyroZ(GYRO_RECAL_MS);
     printf("gyro z offset: %.1f\r\n", s_gyro_offset);
     App_ResetGyroAngle(); // スタートの向きを 0° にする(向きの基準を決めるのはここだけ)
@@ -932,10 +933,10 @@ static void PrepareStart(const char *log_name) {
 #define MAP_LOG_CELLS_PER_EVENT 8u
 #define MAP_LOG_TIMEOUT_MS      2000u
 static void LogMap(void) {
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     for (uint32_t i = 0; i < MAZE_CELL_COUNT; i += MAP_LOG_CELLS_PER_EVENT) {
         while (Logger_EventQueued() >= Logger_EventCapacity()) {
-            if (HAL_GetTick() - t0 > MAP_LOG_TIMEOUT_MS) return; // 記録が止まっているなど
+            if (Timer_GetMs() - t0 > MAP_LOG_TIMEOUT_MS) return; // 記録が止まっているなど
             DelayWatching(SEARCH_LOG_DECIMATION);
         }
         float w[4];
@@ -949,7 +950,7 @@ static void LogMap(void) {
         Ev(LOG_EV_MAP_CELLS, (float)i, w[0], w[1], w[2], w[3]);
     }
     // 全部が記録の行に入るのを待つ
-    while (Logger_EventQueued() > 0u && HAL_GetTick() - t0 <= MAP_LOG_TIMEOUT_MS) {
+    while (Logger_EventQueued() > 0u && Timer_GetMs() - t0 <= MAP_LOG_TIMEOUT_MS) {
         DelayWatching(SEARCH_LOG_DECIMATION);
     }
 }
@@ -1166,13 +1167,13 @@ static void StartFastStraightTo(float target_mm, float v_end) {
 
 static bool FastStraightTo(float end, float v_exit) {
     StartFastStraightTo(end, v_exit);
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (1) {
         CheckFailSafe();
         PollLog();
         if (v_exit > 0.0f ? (App_GetTargetDistance() >= end) : App_IsMotionDone()) break;
-        if (HAL_GetTick() - t0 > SEARCH_STEP_TIMEOUT_MS) return false;
-        if (v_exit <= 0.0f) HAL_Delay(1);
+        if (Timer_GetMs() - t0 > SEARCH_STEP_TIMEOUT_MS) return false;
+        if (v_exit <= 0.0f) Timer_DelayMs(1);
     }
     return true;
 }
@@ -1187,7 +1188,7 @@ static bool FastStraightAll(float from, bool from_center, float *end, bool end_c
     EdgeCorr ec;
     EdgeCorr_Begin(&ec, b_first);
     StartFastStraightTo(*end - before, v_exit);
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     bool ok = true;
     while (1) {
         CheckFailSafe();
@@ -1202,11 +1203,11 @@ static bool FastStraightAll(float from, bool from_center, float *end, bool end_c
             StartFastStraightTo(*end - before, v_exit);
         }
         if (v_exit > 0.0f ? (App_GetTargetDistance() >= *end - before) : App_IsMotionDone()) break;
-        if (HAL_GetTick() - t0 > SEARCH_STEP_TIMEOUT_MS) {
+        if (Timer_GetMs() - t0 > SEARCH_STEP_TIMEOUT_MS) {
             ok = false;
             break;
         }
-        if (v_exit <= 0.0f) HAL_Delay(1);
+        if (v_exit <= 0.0f) Timer_DelayMs(1);
     }
     App_SetWallControl(false); // 曲がる・止まる所には持ち越さない
     return ok;
@@ -1525,7 +1526,7 @@ void FastRun_Run(void) {
         ModeUI_WaitClickBlinking(LED_DIRECT_ALL); // 地図・経路がないことを全部の LED の点滅で知らせる
         while (1) {
             if (FailSafe_IsTripped()) FailSafe_Halt();
-            HAL_Delay(10);
+            Timer_DelayMs(10);
         }
     }
 
@@ -1535,7 +1536,7 @@ void FastRun_Run(void) {
         ModeUI_WaitClickBlinking(LED_DIRECT_ALL);
         while (1) {
             if (FailSafe_IsTripped()) FailSafe_Halt();
-            HAL_Delay(10);
+            Timer_DelayMs(10);
         }
     }
     while (1) {
@@ -1619,7 +1620,7 @@ void DiagTest_Run(void) {
         ModeUI_WaitClickBlinking(LED_DIRECT_ALL);
         while (1) {
             if (FailSafe_IsTripped()) FailSafe_Halt();
-            HAL_Delay(10);
+            Timer_DelayMs(10);
         }
     }
     printf("DIAG TEST %s %s: v=%.0f accel=%.0f. area (cells, %s): %s\r\n", kNames[pattern], right ? "RIGHT" : "LEFT",
@@ -1658,26 +1659,26 @@ static void PlanBenchOne(const char *name, const WallMap *map, const MazePos *go
     const MazePos start = { MAZE_START_X, MAZE_START_Y };
     const uint32_t n = PLAN_BENCH_REPEAT;
     MazeSolver *ms = &s_planner.work.solver; // 探索はしないので、プランナーの作業領域を借りる
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     for (uint32_t i = 0; i < n; i++) Dijkstra_ComputeFrom(ms, map, WALL_VIEW_SEARCH, NULL, goals, goal_count, start, DIR_NORTH);
-    uint32_t t1 = HAL_GetTick();
+    uint32_t t1 = Timer_GetMs();
     s_diag_solver.heap_only = true;
     for (uint32_t i = 0; i < n; i++) {
         DiagRoute_ComputeFrom(&s_diag_solver, map, WALL_VIEW_SEARCH, NULL, MAZE_COST_DIAG_CELL_X10, goals, goal_count,
                               start, DIR_NORTH);
     }
-    uint32_t t2 = HAL_GetTick();
+    uint32_t t2 = Timer_GetMs();
     s_diag_solver.heap_only = false;
     for (uint32_t i = 0; i < n; i++) {
         DiagRoute_ComputeFrom(&s_diag_solver, map, WALL_VIEW_SEARCH, NULL, MAZE_COST_DIAG_CELL_X10, goals, goal_count,
                               start, DIR_NORTH);
     }
-    uint32_t t3 = HAL_GetTick();
+    uint32_t t3 = Timer_GetMs();
     bool bucket = s_diag_solver.use_bucket;
     for (uint32_t i = 0; i < n; i++) {
         DiagRoute_Compute(&s_diag_solver, map, WALL_VIEW_KNOWN, NULL, MAZE_COST_DIAG_CELL_X10, goals, goal_count);
     }
-    uint32_t t4 = HAL_GetTick();
+    uint32_t t4 = Timer_GetMs();
     float k = 1000.0f / (float)n; // [ms] → 1回あたり [µs]
     printf("%s: dijkstra %.0f us, diag (heap) %.0f us, diag (bucket%s) %.0f us, diag all nodes (fast run) %.0f us\r\n",
            name, (float)(t1 - t0) * k, (float)(t2 - t1) * k, bucket ? "" : " NOT USED", (float)(t3 - t2) * k,
@@ -1700,7 +1701,7 @@ void PlanBench_Run(void) {
     LED_SetDirectPattern(LED_DIRECT_ALL);
     while (1) {
         if (FailSafe_IsTripped()) FailSafe_Halt();
-        HAL_Delay(10);
+        Timer_DelayMs(10);
     }
 }
 
@@ -1781,7 +1782,7 @@ static bool FastRunAndReturn(uint8_t type, const MazePos *goals, uint8_t goal_co
     ComputeSlalomOffsets();
     s_run_kind = full_back ? 0.0f : 2.0f; // 探索 / 帰り道
     s_run_type = 1.0f;
-    HAL_Delay(LONG_LOG_PAUSE_MS);
+    Timer_DelayMs(LONG_LOG_PAUSE_MS);
     PrepareStart(full_back ? "search" : "back");
     bool back = ReturnToStart(pos, Dir_Opposite(heading), goals, goal_count, full_back);
     if (back && full_back) {
@@ -1863,18 +1864,18 @@ static void LongLogHalt(const char *why, uint8_t part, uint8_t step) {
         LED_SetShiftPattern((uint16_t)((1u << part) - 1u));
         for (int i = 0; i < 100; i++) {
             if (FailSafe_IsTripped()) FailSafe_Halt();
-            HAL_Delay(10);
+            Timer_DelayMs(10);
         }
         LED_SetDirectPattern(0x00u);
         LED_SetShiftPattern(0x0000u);
-        HAL_Delay(300);
+        Timer_DelayMs(300);
         LED_SetShiftPattern((uint16_t)((1u << step) - 1u));
         for (int i = 0; i < 60; i++) {
             if (FailSafe_IsTripped()) FailSafe_Halt();
-            HAL_Delay(10);
+            Timer_DelayMs(10);
         }
         LED_SetShiftPattern(0x0000u);
-        HAL_Delay(600);
+        Timer_DelayMs(600);
     }
 }
 
@@ -1909,7 +1910,7 @@ void LongLogRun_Run(void) {
     for (uint16_t i = first; i < count; i++) {
         const LongRun *r = &s_long_runs[i];
         // 止まった状態の電池の電圧(フィルタ済み)を見てから走る
-        HAL_Delay(LONG_LOG_PAUSE_MS);
+        Timer_DelayMs(LONG_LOG_PAUSE_MS);
         float vbat = FailSafe_GetFilteredVoltage();
         printf("---- LONG LOG #%u/%u (part %u step %u): vbat %.2f V\r\n", i + 1u, count, r->part, r->step, vbat);
         if (vbat < LONG_LOG_MIN_VBAT_V) LongLogHalt("low battery", r->part, r->step);
@@ -1970,10 +1971,10 @@ static void FastSweepHalt(const char *why, uint16_t no) {
         LED_SetShiftPattern((uint16_t)((1u << bar) - 1u));
         for (int i = 0; i < 50; i++) {
             if (FailSafe_IsTripped()) FailSafe_Halt();
-            HAL_Delay(10);
+            Timer_DelayMs(10);
         }
         LED_SetShiftPattern(0x0000u);
-        HAL_Delay(300);
+        Timer_DelayMs(300);
     }
 }
 
@@ -2016,7 +2017,7 @@ void FastSweep_Run(void) {
             for (uint8_t t = t0; t <= t1; t++) {
                 for (uint8_t rep = 0; rep < FAST_SWEEP_REPEAT; rep++) {
                     no++;
-                    HAL_Delay(LONG_LOG_PAUSE_MS);
+                    Timer_DelayMs(LONG_LOG_PAUSE_MS);
                     float vbat = FailSafe_GetFilteredVoltage();
                     printf("---- FAST SWEEP #%u/%u: vbat %.2f V\r\n", no, total, vbat);
                     if (vbat < LONG_LOG_MIN_VBAT_V) FastSweepHalt("low battery", no);
@@ -2080,7 +2081,7 @@ void FastBands_Run(void) {
         const FastBand *band = &kFastBands[b - 1u];
         for (uint8_t rep = 0; rep < FAST_BAND_REPEAT; rep++) {
             s_band_no++;
-            HAL_Delay(LONG_LOG_PAUSE_MS);
+            Timer_DelayMs(LONG_LOG_PAUSE_MS);
             float vbat = FailSafe_GetFilteredVoltage();
             printf("---- FAST BANDS #%u/%u: band %u, vbat %.2f V\r\n", s_band_no, s_band_total, b, vbat);
             if (vbat < LONG_LOG_MIN_VBAT_V) FastSweepHalt("low battery", s_band_no);
@@ -2147,7 +2148,7 @@ void AutonomousRun_Run(void) {
 
     // 最短走行とスタートへの帰り道(flash の地図を使う)
     for (uint16_t n = 1; n <= AUTONOMOUS_FAST_COUNT; n++) {
-        HAL_Delay(LONG_LOG_PAUSE_MS);
+        Timer_DelayMs(LONG_LOG_PAUSE_MS);
         float vbat = FailSafe_GetFilteredVoltage();
         printf("---- AUTO fast #%u/%u: vbat %.2f V\r\n", n, (unsigned)AUTONOMOUS_FAST_COUNT, vbat); // 記録だけ
         s_band = 0;

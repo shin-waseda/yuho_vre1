@@ -35,3 +35,7 @@ int16_t Encoder_GetDeltaR(void) {
 uint16_t Encoder_GetCountR(void) {
     return (uint16_t)__HAL_TIM_GET_COUNTER(&htim8);
 }
+
+uint16_t Encoder_GetCountL(void) {
+    return (uint16_t)__HAL_TIM_GET_COUNTER(&htim4);
+}

@@ -1,6 +1,7 @@
 #include "app/pivot_test.h"
 
-#include "main.h"
+#include <stdio.h>
+#include "interface/timer.h"
 #include "app/mode_ui.h"
 #include "app/control_loop.h"
 #include "app/failsafe.h"
@@ -61,30 +62,30 @@ static void SetupLogger(void) {
 
 // FailSafe発動時はFailSafe_Halt()へ入る(戻らない)。
 static void DelayWatching(uint32_t ms) {
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GetTick() - t0 < ms) {
+    uint32_t t0 = Timer_GetMs();
+    while (Timer_GetMs() - t0 < ms) {
         if (FailSafe_IsTripped()) {
             Logger_Stop();
             FailSafe_Halt();
         }
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
 }
 
 // 旋回して、終わるまで待つ。タイムアウトならfalse。
 static bool TurnAndWait(float angle_deg) {
     App_StartPivot(angle_deg, s_omega_dps, PIVOT_TEST_ALPHA_DPS2);
-    uint32_t t0 = HAL_GetTick();
+    uint32_t t0 = Timer_GetMs();
     while (!App_IsMotionDone()) {
         if (FailSafe_IsTripped()) {
             Logger_Stop();
             FailSafe_Halt();
         }
-        if (HAL_GetTick() - t0 > PIVOT_TEST_TIMEOUT_MS) {
+        if (Timer_GetMs() - t0 > PIVOT_TEST_TIMEOUT_MS) {
             printf("timeout\r\n");
             return false;
         }
-        HAL_Delay(1);
+        Timer_DelayMs(1);
     }
     return true;
 }
@@ -134,7 +135,7 @@ void PivotTest_Run(void) {
     while (1) {
         printf("hold hand over front-left sensor to RUN\r\n");
         ModeUI_WaitHandStart();
-        HAL_Delay(PIVOT_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
+        Timer_DelayMs(PIVOT_TEST_START_DELAY_MS - GYRO_RECAL_MS); // 手を離す時間
         // 機体が止まっている間に、ジャイロのゼロ点を測り直す(起動時の補正からずれていることがある)
         printf("gyro z offset: %.1f\r\n", App_RecalibrateGyroZ(GYRO_RECAL_MS));
         App_ResetGyroAngle(); // 置いた向きを 0° にする(向きの基準を決めるのは走りの始めだけ)
