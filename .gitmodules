@@ -1,0 +1,3 @@
+[submodule "lib/mouse_logic"]
+	path = lib/mouse_logic
+	url = https://github.com/shin-waseda/mouse_logic.git

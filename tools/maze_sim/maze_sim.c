@@ -1,4 +1,4 @@
-// yuho の迷路 logic 層 (Core/Src/logic/maze/*.c, Core/Src/logic/command.c) を
+// yuho の迷路 logic 層 (lib/mouse_logic/Src/logic/maze/*.c, lib/mouse_logic/Src/logic/command.c) を
 // PC で動かして確かめるシミュレータ。ファームウェアと同じソースをそのままコンパイルする。
 //
 // ビルド:  sh tools/maze_sim/build.sh
