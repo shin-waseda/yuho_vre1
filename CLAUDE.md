@@ -66,7 +66,7 @@ The codebase is mid-refactor from a flat STM32CubeMX layout into a layered one. 
 
 2. **A new three-layer application structure** under `Core/Inc/` (headers only so far — most have no `.c` implementation yet and some don't even compile, e.g. `#include "logic/maze"` naming a directory):
    - **`interface/`** — thin hardware-facing wrappers around the HAL (`encoder.h`, `motor.h`, `gyro.h`, `sensor.h`, `led.h`, `uart.h`, `sdcard.h`, `flash.h`, `timer.h`). `interface/encoder.h`/`interface/motor.h` are the only ones with real implementations currently, in `Core/Src/encoder.c` and `Core/Src/motor.c`.
-   - **`logic/`** — hardware-independent algorithms: `wall_sense.h`, `command.h`, and subdirectories `control/` (PID, velocity profile, wall control), `maze/` (Dijkstra solver, priority queue, wall map, step map), `state_estimation/` (odometry, kinematics, gyro fusion).
+   - **`logic/`** — lives in the `lib/mouse_logic` git submodule (`Inc/logic/`, `Src/logic/`), shared with the yozakura (half-size) firmware; machine-specific values stay in this repo's `params.h`. Hardware-independent algorithms: `wall_sense.h`, `command.h`, and subdirectories `control/` (PID, velocity profile, wall control), `maze/` (Dijkstra solver, priority queue, wall map, step map), `state_estimation/` (odometry, kinematics, gyro fusion).
    - **`app/`** — top-level sequencing/state machine: `robot_state.h`, `drive_sequence.h`, `search_sequence.h`, `mode_ui.h`. These are meant to compose `interface/` and `logic/` into the actual search/run behavior.
    - `global.h` is the common include (currently just pulls in `main.h`); `params.h` is meant to hold tunable constants but is currently empty.
 
