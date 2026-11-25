@@ -4,19 +4,19 @@
     "yuho_mouse.c",
     "sim_core.c",
     "ideal_time.c",
-    "../../lib/mouse_logic/Src/logic/command.c",
-    "../../lib/mouse_logic/Src/logic/maze/*.c",
-    "../../lib/mouse_logic/Src/logic/control/slalom.c",
-    "../../lib/mouse_logic/Src/logic/control/velocity_profile.c"
+    "../../lib/mouse_core/Src/logic/command.c",
+    "../../lib/mouse_core/Src/logic/maze/*.c",
+    "../../lib/mouse_core/Src/logic/control/slalom.c",
+    "../../lib/mouse_core/Src/logic/control/velocity_profile.c"
   ],
-  "include": ["../../Core/Inc", "../../lib/mouse_logic/Inc", "."],
+  "include": ["../../Core/Inc", "../../lib/mouse_core/Inc", "."],
   "depends": [
     "*.h",
     "../../Core/Inc/params.h",
     "../../Core/Inc/global.h",
-    "../../lib/mouse_logic/Inc/logic/*.h",
-    "../../lib/mouse_logic/Inc/logic/maze/*.h",
-    "../../lib/mouse_logic/Inc/logic/control/*.h"
+    "../../lib/mouse_core/Inc/logic/*.h",
+    "../../lib/mouse_core/Inc/logic/maze/*.h",
+    "../../lib/mouse_core/Inc/logic/control/*.h"
   ],
   "cflags": ["-std=c11", "-Wall", "-Wextra", "-O2"]
 }

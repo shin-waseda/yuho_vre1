@@ -8,9 +8,9 @@ cd "$(dirname "$0")"
 ROOT=../..
 mkdir -p build
 
-L=$ROOT/lib/mouse_logic/Src/logic
+L=$ROOT/lib/mouse_core/Src/logic
 LOGIC="$L/command.c $L/maze/*.c $L/control/slalom.c $L/control/velocity_profile.c"
-CFLAGS="-std=c11 -Wall -Wextra -O2 -I$ROOT/Core/Inc -I$ROOT/lib/mouse_logic/Inc"
+CFLAGS="-std=c11 -Wall -Wextra -O2 -I$ROOT/Core/Inc -I$ROOT/lib/mouse_core/Inc"
 
 gcc $CFLAGS -o build/maze_sim maze_sim.c sim_core.c ideal_time.c $LOGIC -lm
 echo "built tools/maze_sim/build/maze_sim"

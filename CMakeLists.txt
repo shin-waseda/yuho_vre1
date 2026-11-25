@@ -54,11 +54,11 @@ target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -u _printf_float)
 
 # 自作のソース．CubeIDE と同じく，フォルダに置いた .c はすべてビルドする
 # (CONFIGURE_DEPENDS で，ファイルを足したときにビルドの時点で拾い直す)
-# logic は宵桜と共通のリポジトリ(lib/mouse_logic，git submodule)にある
+# logic は宵桜と共通のリポジトリ(lib/mouse_core，git submodule)にある
 file(GLOB_RECURSE USER_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_SOURCE_DIR}/Core/Src/app/*.c
     ${CMAKE_SOURCE_DIR}/Core/Src/interface/*.c
-    ${CMAKE_SOURCE_DIR}/lib/mouse_logic/Src/logic/*.c
+    ${CMAKE_SOURCE_DIR}/lib/mouse_core/Src/logic/*.c
 )
 
 # CubeIDE と同じく yuho.bin も作る
@@ -84,7 +84,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
-    ${CMAKE_SOURCE_DIR}/lib/mouse_logic/Inc
+    ${CMAKE_SOURCE_DIR}/lib/mouse_core/Inc
 )
 
 # Add project symbols (macros)
